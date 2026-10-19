@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,9 @@ import (
 
 	"gotable/internal/server"
 )
+
+//go:embed icon.png
+var appIcon []byte
 
 // runWindow shows GoTable and returns when its window is closed. A second
 // launch brings the running window to the front instead.
@@ -85,6 +89,7 @@ func runWindow(ctx context.Context, url string, srv *server.Server) error {
 		// already off in Wails), title bar follows the system theme.
 		Windows: &windows.Options{IsZoomControlEnabled: false, Theme: windows.SystemDefault},
 		Linux: &linux.Options{
+			Icon:             appIcon,
 			ProgramName:      "gotable",
 			WebviewGpuPolicy: linux.WebviewGpuPolicyAlways, // "on demand" re-renders (blinks) whenever a popup needs compositing
 		},

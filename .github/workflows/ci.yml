@@ -1,0 +1,103 @@
+# Tests on every push and pull request: frontend checks, Go tests against
+# real PostgreSQL / MySQL / MariaDB servers, and the end-to-end tests.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: gotable-test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: gotable-test
+          MYSQL_DATABASE: gotable
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pgotable-test" --health-interval 3s --health-timeout 5s --health-retries 40
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: gotable-test
+          MARIADB_DATABASE: gotable
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 3s --health-timeout 5s --health-retries 40
+    env:
+      GOTABLE_TEST_PG_HOST: 127.0.0.1
+      GOTABLE_TEST_PG_PORT: "5432"
+      GOTABLE_TEST_PG_USER: postgres
+      GOTABLE_TEST_PG_PASSWORD: gotable-test
+      GOTABLE_TEST_PG_DB: postgres
+      GOTABLE_TEST_MYSQL_HOST: 127.0.0.1
+      GOTABLE_TEST_MYSQL_PORT: "3306"
+      GOTABLE_TEST_MYSQL_USER: root
+      GOTABLE_TEST_MYSQL_PASSWORD: gotable-test
+      GOTABLE_TEST_MYSQL_DB: gotable
+      GOTABLE_TEST_MARIADB_HOST: 127.0.0.1
+      GOTABLE_TEST_MARIADB_PORT: "3307"
+      GOTABLE_TEST_MARIADB_USER: root
+      GOTABLE_TEST_MARIADB_PASSWORD: gotable-test
+      GOTABLE_TEST_MARIADB_DB: gotable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install WebKitGTK
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
+
+      - name: Frontend checks and build
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc -p .
+          npx vitest run
+          npm run build
+
+      - name: Go vet
+        run: go vet -tags desktop,production,webkit2_41 ./...
+      - name: Go tests (SQLite, PostgreSQL, MySQL, MariaDB)
+        run: go test -race -count=1 ./...
+
+      - name: Build the app
+        run: go build -tags desktop,production,webkit2_41 -o bin/gotable ./cmd/gotable
+      - name: Demo data for the PostgreSQL scenario
+        run: psql "postgres://postgres:gotable-test@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 -f scripts/e2e-demo.sql
+      - name: End-to-end tests (Chrome)
+        working-directory: frontend
+        env:
+          GOTABLE_E2E_PG: postgres://postgres:gotable-test@127.0.0.1:5432/postgres?sslmode=disable
+        run: npx playwright test
+      - name: Keep the end-to-end traces of a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: frontend/test-results
+          retention-days: 7

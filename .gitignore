@@ -21,3 +21,8 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Release packaging (scripts/package.sh)
+/build/
+/dist/
+*.syso

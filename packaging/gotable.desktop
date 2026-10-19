@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=GoTable
+GenericName=Database Client
+Comment=Browse and edit PostgreSQL, MySQL, MariaDB and SQLite databases
+Exec=gotable
+Icon=gotable
+Terminal=false
+Categories=Development;Database;
+Keywords=sql;database;postgres;postgresql;mysql;mariadb;sqlite;
+StartupNotify=true
+StartupWMClass=gotable

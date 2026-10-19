@@ -125,6 +125,20 @@ from scratch; no TablePlus code or assets are used.
 - **Collapsible panels.** **Ctrl+B** hides/shows the table sidebar,
   **Ctrl+Shift+B** the database rail (also the two buttons top-left).
 
+## Install
+
+Download the file for your system from the project's **Releases** page:
+
+| System | File | Install |
+|---|---|---|
+| Ubuntu 22.04+, Debian 12+ | `gotable_<version>_amd64.deb` | `sudo apt install ./gotable_*_amd64.deb` |
+| Fedora 36+ | `gotable-<version>-1.x86_64.rpm` | `sudo dnf install ./gotable-*.x86_64.rpm` |
+| Other Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it (needs WebKitGTK 4.1, see below) |
+| Windows 10 / 11 | `gotable-<version>-windows-amd64.zip` | unzip and run `gotable.exe` |
+
+The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.
+`gotable -version` prints the installed version.
+
 ## Supported platforms
 
 | Platform | Window | Status |
@@ -200,6 +214,31 @@ make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
 ```
 
+
+## Continuous integration and releases
+
+GitHub Actions (`.github/workflows/`):
+
+- **CI** — on every push and pull request: TypeScript and unit tests, `go
+  vet`, the Go tests against real PostgreSQL 15, MySQL 8.4 and MariaDB 11
+  (service containers), and the end-to-end tests in Chrome, including the
+  PostgreSQL scenario (`scripts/e2e-demo.sql`).
+- **Build** — on every push to `main`: the `.deb`, `.rpm`, AppImage,
+  `.tar.gz` and Windows `.zip`, downloadable from the run's artifacts.
+  Linux builds run on Ubuntu 22.04, so one binary covers Ubuntu 22.04+,
+  Debian 12+ and Fedora 36+.
+
+To publish a release, push a version tag; the same files are attached to a
+GitHub release with generated notes:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The packaging is `scripts/package.sh` (`make package-linux` /
+`make package-windows`), so it runs the same way locally.
+
 ## Layout
 
 | Path | Responsibility |
@@ -212,6 +251,9 @@ GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
 | `internal/webui` | embeds the built UI |
 | `frontend/` | React + TypeScript + Tailwind UI, Vitest and Playwright tests |
 | `cmd/gotable` | starts the server and the window (`window_wails.go`; `window_browser.go` with `-tags browser`) |
+| `packaging/` | app icon, desktop entry, `.deb`/`.rpm` definition (nfpm) |
+| `scripts/` | release packaging, database test containers, end-to-end demo data |
+| `.github/workflows/` | CI (tests) and Build (packages, releases) |
 
 ## Not implemented yet
 

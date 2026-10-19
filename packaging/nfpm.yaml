@@ -1,0 +1,28 @@
+# .deb and .rpm packages (https://nfpm.goreleaser.com); built by
+# scripts/package.sh with VERSION set.
+name: gotable
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: database
+priority: optional
+maintainer: GoTable contributors
+description: |
+  Desktop database client for PostgreSQL, MySQL, MariaDB and SQLite.
+  Browse and edit data, run SQL, design tables, import and export.
+license: MIT
+overrides:
+  deb:
+    depends: [libwebkit2gtk-4.1-0, libgtk-3-0]
+  rpm:
+    depends: [webkit2gtk4.1, gtk3]
+contents:
+  - src: ./build/linux/gotable
+    dst: /usr/bin/gotable
+    file_info: { mode: 0755 }
+  - src: ./packaging/gotable.desktop
+    dst: /usr/share/applications/gotable.desktop
+  - src: ./packaging/gotable.png
+    dst: /usr/share/icons/hicolor/512x512/apps/gotable.png
+  - src: ./LICENSE
+    dst: /usr/share/licenses/gotable/LICENSE

@@ -23,12 +23,20 @@ import (
 	"gotable/internal/webui"
 )
 
+// version is set at build time (-ldflags "-X main.version=v1.2.3").
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	storePath := flag.String("config", "", "connections file (default: $XDG_CONFIG_HOME/gotable/connections.json)")
 	memSecrets := flag.Bool("no-keyring", false, "keep passwords in memory instead of the desktop keyring")
 	addr := flag.String("addr", "127.0.0.1:0", "address to listen on (loopback only)")
 	noWindow := flag.Bool("no-window", false, "don't open an app window; print the URL instead")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("gotable", version)
+		return
+	}
 
 	path := *storePath
 	if path == "" {

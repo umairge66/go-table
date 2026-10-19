@@ -7,7 +7,7 @@
 #   make build-browser  CGO-free binary that shows the UI in a Chrome/Chromium
 #                       app window instead.
 
-.PHONY: build build-browser build-windows web test e2e dev clean
+.PHONY: build build-browser build-windows package-linux package-windows web test e2e dev clean
 
 WAILS_TAGS = desktop,production,webkit2_41
 
@@ -16,6 +16,13 @@ build: web
 
 build-browser: web
 	CGO_ENABLED=0 go build -tags browser -o bin/gotable ./cmd/gotable
+
+# Release files in dist/ (see scripts/package.sh); VERSION=v1.2.3 optional.
+package-linux: web
+	scripts/package.sh linux $(VERSION)
+
+package-windows: web
+	scripts/package.sh windows $(VERSION)
 
 # Windows (WebView2, built into Windows 10/11); cross-compiles from Linux too.
 build-windows: web
@@ -37,4 +44,4 @@ e2e: build
 	cd frontend && npx playwright test
 
 clean:
-	rm -rf bin frontend/node_modules
+	rm -rf bin build dist frontend/node_modules
