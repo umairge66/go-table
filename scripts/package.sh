@@ -2,7 +2,7 @@
 # Builds release files into dist/. Build the web UI first (make web).
 #
 #   scripts/package.sh linux   [VERSION]   .tar.gz, .deb, .rpm and .AppImage
-#   scripts/package.sh windows [VERSION]   .zip with gotable.exe
+#   scripts/package.sh windows [VERSION]   gotable.exe, and a .zip with it
 #
 # VERSION is a tag such as v1.2.0; without one, a dev version is used.
 # Linux needs gcc and WebKitGTK 4.1 headers (see README). nfpm, go-winres
@@ -71,6 +71,8 @@ windows)
 		-ldflags "$ldflags -H windowsgui" -o build/windows/gotable.exe ./cmd/gotable
 	cp LICENSE README.md build/windows/
 	(cd build/windows && zip -q -r "../../dist/gotable-$pkgver-windows-amd64.zip" gotable.exe LICENSE README.md)
+	# The bare .exe too, for people who just want to run it.
+	cp build/windows/gotable.exe "dist/gotable-$pkgver-windows-amd64.exe"
 	;;
 *)
 	echo "unknown target $target (linux or windows)" >&2
