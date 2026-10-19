@@ -11,10 +11,9 @@ on macOS).
 |---|---|---|---|
 | ![Connection form](docs/screenshots/light/03-form-tested.png) | ![Query editor](docs/screenshots/light/08-query.png) | ![Table designer](docs/screenshots/light/09-new-table.png) | ![Dark mode](docs/screenshots/dark/05-table.png) |
 
-The workflow follows TablePlus's layout: connection list beside the
-connection form, a table sidebar, tabs, a filter row above the grid, a row
-inspector and a Data / Structure / Definition switch. Everything was written
-from scratch; no TablePlus code or assets are used.
+The layout: a connection list beside the connection form, a rail of open
+databases, a table sidebar, tabs, a filter row above the grid, a row
+inspector and a Data / Structure / Definition switch.
 
 ## Features
 
