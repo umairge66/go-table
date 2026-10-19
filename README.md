@@ -133,7 +133,7 @@ Download the file for your system from the project's **Releases** page:
 |---|---|---|
 | Ubuntu 22.04+, Debian 12+ | `gotable_<version>_amd64.deb` | `sudo apt install ./gotable_*_amd64.deb` |
 | Fedora 36+ | `gotable-<version>-1.x86_64.rpm` | `sudo dnf install ./gotable-*.x86_64.rpm` |
-| Other Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it (needs WebKitGTK 4.1, see below) |
+| Any Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it — self-contained (WebKitGTK included) |
 | Windows 10 / 11 | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | run it |
 
 The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.
