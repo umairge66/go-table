@@ -1,6 +1,8 @@
 # Tests on every push and pull request: frontend checks, Go tests against
 # real PostgreSQL / MySQL / MariaDB servers, and the end-to-end tests.
 name: CI
+# Shown in the Actions list, so the test run is told apart from Build's.
+run-name: "Tests · ${{ github.event.pull_request.title || github.event.head_commit.message }}"
 
 on:
   push:

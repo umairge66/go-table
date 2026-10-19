@@ -2,6 +2,7 @@
 # .zip on every push to main (downloadable from the run). A tag like v1.2.0
 # also publishes them as a GitHub release.
 name: Build
+run-name: "${{ github.ref_type == 'tag' && format('Release {0}', github.ref_name) || format('Build · {0}', github.event.head_commit.message || 'manual run') }}"
 
 on:
   push:
