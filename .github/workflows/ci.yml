@@ -2,7 +2,7 @@
 # real PostgreSQL / MySQL / MariaDB servers, and the end-to-end tests.
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
-run-name: "Tests · ${{ github.event.pull_request.title || github.event.head_commit.message }}"
+run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.number) || github.ref_name }}"
 
 on:
   push:
