@@ -1,0 +1,23 @@
+# Build output
+/bin/
+# The web UI is built into internal/webui/dist (embedded in the binary);
+# only the placeholder that keeps a fresh checkout compiling is tracked.
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
+# Frontend
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/blob-report/
+/frontend/tsconfig.tsbuildinfo
+
+# Local and editor files
+.env
+.env.*
+*.log
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/

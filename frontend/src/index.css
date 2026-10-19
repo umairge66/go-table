@@ -1,0 +1,155 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Design tokens. Components use the semantic names (bg, panel, fg, muted,
+   line, accent…) so light and dark stay consistent. */
+:root {
+  --bg: #f6f6f8;
+  --panel: #ffffff;
+  --panel-2: #fafafb;
+  --sidebar: #f0f0f3;
+  --hover: #ececf1;
+  --active: #e3e3fb;
+  --fg: #1b1b23;
+  --fg-2: #3c3c4a;
+  --muted: #7a7a8c;
+  --faint: #a9a9b8;
+  --line: #e4e4ea;
+  --line-2: #efeff3;
+  --accent: #5b5bd6;
+  --accent-fg: #ffffff;
+  --accent-soft: #ededfd;
+  --ok: #1f9d6a;
+  --warn: #c97c10;
+  --err: #dc3e42;
+  --edited: #fff2d6;
+  --inserted: #dcf5e8;
+  --deleted: #fde3e3;
+  --selected: #e6e6fd;
+  --zebra: #fafafc;
+  --shadow: 0 1px 2px rgb(16 16 32 / 0.06), 0 8px 24px rgb(16 16 32 / 0.08);
+  color-scheme: light;
+}
+
+[data-theme=dark] {
+  --bg: #121216;
+  --panel: #18181d;
+  --panel-2: #1c1c22;
+  --sidebar: #141418;
+  --hover: #23232b;
+  --active: #2a2a45;
+  --fg: #ececf1;
+  --fg-2: #c9c9d4;
+  --muted: #8b8b9c;
+  --faint: #5e5e6e;
+  --line: #2a2a33;
+  --line-2: #222229;
+  --accent: #8b8cff;
+  --accent-fg: #0f0f16;
+  --accent-soft: #25254a;
+  --ok: #3dd68c;
+  --warn: #f2a33a;
+  --err: #ff6b6f;
+  --edited: #3a2f14;
+  --inserted: #143326;
+  --deleted: #3d1a1c;
+  --selected: #2c2c52;
+  --zebra: #1a1a20;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.45);
+  color-scheme: dark;
+}
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-sidebar: var(--sidebar);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-edited: var(--edited);
+  --color-inserted: var(--inserted);
+  --color-deleted: var(--deleted);
+  --color-selected: var(--selected);
+  --color-zebra: var(--zebra);
+  --shadow-pop: var(--shadow);
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+@layer base {
+  input, textarea, select, button { font: inherit; color: inherit; }
+
+  /* Everything clickable shows a pointer (Tailwind v4 no longer does this
+     for buttons). Disabled controls show that they can't be used. */
+  button, select, summary, a[href], label:has(> input[type=checkbox]), label:has(> input[type=radio]),
+  input[type=checkbox], input[type=radio], input[type=file],
+  [role=button], [role=tab], [role=option], [role=menuitem], [role=radio], [role=switch] {
+    cursor: pointer;
+  }
+  button:disabled, select:disabled, input:disabled, [aria-disabled=true] {
+    cursor: not-allowed;
+  }
+}
+input, textarea, [contenteditable] { user-select: text; }
+::selection { background: var(--selected); }
+
+/* Thin, unobtrusive scrollbars. */
+* { scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+
+/* In the base layer so utilities like outline-none can override it. */
+@layer base {
+  button:focus-visible, select:focus-visible, [role=tab]:focus-visible, [role=option]:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 1px;
+  }
+}
+
+/* Opacity only: moving or scaling a popup repaints far more in WebKitGTK
+   (the native window) and made popups stutter. */
+@keyframes pop-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slide-up { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+.animate-pop { animation: pop-in .09s ease-out; }
+.animate-fade { animation: fade-in .12s ease-out; }
+.animate-slide { animation: slide-up .18s ease-out; }
+
+/* CodeMirror */
+.cm-editor { height: 100%; font-size: 13px; background: var(--panel); }
+.cm-editor.cm-focused { outline: none; }
+.cm-scroller { font-family: var(--font-mono); line-height: 1.6; }
+.cm-gutters { background: var(--panel) !important; border-right: 1px solid var(--line-2) !important; color: var(--faint) !important; }
+.cm-activeLine, .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 6%, transparent) !important; }
+.cm-tooltip { border: 1px solid var(--line) !important; background: var(--panel) !important; border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: var(--accent-fg) !important; }
+.cm-cursor { border-left-color: var(--accent) !important; border-left-width: 2px !important; }
+.cm-selectionBackground, .cm-focused .cm-selectionBackground { background: var(--selected) !important; }
+.cm-statement-highlight { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+@keyframes indeterminate { 0% { left: -35% } 100% { left: 100% } }
