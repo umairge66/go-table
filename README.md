@@ -5,6 +5,15 @@ backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
+<p align="center">
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download GoTable" src="https://img.shields.io/github/v/release/umairge66/go-table?label=Download&logo=github&style=for-the-badge&color=5b5bd6"></a>
+</p>
+<p align="center">
+  <b>Linux:</b> <code>.deb</code> (Ubuntu/Debian) · <code>.rpm</code> (Fedora) · <code>.AppImage</code> (any distro)
+  &nbsp;|&nbsp; <b>Windows:</b> <code>.exe</code>
+  &nbsp;—&nbsp; <a href="#install">which file do I need?</a>
+</p>
+
 ![Data view](docs/screenshots/light/06-edit-filter.png)
 
 | Connections | Query editor | New table | Dark mode |
@@ -126,7 +135,7 @@ inspector and a Data / Structure / Definition switch.
 
 ## Install
 
-Download the file for your system from the project's **Releases** page:
+Download the file for your system from the [latest release](https://github.com/umairge66/go-table/releases/latest):
 
 | System | File | Install |
 |---|---|---|
