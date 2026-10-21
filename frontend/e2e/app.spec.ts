@@ -1250,6 +1250,9 @@ test('a connection that takes a while: progress shown, opened only once', async 
   expect(opens).toBe(1)
   await page.unroute('**/api/sessions')
   await page.getByRole('button', { name: 'Disconnect' }).click()
+  // Back to the shop workspace, where the next test starts.
+  await page.getByRole('option', { name: /shop/ }).dblclick()
+  await expect(page.getByTestId('data-customers')).toBeAttached()
 })
 
 test('PostgreSQL via a pasted URL (needs GOTABLE_E2E_PG)', async () => {
