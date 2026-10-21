@@ -837,6 +837,8 @@ INSERT INTO picks (shop, sku) VALUES (1, 'B2'), (2, 'A1')`)
   await expect(view.locator('[data-row="0"] [data-col="1"]')).toHaveText('2')
   await expect(view.locator('[data-row="0"] [data-col="2"]')).toHaveText('A1')
   await view.getByRole('button', { name: 'Discard' }).click()
+  // The tab drops its "uncommitted" mark just after; closing before that asks first.
+  await expect(page.getByRole('tab', { name: /picks/ }).getByTitle('Uncommitted changes')).toHaveCount(0)
   await page.keyboard.press('Control+w')
   await runSQL('DROP TABLE picks; DROP TABLE stock')
 })
