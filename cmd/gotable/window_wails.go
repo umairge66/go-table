@@ -145,6 +145,6 @@ func (d dialogs) SaveFile(title, name string, fs []server.FileFilter) (string, e
 	return runtime.SaveFileDialog(d.ctx, runtime.SaveDialogOptions{Title: title, DefaultFilename: name, Filters: filters(fs), CanCreateDirectories: true})
 }
 
-func (d dialogs) OpenFile(title string, fs []server.FileFilter) (string, error) {
-	return runtime.OpenFileDialog(d.ctx, runtime.OpenDialogOptions{Title: title, Filters: filters(fs)})
+func (d dialogs) OpenFile(title, dir string, fs []server.FileFilter) (string, error) {
+	return runtime.OpenFileDialog(d.ctx, runtime.OpenDialogOptions{Title: title, DefaultDirectory: dir, Filters: filters(fs), ShowHiddenFiles: dir != ""})
 }

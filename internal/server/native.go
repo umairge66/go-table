@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"gotable/internal/sshtunnel"
 )
 
 // FileFilter narrows a file dialog to some extensions, e.g. {"SQL file", "*.sql"}.
@@ -21,7 +24,7 @@ type FileFilter struct {
 // Both return "" when the user cancels.
 type Dialogs interface {
 	SaveFile(title, defaultName string, filters []FileFilter) (string, error)
-	OpenFile(title string, filters []FileFilter) (string, error)
+	OpenFile(title, dir string, filters []FileFilter) (string, error)
 }
 
 // SetDialogs enables native file dialogs.
@@ -157,8 +160,8 @@ func (s *Server) dialogSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"handle": h, "name": filepath.Base(path)})
 }
 
-// dialogOpen asks for a file to import and returns its path (imports
-// already read local paths directly).
+// dialogOpen asks for a file to import, or an SSH private key, and returns
+// its path (imports already read local paths directly).
 func (s *Server) dialogOpen(w http.ResponseWriter, r *http.Request) {
 	d := s.nativeDialogs()
 	if d == nil {
@@ -172,7 +175,15 @@ func (s *Server) dialogOpen(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	path, err := d.OpenFile("Choose a file", filtersFor(in.Kinds))
+	title, dir, filters := "Choose a file", "", filtersFor(in.Kinds)
+	if slices.Contains(in.Kinds, "sshkey") {
+		// Keys rarely have an extension: show every file, from ~/.ssh.
+		title, filters = "Choose an SSH private key", []FileFilter{{"All files", "*"}}
+		if st, err := os.Stat(expandHome("~/.ssh")); err == nil && st.IsDir() {
+			dir = expandHome("~/.ssh")
+		}
+	}
+	path, err := d.OpenFile(title, dir, filters)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -187,6 +198,24 @@ func (s *Server) dialogOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"path": path, "name": filepath.Base(path), "size": st.Size()})
+}
+
+// checkSSHKey tells the connection form whether a private key file can be
+// used, so a wrong pick shows up before connecting.
+func (s *Server) checkSSHKey(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	encrypted, err := sshtunnel.CheckKey(strings.TrimSpace(in.Path))
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "problem": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "encrypted": encrypted})
 }
 
 // takeTarget returns (and forgets) the path behind a save handle.

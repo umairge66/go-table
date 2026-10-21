@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Copy, Database, FolderPlus, Moon, Pencil, Pl
 import { useEffect, useMemo, useState } from 'react'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
 import { api } from '../api'
-import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, TagPill, errorParts, useMenu, useToast } from '../components/ui'
+import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
 import { tagInfo, type Connection, type Group } from '../types'
 import { ConnectionForm, UrlDialog, newConnection } from './ConnectionForm'
 
@@ -141,6 +141,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
                     key={c.id}
                     role="option"
                     aria-selected={active}
+                    aria-busy={connecting === c.id || undefined}
                     onClick={() => { setSelected(c.id); setDraft(null) }}
                     onDoubleClick={() => onConnect(c)}
                     onContextMenu={(e) => itemMenu(e, c)}
@@ -154,9 +155,9 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
                         <span className="truncate text-[13px] font-medium">{c.name}</span>
                         <TagPill tag={c.tag} className="!h-4 !px-1.5 !text-[9.5px]" />
                       </div>
-                      <div className="truncate text-[11.5px] text-muted">{subtitle(c)}</div>
+                      <div className="truncate text-[11.5px] text-muted">{connecting === c.id ? (c.use_ssh_tunnel ? 'Connecting through SSH…' : 'Connecting…') : subtitle(c)}</div>
                     </div>
-                    {connecting === c.id && <span className="size-2 animate-pulse rounded-full bg-accent" />}
+                    {connecting === c.id && <Spinner className="size-4 shrink-0 text-accent" />}
                   </div>
                 )
               })}
@@ -188,6 +189,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
               onCancel={draft ? () => setDraft(null) : undefined}
               onSaved={async (c) => { await reload(); setDraft(null); setSelected(c.id) }}
               onConnect={onConnect}
+              connecting={connecting === current.id}
             />
           </div>
         ) : (

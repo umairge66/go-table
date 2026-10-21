@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5/stdlib"
@@ -107,9 +109,12 @@ func (postgresEngine) objects(ctx context.Context, c *Conn, schema string) ([]Ob
 
 func (postgresEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Column, error) {
 	rows, err := c.conn.QueryContext(ctx, `SELECT a.attname, format_type(a.atttypid, a.atttypmod),
-			NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
+			NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity <> '',
+			COALESCE((SELECT co.collname FROM pg_collation co JOIN pg_type ty ON ty.oid = a.atttypid
+				WHERE co.oid = a.attcollation AND a.attcollation <> ty.typcollation), ''),
 			EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
-			COALESCE(col_description(a.attrelid, a.attnum), '')
+			COALESCE(col_description(a.attrelid, a.attnum), ''),
+			array_to_json(ARRAY(SELECT e.enumlabel FROM pg_enum e WHERE e.enumtypid = a.atttypid ORDER BY e.enumsortorder))::text
 		FROM pg_attribute a
 		JOIN pg_class cl ON cl.oid = a.attrelid
 		JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -124,11 +129,22 @@ func (postgresEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Colum
 	for rows.Next() {
 		var col Column
 		var def sql.NullString
-		if err := rows.Scan(&col.Name, &col.Type, &col.Nullable, &def, &col.PrimaryKey, &col.Comment); err != nil {
+		var values string
+		var identity bool
+		if err := rows.Scan(&col.Name, &col.Type, &col.Nullable, &def, &identity, &col.Collation, &col.PrimaryKey, &col.Comment, &values); err != nil {
 			return nil, err
 		}
 		if def.Valid {
 			col.Default = &def.String
+			col.DefaultKind, col.DefaultText = DefaultExpression, def.String
+			if m := pgLiteral.FindStringSubmatch(def.String); m != nil {
+				col.DefaultKind, col.DefaultText = DefaultValue, strings.ReplaceAll(m[1], "''", "'")
+			}
+		}
+		col.AutoIncrement = identity || strings.HasPrefix(def.String, "nextval(")
+		json.Unmarshal([]byte(values), &col.Values) // enum labels; [] for other types
+		if len(col.Values) == 0 {
+			col.Values = nil
 		}
 		out = append(out, col)
 	}
@@ -144,10 +160,13 @@ func (postgresEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Colum
 func (postgresEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, error) {
 	rows, err := c.conn.QueryContext(ctx, `SELECT i.relname, ix.indisunique, ix.indisprimary,
 			array_to_string(ARRAY(SELECT pg_get_indexdef(ix.indexrelid, k + 1, true)
-				FROM generate_subscripts(ix.indkey, 1) k ORDER BY k), ',')
+				FROM generate_subscripts(ix.indkey, 1) k ORDER BY k), ','),
+			am.amname,
+			EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conrelid = ix.indrelid AND con.conindid = ix.indexrelid AND con.contype IN ('p', 'u', 'x'))
 		FROM pg_index ix
 		JOIN pg_class tb ON tb.oid = ix.indrelid
 		JOIN pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_am am ON am.oid = i.relam
 		JOIN pg_namespace n ON n.oid = tb.relnamespace
 		WHERE n.nspname = $1 AND tb.relname = $2
 		ORDER BY ix.indisprimary DESC, i.relname`, t.Schema, t.Name)
@@ -159,7 +178,7 @@ func (postgresEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index
 	for rows.Next() {
 		var ix Index
 		var cols string
-		if err := rows.Scan(&ix.Name, &ix.Unique, &ix.Primary, &cols); err != nil {
+		if err := rows.Scan(&ix.Name, &ix.Unique, &ix.Primary, &cols, &ix.Type, &ix.Constraint); err != nil {
 			return nil, err
 		}
 		ix.Columns = strings.Split(cols, ",")
@@ -231,7 +250,8 @@ func (e postgresEngine) definition(ctx context.Context, c *Conn, o Object) (stri
 }
 
 func (postgresEngine) foreignKeys(ctx context.Context, c *Conn, t TableRef) ([]ForeignRef, error) {
-	return scanForeignKeys(c.conn.QueryContext(ctx, `SELECT con.conname, a.attname, nr.nspname, cr.relname, af.attname
+	return scanForeignKeys(c.conn.QueryContext(ctx, `SELECT con.conname, a.attname, nr.nspname, cr.relname, af.attname,
+			`+pgAction("con.confdeltype")+`, `+pgAction("con.confupdtype")+`
 		FROM pg_constraint con
 		JOIN pg_class cl ON cl.oid = con.conrelid
 		JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -242,4 +262,67 @@ func (postgresEngine) foreignKeys(ctx context.Context, c *Conn, t TableRef) ([]F
 		JOIN pg_attribute af ON af.attrelid = con.confrelid AND af.attnum = k.fcol
 		WHERE con.contype = 'f' AND n.nspname = $1 AND cl.relname = $2
 		ORDER BY con.conname, k.ord`, t.Schema, t.Name))
+}
+
+// pgLiteral matches a default that is a plain literal: 'text'::type.
+var pgLiteral = regexp.MustCompile(`^'((?:[^']|'')*)'::[\w\s".\[\]()]+$`)
+
+// pgAction spells a pg_constraint referential action code.
+func pgAction(col string) string {
+	return "CASE " + col + " WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END"
+}
+
+func (postgresEngine) tableInfo(ctx context.Context, c *Conn, t TableRef) (TableInfo, error) {
+	var ti TableInfo
+	err := c.conn.QueryRowContext(ctx, `SELECT COALESCE(obj_description(cl.oid, 'pg_class'), '')
+		FROM pg_class cl JOIN pg_namespace n ON n.oid = cl.relnamespace
+		WHERE n.nspname = $1 AND cl.relname = $2`, t.Schema, t.Name).Scan(&ti.Comment)
+	if err != nil {
+		return ti, err
+	}
+	rows, err := c.conn.QueryContext(ctx, `SELECT con.conname, pg_get_constraintdef(con.oid, true)
+		FROM pg_constraint con
+		JOIN pg_class cl ON cl.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = cl.relnamespace
+		WHERE con.contype = 'c' AND n.nspname = $1 AND cl.relname = $2
+		ORDER BY con.conname`, t.Schema, t.Name)
+	if err != nil {
+		return ti, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ck Check
+		if err := rows.Scan(&ck.Name, &ck.Expression); err != nil {
+			return ti, err
+		}
+		// "CHECK ((price > 0))" → "price > 0"
+		e := strings.TrimSpace(strings.TrimPrefix(ck.Expression, "CHECK "))
+		for strings.HasPrefix(e, "(") && strings.HasSuffix(e, ")") && balanced(e[1:len(e)-1]) {
+			e = e[1 : len(e)-1]
+		}
+		ck.Expression = e
+		ti.Checks = append(ti.Checks, ck)
+	}
+	return ti, rows.Err()
+}
+
+// balanced reports whether brackets in s pair up (outside quotes).
+func balanced(s string) bool {
+	depth := 0
+	quote := false
+	for _, r := range s {
+		switch {
+		case r == '\'':
+			quote = !quote
+		case quote:
+		case r == '(':
+			depth++
+		case r == ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }

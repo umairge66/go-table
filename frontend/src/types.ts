@@ -53,14 +53,35 @@ export interface Column {
   default: string | null
   primaryKey: boolean
   comment: string
+  /** values are the choices of an ENUM or SET column. */
+  values?: string[]
   /** references is set for a single-column foreign key. */
   references?: ForeignRef
+  /** collation is set when the column has its own (MySQL/MariaDB) or a non-default one (PostgreSQL). */
+  collation?: string
+  autoIncrement?: boolean
+  /** onUpdateNow: ON UPDATE CURRENT_TIMESTAMP (MySQL/MariaDB). */
+  onUpdateNow?: boolean
+  /** defaultKind/defaultText: the default as the column editor takes it (a literal value or an SQL expression). */
+  defaultKind?: '' | 'value' | 'expression' | 'null'
+  defaultText?: string
 }
 
 /** ForeignRef is a foreign key: `from` columns match `columns` (same order) of schema.table. */
-export interface ForeignRef { schema: string; table: string; from: string[]; columns: string[] }
+export interface ForeignRef { name?: string; schema: string; table: string; from: string[]; columns: string[]; onDelete?: string; onUpdate?: string }
 
-export interface Index { name: string; columns: string[]; unique: boolean; primary: boolean }
+export interface Index {
+  name: string; columns: string[]; unique: boolean; primary: boolean
+  /** type is the method or kind: btree, hash, gin, fulltext, spatial… */
+  type?: string
+  /** constraint: made by a PRIMARY KEY or UNIQUE constraint. */
+  constraint?: boolean
+}
+
+export interface Check { name: string; expression: string }
+
+/** TableInfo: the comment, MySQL/MariaDB options and CHECK constraints of a table. */
+export interface TableInfo { comment: string; engine: string; collation: string; autoIncrement: number; checks: Check[] }
 
 export type Cell = string | null
 

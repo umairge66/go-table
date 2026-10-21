@@ -750,7 +750,7 @@ func TestQueriesAndHistory(t *testing.T) {
 type fakeDialogs struct{ save, open string }
 
 func (f fakeDialogs) SaveFile(string, string, []FileFilter) (string, error) { return f.save, nil }
-func (f fakeDialogs) OpenFile(string, []FileFilter) (string, error)         { return f.open, nil }
+func (f fakeDialogs) OpenFile(string, string, []FileFilter) (string, error) { return f.open, nil }
 
 func TestNativeDialogs(t *testing.T) {
 	h := newHarness(t)
@@ -833,6 +833,26 @@ func TestNativeDialogs(t *testing.T) {
 	h.do("POST", "/api/dialog/open", map[string]any{"kinds": []string{"sql"}}, &opened)
 	if opened.Path != path || opened.Name != "shop.db" || opened.Size == 0 {
 		t.Fatalf("open dialog %+v", opened)
+	}
+}
+
+func TestSSHKeyDialogAndCheck(t *testing.T) {
+	h := newHarness(t)
+	key := filepath.Join(t.TempDir(), "notakey")
+	os.WriteFile(key, []byte("hello"), 0o600)
+	h.srv.SetDialogs(fakeDialogs{open: key})
+	var opened struct{ Path string }
+	h.do("POST", "/api/dialog/open", map[string]any{"kinds": []string{"sshkey"}}, &opened)
+	if opened.Path != key {
+		t.Fatalf("open dialog %+v", opened)
+	}
+	var check struct {
+		OK, Encrypted bool
+		Problem       string
+	}
+	h.do("POST", "/api/ssh-key/check", map[string]string{"path": key}, &check)
+	if check.OK || !strings.Contains(check.Problem, "not an SSH private key") {
+		t.Fatalf("check %+v", check)
 	}
 }
 

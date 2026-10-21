@@ -1,9 +1,10 @@
 import clsx from 'clsx'
-import { CheckCircle2, ChevronDown, ClipboardPaste, KeyRound, Lock, PlugZap, Shield, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, PlugZap, Shield, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
 import { DRIVERS, SSL_MODES, TAGS, driverInfo, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
 export const newConnection = (driver: Driver = 'postgres'): Connection => ({
@@ -22,7 +23,7 @@ export const newConnection = (driver: Driver = 'postgres'): Connection => ({
 
 type TestState = { kind: 'idle' } | { kind: 'running' } | { kind: 'ok'; text: string } | { kind: 'err'; title: string; hint?: string; detail: string }
 
-export function ConnectionForm({ initial, initialPassword, groups, isNew, onSaved, onConnect, onCancel }: {
+export function ConnectionForm({ initial, initialPassword, groups, isNew, onSaved, onConnect, onCancel, connecting }: {
   initial: Connection
   initialPassword?: string
   groups: Group[]
@@ -30,6 +31,8 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
   onSaved: (c: Connection) => void
   onConnect: (c: Connection) => void
   onCancel?: () => void
+  /** connecting: this connection is being opened (SSH can take a while). */
+  connecting?: boolean
 }) {
   const toast = useToast()
   const [c, setC] = useState<Connection>(initial)
@@ -37,6 +40,10 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
   const [saving, setSaving] = useState(false)
   const [urlOpen, setUrlOpen] = useState(false)
+  // The desktop window can pick the SSH key in the system "Open" dialog.
+  const [native, setNative] = useState(false)
+  useEffect(() => { nativeDialogs().then(setNative) }, [])
+  const [keyCheck, setKeyCheck] = useState<{ path: string; encrypted?: boolean; problem?: string } | null>(null)
   useEffect(() => {
     setC(initial)
     setSecrets(initialPassword ? { password: initialPassword } : {})
@@ -55,6 +62,23 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
       ssl_mode: SSL_MODES[d].includes(x.ssl_mode ?? '') ? x.ssl_mode : SSL_MODES[d][0],
     }
   })
+
+  // The key file is checked as it's picked or typed, before connecting.
+  const keyPath = c.use_ssh_tunnel ? (c.ssh_key_path ?? '').trim() : ''
+  useEffect(() => {
+    if (!keyPath) { setKeyCheck(null); return }
+    const t = setTimeout(() => {
+      api.checkSSHKey(keyPath).then((r) => setKeyCheck({ path: keyPath, encrypted: r.encrypted, problem: r.problem }), () => setKeyCheck(null))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [keyPath])
+  const keyHint = keyCheck?.path !== keyPath ? undefined
+    : keyCheck.problem ? <span className="text-err" role="alert">{keyCheck.problem}</span>
+      : keyCheck.encrypted && !secrets.sshPassphrase && !c.saved?.sshPassphrase ? 'This key is encrypted: enter its passphrase.'
+        : undefined
+  const pickKey = () => {
+    openFileDialog(['sshkey']).then((f) => { if (f) set('ssh_key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))
+  }
 
   const doTest = async () => {
     setTest({ kind: 'running' })
@@ -207,25 +231,20 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
                 <Field label="SSH password">{secretInput('sshPassword', c.saved?.sshPassword, 'or use a private key')}</Field>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Private key"><Input mono icon={<KeyRound />} value={c.ssh_key_path ?? ''} placeholder="~/.ssh/id_ed25519" onChange={(e) => set('ssh_key_path', e.target.value)} /></Field>
+                <Field label="Private key" hint={keyHint}>
+                  <div className="flex gap-2">
+                    <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.ssh_key_path ?? ''} placeholder="~/.ssh/id_ed25519" aria-invalid={keyCheck?.path === keyPath && !!keyCheck.problem}
+                      onChange={(e) => set('ssh_key_path', e.target.value)} />
+                    {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} onClick={pickKey}
+                      aria-label="Choose the key file" title="Choose the key file" />}
+                  </div>
+                </Field>
                 <Field label="Key passphrase">{secretInput('sshPassphrase', c.saved?.sshPassphrase, 'if the key is encrypted')}</Field>
               </div>
             </div>
           )}
         </section>
       )}
-
-      <details className="group mt-3 rounded-xl border border-line bg-panel">
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium">
-          Advanced
-          <span className="ml-auto" />
-          <ChevronDown className="size-4 shrink-0 text-muted transition-transform duration-150 group-open:rotate-180" aria-hidden="true" />
-        </summary>
-        <div className="grid grid-cols-2 gap-3 px-4 pb-4">
-          <Field label="Rows per page"><Input inputMode="numeric" value={c.rows_per_page || ''} onChange={(e) => set('rows_per_page', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
-          <Field label="Query row limit" hint="0 = 1,000 by default"><Input inputMode="numeric" value={c.limit_query_rows || ''} onChange={(e) => set('limit_query_rows', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
-        </div>
-      </details>
 
       {test.kind !== 'idle' && (
         <div role="status" className={clsx('mt-3 flex gap-2.5 rounded-xl border p-3 text-[12.5px] animate-fade',
@@ -242,7 +261,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
         <div className="flex-1" />
         {onCancel && <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>}
         <Button type="button" onClick={() => save(false)} disabled={saving || (!dirty && !isNew)}>Save</Button>
-        <Button type="submit" variant="primary" loading={saving}>{dirty || isNew ? 'Save & connect' : 'Connect'}</Button>
+        <Button type="submit" variant="primary" loading={saving || connecting}>{connecting ? 'Connecting…' : dirty || isNew ? 'Save & connect' : 'Connect'}</Button>
       </div>
 
       {urlOpen && <UrlDialog onClose={() => setUrlOpen(false)} onParsed={(conn, pw) => {

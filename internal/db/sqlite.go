@@ -106,6 +106,7 @@ func (sqliteEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Column,
 		col.PrimaryKey = pk > 0
 		if def.Valid {
 			col.Default = &def.String
+			col.DefaultKind, col.DefaultText = sqliteDefault(def.String)
 		}
 		out = append(out, col)
 	}
@@ -115,7 +116,29 @@ func (sqliteEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Column,
 	if len(out) == 0 {
 		return nil, fmt.Errorf("table %s not found", c.Dialect.QualifiedName(t))
 	}
+	// A lone INTEGER PRIMARY KEY is the rowid: it numbers new rows.
+	pks := 0
+	for _, col := range out {
+		if col.PrimaryKey {
+			pks++
+		}
+	}
+	for i := range out {
+		out[i].AutoIncrement = pks == 1 && out[i].PrimaryKey && strings.EqualFold(out[i].Type, "INTEGER")
+	}
 	return out, nil
+}
+
+// sqliteDefault reads dflt_value, which is SQL: 'text', 12, NULL,
+// CURRENT_TIMESTAMP or (expression).
+func sqliteDefault(def string) (DefaultKind, string) {
+	switch {
+	case strings.EqualFold(def, "NULL"):
+		return DefaultNone, ""
+	case len(def) >= 2 && def[0] == '\'' && def[len(def)-1] == '\'':
+		return DefaultValue, unquoteSQL(def, false)
+	}
+	return DefaultExpression, def
 }
 
 func (sqliteEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, error) {
@@ -135,6 +158,8 @@ func (sqliteEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, 
 		}
 		ix.Unique = unique == 1
 		ix.Primary = origin == "pk"
+		ix.Constraint = origin != "c" // made by PRIMARY KEY or UNIQUE in the table
+		ix.Type = "btree"
 		out = append(out, ix)
 	}
 	rows.Close()
@@ -156,7 +181,7 @@ func (sqliteEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, 
 			return nil, err
 		}
 		if len(cols) > 0 {
-			out = append([]Index{{Name: "PRIMARY", Columns: cols, Unique: true, Primary: true}}, out...)
+			out = append([]Index{{Name: "PRIMARY", Columns: cols, Unique: true, Primary: true, Type: "btree", Constraint: true}}, out...)
 		}
 	}
 	return out, nil
@@ -178,7 +203,14 @@ func (sqliteEngine) foreignKeys(ctx context.Context, c *Conn, t TableRef) ([]For
 	schema := schemaOrMain(t.Schema)
 	// A NULL "to" means the parent's primary key, column by column.
 	return scanForeignKeys(c.conn.QueryContext(ctx, `SELECT CAST(f.id AS TEXT), f."from", ?, f."table",
-			COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table", ?) p WHERE p.pk = f.seq + 1), '')
+			COALESCE(f."to", (SELECT p.name FROM pragma_table_info(f."table", ?) p WHERE p.pk = f.seq + 1), ''),
+			f.on_delete, f.on_update
 		FROM pragma_foreign_key_list(?, ?) f
 		ORDER BY f.id, f.seq`, schema, schema, t.Name, schema))
+}
+
+// SQLite has no table comments or options, and keeps CHECK constraints
+// only in the CREATE TABLE text.
+func (sqliteEngine) tableInfo(context.Context, *Conn, TableRef) (TableInfo, error) {
+	return TableInfo{}, nil
 }

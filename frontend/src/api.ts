@@ -1,5 +1,5 @@
 import type {
-  ApiErrorBody, Column, Connection, DbObject, FileSource, Filter, Group, HistoryEntry, Index, Job, QueryResult, RowsResult, SavedQuery, Secrets, SessionInfo, Sort,
+  ApiErrorBody, Column, Connection, DbObject, FileSource, Filter, ForeignRef, Group, HistoryEntry, Index, Job, QueryResult, RowsResult, SavedQuery, Secrets, SessionInfo, Sort, TableInfo,
 } from './types'
 
 /** ApiError carries the server's plain-language explanation. */
@@ -68,6 +68,26 @@ export interface ColumnDef {
   onUpdateNow?: boolean // MySQL/MariaDB DATETIME/TIMESTAMP
 }
 
+/** AlterOp is one change to a table's structure (see internal/db/alter.go). */
+export type AlterOp =
+  | { kind: 'add_column'; def: ColumnDef }
+  | { kind: 'modify_column'; column: string; def: ColumnDef; autoIncrement?: boolean }
+  | { kind: 'drop_column'; column: string }
+  | { kind: 'add_index'; index: IndexDef }
+  | { kind: 'drop_index'; name: string }
+  | { kind: 'rename_index'; name: string; newName: string }
+  | { kind: 'set_primary_key'; columns: string[] }
+  | { kind: 'add_foreign_key'; foreignKey: ForeignKeyDef }
+  | { kind: 'drop_foreign_key'; name: string }
+  | { kind: 'add_check'; check: { name: string; expression: string } }
+  | { kind: 'drop_check'; name: string }
+  | { kind: 'rename_table'; newName: string }
+  | { kind: 'table_comment'; comment: string }
+  | { kind: 'table_options'; options: { engine: string; collation: string; autoIncrement: number; convert: boolean } }
+  | { kind: 'truncate' }
+export interface IndexDef { name: string; columns: string[]; unique: boolean; kind: '' | 'fulltext' | 'spatial'; method: string }
+export interface ForeignKeyDef { name: string; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
+
 export interface NewColumn extends ColumnDef { primaryKey: boolean; autoIncrement: boolean; index?: '' | 'unique' | 'index' | 'fulltext' }
 export interface NewTable { name: string; columns: NewColumn[]; comment: string; engine?: string; charset?: string; collation?: string; strict?: boolean }
 export interface TypeInfo {
@@ -88,6 +108,7 @@ export const api = {
   deleteGroup: (id: string) => call('DELETE', `/api/groups/${id}`),
   test: (c: Connection, secrets: Secrets) => call<{ version: string; ms: number }>('POST', '/api/test', { connection: c, secrets }),
   parseURL: (url: string) => call<{ connection: Connection; password: string }>('POST', '/api/parse-url', { url }),
+  checkSSHKey: (path: string) => call<{ ok: boolean; encrypted?: boolean; problem?: string }>('POST', '/api/ssh-key/check', { path }),
 
   queries: (connectionId: string) => call<SavedQuery[]>('GET', `/api/queries?${q({ connection: connectionId })}`),
   saveQuery: (sq: Omit<SavedQuery, 'updated'>) => call<SavedQuery>('PUT', `/api/queries/${encodeURIComponent(sq.id)}`, sq),
@@ -103,7 +124,7 @@ export const api = {
   fork: (sid: string, database: string) => call<SessionInfo>('POST', `/api/sessions/${sid}/fork`, { database }),
   useSchema: (sid: string, schema: string) => call<{ schema: string }>('POST', `/api/sessions/${sid}/schema`, { schema }),
   objects: (sid: string, schema: string) => call<DbObject[]>('GET', `/api/sessions/${sid}/objects?${q({ schema })}`),
-  structure: (sid: string, t: TableRef) => call<{ columns: Column[]; indexes: Index[] }>('GET', `/api/sessions/${sid}/structure?${q({ schema: t.schema, table: t.name })}`),
+  structure: (sid: string, t: TableRef) => call<{ columns: Column[]; indexes: Index[]; foreignKeys: ForeignRef[]; table: TableInfo }>('GET', `/api/sessions/${sid}/structure?${q({ schema: t.schema, table: t.name })}`),
   definition: (sid: string, t: TableRef, kind: string) => call<{ ddl: string }>('GET', `/api/sessions/${sid}/definition?${q({ schema: t.schema, table: t.name, kind })}`),
   rows: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal) =>
     call<RowsResult>('POST', `/api/sessions/${sid}/rows`, { table, page, columns }, signal),
@@ -115,6 +136,8 @@ export const api = {
   createDatabase: (sid: string, database: NewDatabase, dryRun: boolean) =>
     call<{ statements: string[] }>('POST', `/api/sessions/${sid}/databases`, { database, dryRun }),
   createSQLiteFile: (f: { name: string; path?: string; handle?: string; groupId?: string; tag?: string }) => call<Connection>('POST', '/api/sqlite-files', f),
+  alter: (sid: string, table: TableRef, ops: AlterOp[], dryRun: boolean) =>
+    call<{ statements: string[]; ok?: boolean }>('POST', `/api/sessions/${sid}/alter`, { table, ops, dryRun }),
   addColumn: (sid: string, table: TableRef, column: ColumnDef, dryRun: boolean) =>
     call<{ statements: string[]; ok?: boolean }>('POST', `/api/sessions/${sid}/columns`, { table, column, dryRun }),
   drop: (sid: string, objects: DbObject[], cascade: boolean, dryRun: boolean) =>

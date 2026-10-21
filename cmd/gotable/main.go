@@ -112,7 +112,7 @@ func (d testDialogs) SaveFile(_, name string, _ []server.FileFilter) (string, er
 	return filepath.Join(saved, filepath.Base(name)), os.MkdirAll(saved, 0o700)
 }
 
-func (d testDialogs) OpenFile(string, []server.FileFilter) (string, error) {
+func (d testDialogs) OpenFile(_, _ string, _ []server.FileFilter) (string, error) {
 	b, err := os.ReadFile(filepath.Join(d.dir, "open-next"))
 	if err != nil {
 		return "", nil

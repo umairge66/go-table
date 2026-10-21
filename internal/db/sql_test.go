@@ -2,6 +2,7 @@ package db
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -227,6 +228,21 @@ func TestToValue(t *testing.T) {
 	for got, want := range cases {
 		if got != want {
 			t.Errorf("got %+v want %+v", got, want)
+		}
+	}
+}
+
+func TestEnumValues(t *testing.T) {
+	cases := map[string][]string{
+		"enum('a','b c','it''s')": {"a", "b c", "it's"},
+		"SET('x','y')":            {"x", "y"},
+		"enum('a,b','')":          {"a,b", ""},
+		"varchar(20)":             nil,
+		"tinyint(1)":              nil,
+	}
+	for in, want := range cases {
+		if got := enumValues(in); !slices.Equal(got, want) {
+			t.Errorf("enumValues(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

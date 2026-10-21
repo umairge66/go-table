@@ -192,6 +192,44 @@ func authMethods(cfg Config) ([]ssh.AuthMethod, error) {
 	return methods, nil
 }
 
+// CheckKey reports whether path holds a private key that can sign in, and
+// whether it needs a passphrase first. The error says what is wrong in
+// words meant for the connection form.
+func CheckKey(path string) (encrypted bool, err error) {
+	path = expandHome(path)
+	st, err := os.Stat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return false, fmt.Errorf("no file at %s", path)
+	case err != nil:
+		return false, fmt.Errorf("cannot read %s: %w", path, err)
+	case st.IsDir():
+		return false, fmt.Errorf("%s is a folder, not a key file", path)
+	case st.Size() > 1<<20:
+		return false, fmt.Errorf("%s is too large to be an SSH key", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("cannot read %s: %w", path, err)
+	}
+	text := strings.TrimSpace(string(data))
+	switch {
+	case strings.HasPrefix(text, "PuTTY-User-Key-File"):
+		return false, errors.New("this is a PuTTY key (.ppk): export it in OpenSSH format with PuTTYgen")
+	case strings.HasPrefix(text, "ssh-") || strings.HasPrefix(text, "ecdsa-") || strings.HasSuffix(path, ".pub"):
+		return false, errors.New("this is a public key: choose the file without .pub")
+	}
+	_, err = ssh.ParsePrivateKey(data)
+	var missing *ssh.PassphraseMissingError
+	if errors.As(err, &missing) {
+		return true, nil
+	}
+	if err != nil {
+		return false, errors.New("this file is not an SSH private key")
+	}
+	return false, nil
+}
+
 func expandHome(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {

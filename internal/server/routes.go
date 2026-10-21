@@ -29,6 +29,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/native/window", s.nativeWindow)
 	mux.HandleFunc("POST /api/dialog/save", s.dialogSave)
 	mux.HandleFunc("POST /api/dialog/open", s.dialogOpen)
+	mux.HandleFunc("POST /api/ssh-key/check", s.checkSSHKey)
 	mux.HandleFunc("POST /api/jobs/{id}/save", s.saveJob)
 	mux.HandleFunc("POST /api/files", s.saveBody)
 	mux.HandleFunc("GET /api/queries", s.listQueries)
@@ -49,6 +50,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{sid}/rows", s.rows)
 	mux.HandleFunc("POST /api/sessions/{sid}/changes", s.changes)
 	mux.HandleFunc("POST /api/sessions/{sid}/columns", s.addColumn)
+	mux.HandleFunc("POST /api/sessions/{sid}/alter", s.alterTable)
 	mux.HandleFunc("POST /api/sessions/{sid}/tables", s.createTable)
 	mux.HandleFunc("GET /api/sessions/{sid}/type-info", s.typeInfo)
 	mux.HandleFunc("POST /api/sessions/{sid}/databases", s.createDatabase)
@@ -509,27 +511,58 @@ func (s *Server) objects(w http.ResponseWriter, r *http.Request) {
 }
 
 type columnDTO struct {
-	Name       string  `json:"name"`
-	Type       string  `json:"type"`
-	Nullable   bool    `json:"nullable"`
-	Default    *string `json:"default"`
-	PrimaryKey bool    `json:"primaryKey"`
-	Comment    string  `json:"comment"`
-	References *refDTO `json:"references,omitempty"`
+	Name          string         `json:"name"`
+	Type          string         `json:"type"`
+	Nullable      bool           `json:"nullable"`
+	Default       *string        `json:"default"`
+	PrimaryKey    bool           `json:"primaryKey"`
+	Comment       string         `json:"comment"`
+	Values        []string       `json:"values,omitempty"`
+	References    *refDTO        `json:"references,omitempty"`
+	Collation     string         `json:"collation"`
+	AutoIncrement bool           `json:"autoIncrement"`
+	OnUpdateNow   bool           `json:"onUpdateNow"`
+	DefaultKind   db.DefaultKind `json:"defaultKind"`
+	DefaultText   string         `json:"defaultText"`
 }
 
 type refDTO struct {
-	Schema  string   `json:"schema"`
-	Table   string   `json:"table"`
-	From    []string `json:"from"`
-	Columns []string `json:"columns"`
+	Name     string   `json:"name"`
+	Schema   string   `json:"schema"`
+	Table    string   `json:"table"`
+	From     []string `json:"from"`
+	Columns  []string `json:"columns"`
+	OnDelete string   `json:"onDelete"`
+	OnUpdate string   `json:"onUpdate"`
+}
+
+func toRefDTO(f *db.ForeignRef) *refDTO {
+	if f == nil {
+		return nil
+	}
+	return &refDTO{f.Name, f.Schema, f.Table, f.From, f.Columns, f.OnDelete, f.OnUpdate}
 }
 
 type indexDTO struct {
-	Name    string   `json:"name"`
-	Columns []string `json:"columns"`
-	Unique  bool     `json:"unique"`
-	Primary bool     `json:"primary"`
+	Name       string   `json:"name"`
+	Columns    []string `json:"columns"`
+	Unique     bool     `json:"unique"`
+	Primary    bool     `json:"primary"`
+	Type       string   `json:"type"`
+	Constraint bool     `json:"constraint"`
+}
+
+type checkDTO struct {
+	Name       string `json:"name"`
+	Expression string `json:"expression"`
+}
+
+type tableInfoDTO struct {
+	Comment       string     `json:"comment"`
+	Engine        string     `json:"engine"`
+	Collation     string     `json:"collation"`
+	AutoIncrement int64      `json:"autoIncrement"`
+	Checks        []checkDTO `json:"checks"`
 }
 
 func tableRef(r *http.Request) db.TableRef {
@@ -556,16 +589,53 @@ func (s *Server) structure(w http.ResponseWriter, r *http.Request) {
 	}
 	cout := make([]columnDTO, len(cols))
 	for i, c := range cols {
-		cout[i] = columnDTO{c.Name, c.Type, c.Nullable, c.Default, c.PrimaryKey, c.Comment, nil}
-		if c.References != nil {
-			cout[i].References = &refDTO{c.References.Schema, c.References.Table, c.References.From, c.References.Columns}
-		}
+		cout[i] = columnDTO{c.Name, c.Type, c.Nullable, c.Default, c.PrimaryKey, c.Comment, c.Values, toRefDTO(c.References),
+			c.Collation, c.AutoIncrement, c.OnUpdateNow, c.DefaultKind, c.DefaultText}
 	}
 	iout := make([]indexDTO, len(idx))
 	for i, x := range idx {
-		iout[i] = indexDTO{x.Name, nonNil(x.Columns), x.Unique, x.Primary}
+		iout[i] = indexDTO{x.Name, nonNil(x.Columns), x.Unique, x.Primary, x.Type, x.Constraint}
 	}
-	writeJSON(w, 200, map[string]any{"columns": cout, "indexes": iout})
+	// Foreign keys and table settings are extras: missing privileges must
+	// not hide the table.
+	fout := []*refDTO{}
+	if fks, err := se.c().ForeignKeys(r.Context(), ref); err == nil {
+		for i := range fks {
+			fout = append(fout, toRefDTO(&fks[i]))
+		}
+	}
+	info := tableInfoDTO{Checks: []checkDTO{}}
+	if ti, err := se.c().TableInfo(r.Context(), ref); err == nil {
+		info = tableInfoDTO{ti.Comment, ti.Engine, ti.Collation, ti.AutoIncrement, []checkDTO{}}
+		for _, ck := range ti.Checks {
+			info.Checks = append(info.Checks, checkDTO{ck.Name, ck.Expression})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"columns": cout, "indexes": iout, "foreignKeys": fout, "table": info})
+}
+
+// alterTable previews (dryRun) or applies changes to a table's structure.
+func (s *Server) alterTable(w http.ResponseWriter, r *http.Request) {
+	se, err := s.session(r)
+	if err != nil {
+		writeErr(w, 410, err)
+		return
+	}
+	var in struct {
+		Table  tableIn      `json:"table"`
+		Ops    []db.AlterOp `json:"ops"`
+		DryRun bool         `json:"dryRun"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	stmts, err := se.c().Alter(r.Context(), db.TableRef{Schema: in.Table.Schema, Name: in.Table.Name}, in.Ops, in.DryRun)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": !in.DryRun, "statements": nonNil(stmts)})
 }
 
 func (s *Server) definition(w http.ResponseWriter, r *http.Request) {

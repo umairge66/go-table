@@ -64,6 +64,44 @@ func runSuite(t *testing.T, c *Conn) {
 		}
 	})
 
+	t.Run("alter", func(t *testing.T) { runAlterSuite(t, c) })
+
+	t.Run("enum values", func(t *testing.T) {
+		var ddl []string
+		switch kind {
+		case model.DriverPostgres:
+			ddl = []string{"DROP TABLE IF EXISTS gt_moods", "DROP TYPE IF EXISTS gt_mood",
+				"CREATE TYPE gt_mood AS ENUM ('sad', 'it''s ok', 'happy')", "CREATE TABLE gt_moods (id INT PRIMARY KEY, mood gt_mood, note TEXT)"}
+		case model.DriverMySQL, model.DriverMariaDB:
+			ddl = []string{"DROP TABLE IF EXISTS gt_moods",
+				"CREATE TABLE gt_moods (id INT PRIMARY KEY, mood ENUM('sad', 'it''s ok', 'happy'), tags SET('a', 'b'), note TEXT)"}
+		default:
+			t.Skip("SQLite has no enum types")
+		}
+		for _, s := range ddl {
+			if res, err := c.Execute(ctx, s, 0); err != nil || res[len(res)-1].Err != nil {
+				t.Fatalf("%q: %v %v", s, err, res)
+			}
+		}
+		cols, err := c.Columns(ctx, TableRef{Schema: schema, Name: "gt_moods"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string][]string{}
+		for _, col := range cols {
+			values[col.Name] = col.Values
+		}
+		if want := []string{"sad", "it's ok", "happy"}; !slices.Equal(values["mood"], want) {
+			t.Errorf("mood values %q, want %q", values["mood"], want)
+		}
+		if kind != model.DriverPostgres && !slices.Equal(values["tags"], []string{"a", "b"}) {
+			t.Errorf("tags values %q", values["tags"])
+		}
+		if values["note"] != nil || values["id"] != nil {
+			t.Errorf("plain columns have values: %q", values)
+		}
+	})
+
 	t.Run("schemas", func(t *testing.T) {
 		s, err := c.Schemas(ctx)
 		if err != nil {

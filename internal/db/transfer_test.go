@@ -328,3 +328,34 @@ func TestDrop(t *testing.T) {
 		})
 	}
 }
+
+// A SQLite dump restored in one transaction: the dump's own PRAGMA can't
+// turn foreign keys off there, so the import does, and checks them at the end.
+func TestImportSQLiteForeignKeyOrder(t *testing.T) {
+	ctx := context.Background()
+	cfg := model.NewConnection(model.DriverSQLite)
+	cfg.Name, cfg.Path = "fk", filepath.Join(t.TempDir(), "fk.db")
+	c := openTest(t, cfg, "")
+	script := `PRAGMA foreign_keys = OFF;
+BEGIN TRANSACTION;
+CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id));
+INSERT INTO child VALUES (1, 1);
+CREATE TABLE parent (id INTEGER PRIMARY KEY);
+INSERT INTO parent VALUES (1);
+COMMIT;
+PRAGMA foreign_keys = ON;
+`
+	if _, err := c.ImportSQL(ctx, strings.NewReader(script), ImportOptions{Transaction: true}, nil); err != nil {
+		t.Fatalf("child before parent: %v", err)
+	}
+	if on, _ := c.sqliteForeignKeys(ctx); !on {
+		t.Error("foreign keys were left off")
+	}
+	_, err := c.ImportSQL(ctx, strings.NewReader("INSERT INTO child VALUES (2, 99);"), ImportOptions{Transaction: true}, nil)
+	if err == nil || !strings.Contains(err.Error(), "points nowhere") {
+		t.Fatalf("broken key: %v", err)
+	}
+	if res, _ := c.Execute(ctx, "SELECT COUNT(*) FROM child", 0); res[0].Set.Rows[0][0].Text != "1" {
+		t.Error("the broken row was kept")
+	}
+}

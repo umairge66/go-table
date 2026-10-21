@@ -295,3 +295,33 @@ func TestTunnelErrors(t *testing.T) {
 	}
 	c.Close()
 }
+
+func TestCheckKey(t *testing.T) {
+	plain, pub := writeKey(t, "")
+	if enc, err := CheckKey(plain); err != nil || enc {
+		t.Fatalf("plain key: %v %v", enc, err)
+	}
+	locked, _ := writeKey(t, "pp")
+	if enc, err := CheckKey(locked); err != nil || !enc {
+		t.Fatalf("encrypted key: %v %v", enc, err)
+	}
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for path, want := range map[string]string{
+		filepath.Join(dir, "missing"): "no file",
+		dir:                           "folder",
+		write("id_ed25519.pub", string(ssh.MarshalAuthorizedKey(pub))): "public key",
+		write("key.ppk", "PuTTY-User-Key-File-3: ssh-ed25519\n"):       "PuTTY",
+		write("notes.txt", "hello"):                                    "not an SSH private key",
+	} {
+		if _, err := CheckKey(path); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want %q, got %v", path, want, err)
+		}
+	}
+}

@@ -31,6 +31,7 @@ type engine interface {
 	// foreignKeys lists the table's foreign keys.
 	foreignKeys(ctx context.Context, c *Conn, t TableRef) ([]ForeignRef, error)
 	definition(ctx context.Context, c *Conn, o Object) (string, error)
+	tableInfo(ctx context.Context, c *Conn, t TableRef) (TableInfo, error)
 }
 
 // Conn is an open database session. All operations run on one pinned
@@ -224,7 +225,8 @@ func (c *Conn) Columns(ctx context.Context, t TableRef) ([]Column, error) {
 }
 
 // scanForeignKeys groups (constraint, column, ref schema, ref table, ref
-// column) rows, ordered by constraint and position, into foreign keys.
+// column, on delete, on update) rows, ordered by constraint and position,
+// into foreign keys.
 func scanForeignKeys(rows *sql.Rows, err error) ([]ForeignRef, error) {
 	if err != nil {
 		return nil, err
@@ -233,12 +235,12 @@ func scanForeignKeys(rows *sql.Rows, err error) ([]ForeignRef, error) {
 	var out []ForeignRef
 	last := ""
 	for rows.Next() {
-		var name, from, schema, table, to string
-		if err := rows.Scan(&name, &from, &schema, &table, &to); err != nil {
+		var name, from, schema, table, to, onDelete, onUpdate string
+		if err := rows.Scan(&name, &from, &schema, &table, &to, &onDelete, &onUpdate); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || name != last {
-			out = append(out, ForeignRef{Schema: schema, Table: table})
+			out = append(out, ForeignRef{Name: name, Schema: schema, Table: table, OnDelete: strings.ToUpper(onDelete), OnUpdate: strings.ToUpper(onUpdate)})
 			last = name
 		}
 		fk := &out[len(out)-1]
@@ -255,6 +257,24 @@ func (c *Conn) Indexes(ctx context.Context, t TableRef) ([]Index, error) {
 	}
 	defer c.mu.Unlock()
 	return c.eng.indexes(ctx, c, t)
+}
+
+// ForeignKeys lists a table's foreign keys.
+func (c *Conn) ForeignKeys(ctx context.Context, t TableRef) ([]ForeignRef, error) {
+	if err := c.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer c.mu.Unlock()
+	return c.eng.foreignKeys(ctx, c, t)
+}
+
+// TableInfo returns a table's comment, options and CHECK constraints.
+func (c *Conn) TableInfo(ctx context.Context, t TableRef) (TableInfo, error) {
+	if err := c.lock(ctx); err != nil {
+		return TableInfo{}, err
+	}
+	defer c.mu.Unlock()
+	return c.eng.tableInfo(ctx, c, t)
 }
 
 // Definition returns the CREATE statement of a table or view.

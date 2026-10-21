@@ -34,6 +34,20 @@ type Column struct {
 	Default    *string
 	PrimaryKey bool
 	Comment    string
+	// Values are the choices of an ENUM or SET column, in order.
+	Values []string
+	// Collation is set when the column sorts text differently from its
+	// type's (PostgreSQL) or has one at all (MySQL/MariaDB).
+	Collation string
+	// AutoIncrement: AUTO_INCREMENT, an identity or serial column, or
+	// SQLite's INTEGER PRIMARY KEY.
+	AutoIncrement bool
+	// OnUpdateNow: ON UPDATE CURRENT_TIMESTAMP (MySQL/MariaDB).
+	OnUpdateNow bool
+	// DefaultKind and DefaultText give Default the way ColumnDef takes it:
+	// a literal value (unquoted) or an SQL expression.
+	DefaultKind DefaultKind
+	DefaultText string
 	// References is the foreign key the column belongs to (the
 	// single-column one when it is part of several).
 	References *ForeignRef
@@ -42,10 +56,15 @@ type Column struct {
 // ForeignRef is a foreign key: From columns of this table match Columns
 // (same order) of Schema.Table.
 type ForeignRef struct {
+	// Name is the constraint name (SQLite: the key's number).
+	Name    string
 	Schema  string
 	Table   string
 	From    []string
 	Columns []string
+	// OnDelete and OnUpdate are the referential actions, e.g. CASCADE.
+	OnDelete string
+	OnUpdate string
 }
 
 // Index describes a table index.
@@ -54,6 +73,28 @@ type Index struct {
 	Columns []string
 	Unique  bool
 	Primary bool
+	// Type is the index method or kind: btree, hash, gin, fulltext, spatial…
+	Type string
+	// Constraint: the index belongs to a PRIMARY KEY or UNIQUE constraint
+	// (PostgreSQL, SQLite), so it is dropped through the constraint.
+	Constraint bool
+}
+
+// Check is a CHECK constraint.
+type Check struct {
+	Name       string
+	Expression string
+}
+
+// TableInfo holds table-level settings.
+type TableInfo struct {
+	Comment string
+	// MySQL/MariaDB: storage engine, default collation and the next
+	// AUTO_INCREMENT value (0 when unknown).
+	Engine        string
+	Collation     string
+	AutoIncrement int64
+	Checks        []Check
 }
 
 // Value is a single cell. Null distinguishes SQL NULL from empty text.

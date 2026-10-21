@@ -150,6 +150,24 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	}
 	res := &ImportResult{Errors: []ImportError{}}
 	sc := NewScanner(r, c.Config.Driver)
+	// SQLite ignores "PRAGMA foreign_keys = OFF" inside a transaction, so a
+	// dump's own PRAGMA can't turn the checks off: rows of a table would
+	// be refused before the table they point at exists. Turn them off
+	// around the transaction and check every key before committing.
+	sqliteKeys := false
+	if o.Transaction && c.Config.Driver == model.DriverSQLite {
+		on, err := c.sqliteForeignKeys(ctx)
+		if err != nil {
+			return res, err
+		}
+		if on {
+			if _, err := c.Exec(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+				return res, err
+			}
+			sqliteKeys = true
+			defer c.Exec(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
+		}
+	}
 	if o.Transaction {
 		if _, err := c.Exec(ctx, "BEGIN"); err != nil {
 			return res, err
@@ -206,12 +224,50 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 			progress(res)
 		}
 	}
+	if sqliteKeys {
+		if n, err := c.sqliteBrokenKeys(ctx); err != nil || n > 0 {
+			if err == nil {
+				err = fmt.Errorf("the import would leave %d row(s) with a foreign key that points nowhere", n)
+			}
+			r, _ := fail(nil)
+			return r, err
+		}
+	}
 	if o.Transaction {
 		if _, err := c.Exec(ctx, "COMMIT"); err != nil {
 			return fail(err)
 		}
 	}
 	return res, nil
+}
+
+// sqliteForeignKeys reports whether SQLite enforces foreign keys.
+func (c *Conn) sqliteForeignKeys(ctx context.Context) (bool, error) {
+	if err := c.lock(ctx); err != nil {
+		return false, err
+	}
+	defer c.mu.Unlock()
+	var on int
+	err := c.conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&on)
+	return on == 1, err
+}
+
+// sqliteBrokenKeys counts rows whose foreign key points nowhere.
+func (c *Conn) sqliteBrokenKeys(ctx context.Context) (int, error) {
+	if err := c.lock(ctx); err != nil {
+		return 0, err
+	}
+	defer c.mu.Unlock()
+	rows, err := c.conn.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	return n, rows.Err()
 }
 
 // ---------------------------------------------------------------- CSV import

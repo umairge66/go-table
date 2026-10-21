@@ -8,9 +8,9 @@ import { useConfirm } from '../components/Confirm'
 import { Grid } from '../components/Grid'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, errorParts, useMenu, useToast } from '../components/ui'
+import { cellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
-import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort } from '../types'
-import { AddColumnDialog } from './AddColumnDialog'
+import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo } from '../types'
 import { ExportDialog } from './ExportDialog'
 import { FkLookup } from './FkLookup'
 import { ImportCSVDialog } from './ImportCSVDialog'
@@ -22,7 +22,11 @@ const newFilter = (column = '*'): Filter => ({ id: String(++filterSeq), column, 
 
 export const fmt = (n: number) => n.toLocaleString('en-US')
 
-export function DataView({ session, object, active, tabId, inspector, onDirty, openQuery, onOpenReference, focusFilter }: {
+const PAGE_SIZES = [100, 300, 500, 1000, 5000]
+const PAGE_SIZE_KEY = 'gotable:pageSize'
+const savedPageSize = () => { try { return Number(localStorage.getItem(PAGE_SIZE_KEY)) || 0 } catch { return 0 } }
+
+export function DataView({ session, object, active, tabId, inspector, onDirty, openQuery, onOpenReference, focusFilter, onRenamed, onStructureChanged, initialMode }: {
   session: SessionInfo
   object: DbObject
   active: boolean
@@ -34,17 +38,29 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   onOpenReference?: (ref: ForeignRef, values: Cell[]) => void
   /** focusFilter shows only rows matching the pairs (a followed foreign key); key re-applies it. */
   focusFilter?: { pairs: { column: string; value: Cell }[]; key: number }
+  /** onRenamed: the table was renamed in the Structure tab. */
+  onRenamed?: (name: string) => void
+  /** onStructureChanged: columns or indexes changed (refresh completions). */
+  onStructureChanged?: () => void
+  initialMode?: 'structure'
 }) {
   const toast = useToast()
   const confirm = useConfirm()
   const menu = useMenu()
   const table = useMemo(() => ({ schema: object.schema, name: object.name }), [object])
   const readOnly = object.kind === 'view'
-  const pageSize = session.connection.rows_per_page || 300
+  // Rows per page: picked in the footer and remembered for every table.
+  const [pageSize, setPageSize] = useState(() => savedPageSize() || session.connection.rows_per_page || 300)
+  const changePageSize = (n: number) => guard(() => {
+    try { localStorage.setItem(PAGE_SIZE_KEY, String(n)) } catch { /* not remembered */ }
+    setPageSize(n)
+  })
 
-  const [mode, setMode] = useState<'data' | 'structure' | 'ddl'>('data')
+  const [mode, setMode] = useState<'data' | 'structure' | 'ddl'>(initialMode ?? 'data')
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [indexes, setIndexes] = useState<Index[]>([])
+  const [foreignKeys, setForeignKeys] = useState<ForeignRef[]>([])
+  const [tableInfo, setTableInfo] = useState<TableInfo | null>(null)
   const [data, setData] = useState<RowsResult | null>(null)
   const [edits, setEdits] = useState<Edits>(emptyEdits)
   const [loading, setLoading] = useState(true)
@@ -62,7 +78,6 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   const [review, setReview] = useState<string[] | null>(null)
   const [committing, setCommitting] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
-  const [addColumnOpen, setAddColumnOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [newColumn, setNewColumn] = useState<string>()
   const [sel, setSel] = useState<{ r: number; c: number; rows: number[] } | null>(null)
@@ -99,6 +114,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         cols = st.columns
         setColumns(st.columns)
         setIndexes(st.indexes)
+        setForeignKeys(st.foreignKeys ?? [])
+        setTableInfo(st.table ?? null)
       }
       const res = await api.rows(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal)
       setData(res)
@@ -113,7 +130,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   }, [columns, offset, pageReq, session.id, table])
 
   // Reload when sorting or filters change.
-  useEffect(() => { load(0) }, [sort, applied]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(0) }, [sort, applied, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // guard asks before an action that would throw away uncommitted edits,
   // offering to commit them instead — like a desktop app's "unsaved changes".
@@ -245,6 +262,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   const page = Math.floor(offset / pageSize)
   const refName = (f: ForeignRef) => `${f.schema && f.schema !== object.schema ? f.schema + '.' : ''}${f.table}`
   const gridColumns = useMemo(() => (columns ?? []).map((c) => ({ name: c.name, type: c.type, pk: c.primaryKey,
+    edit: cellKind(c.type, c.values, session.connection.driver), nullable: c.nullable,
     ref: c.references ? (c.references.columns.length > 1 ? `${refName(c.references)}(${c.references.columns.join(', ')})` : `${refName(c.references)}.${c.references.columns[0]}`) : undefined,
   })), [columns, object.schema]) // eslint-disable-line react-hooks/exhaustive-deps
   // The values of a row's foreign key columns (in key order).
@@ -374,8 +392,18 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
       {mode !== 'data' && (
         <div className="min-h-0 flex-1">
           {mode === 'structure'
-            ? <StructureView columns={columns ?? []} indexes={indexes} highlight={newColumn}
-                onAddColumn={readOnly ? undefined : () => guard(() => setAddColumnOpen(true))} />
+            ? <>
+                {pending > 0 && !readOnly && (
+                  <div className="flex h-10 items-center gap-2 border-b border-warn/30 bg-warn/10 px-3 text-[12.5px]" role="status">
+                    <span className="size-2 rounded-full bg-warn" />
+                    Commit or discard the {pending} unsaved row change{pending === 1 ? '' : 's'} in Data before changing the structure.
+                  </div>
+                )}
+                <StructureView session={session} table={table} readOnly={readOnly || pending > 0} columns={columns ?? []} indexes={indexes}
+                  foreignKeys={foreignKeys} info={tableInfo} highlight={newColumn}
+                  onChanged={(c) => { setNewColumn(c); load(0, true); onStructureChanged?.() }}
+                  onRenamed={(name) => onRenamed?.(name)} />
+              </>
             : <DefinitionView session={session} object={object} />}
         </div>
       )}
@@ -399,6 +427,9 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
             <div className="flex-1" />
             {!pk.length && !readOnly && <span className="text-[11.5px] text-warn" title="Edits match rows on every column">No primary key</span>}
             <span className="text-[11.5px] text-faint">{data.ms} ms</span>
+            <Select aria-label="Rows per page" className="w-[124px]" selectClassName="h-7 text-[12px]" value={pageSize} onChange={(e) => changePageSize(Number(e.target.value))}>
+              {[...new Set([...PAGE_SIZES, pageSize])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{fmt(n)} per page</option>)}
+            </Select>
             <div className="flex items-center gap-0.5">
               <IconButton label="Previous page" disabled={page === 0} onClick={() => guard(() => load(offset - pageSize))}><ChevronLeft className="size-4" /></IconButton>
               <span className="min-w-16 text-center text-[12px] text-muted">{page + 1} / {fmt(pages)}</span>
@@ -423,10 +454,6 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
             <SqlEditor value={review.join('\n')} driver={session.connection.driver} readOnly />
           </div>
         </Modal>
-      )}
-      {addColumnOpen && columns && (
-        <AddColumnDialog session={session} table={table} columns={columns} onClose={() => setAddColumnOpen(false)}
-          onAdded={(name) => { setAddColumnOpen(false); setNewColumn(name); load(0, true) }} />
       )}
       {importOpen && columns && (
         <ImportCSVDialog session={session} table={table} columns={columns} onClose={() => setImportOpen(false)} onImported={() => load(0)} />

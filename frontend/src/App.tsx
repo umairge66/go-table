@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { ConfirmProvider } from './components/Confirm'
 import { ResizeEdges, useOwnTitleBar } from './components/WindowChrome'
@@ -23,6 +23,9 @@ function Shell() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [view, setView] = useState<string>('home') // 'home' or a session id
   const [connecting, setConnecting] = useState<string | null>(null)
+  // Connections being opened; a second click while one connects (an SSH
+  // tunnel can take seconds) must not open it twice.
+  const opening = useRef(new Set<string>())
   const ownTitleBar = useOwnTitleBar()
 
   useEffect(() => {
@@ -53,6 +56,8 @@ function Shell() {
   const connect = useCallback(async (c: Connection) => {
     const open = sessions.find((s) => s.connection.id === c.id)
     if (open) { setView(open.id); return }
+    if (opening.current.has(c.id)) return
+    opening.current.add(c.id)
     setConnecting(c.id)
     try {
       const s = await api.openSession(c.id)
@@ -61,7 +66,8 @@ function Shell() {
     } catch (e) {
       toast('error', ...errorParts(e))
     } finally {
-      setConnecting(null)
+      opening.current.delete(c.id)
+      setConnecting((x) => (x === c.id ? null : x))
     }
   }, [sessions, toast])
 

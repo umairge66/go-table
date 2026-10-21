@@ -120,8 +120,19 @@ body {
 input, textarea, [contenteditable] { user-select: text; }
 ::selection { background: var(--selected); }
 
-/* Thin, unobtrusive scrollbars. */
-* { scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+/* Thin, unobtrusive scrollbars. WebKit and Chromium draw them with the
+   ::-webkit-scrollbar styles; WebKitGTK's own overlay scrollbars would
+   otherwise show through context menus and popovers. The standard
+   properties would take precedence there, so only other browsers get them. */
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+  ::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 5px; background: var(--faint) padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+}
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+}
 
 /* In the base layer so utilities like outline-none can override it. */
 @layer base {

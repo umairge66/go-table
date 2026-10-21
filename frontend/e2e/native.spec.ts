@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -141,4 +141,37 @@ test('own title bar: window buttons, dragging and resizing', async () => {
 
   await header.getByRole('button', { name: 'Close' }).click()
   await expect.poll(() => actions().at(-1)).toBe('close')
+})
+
+test('native dialogs: browse for an SSH private key, checked as it is picked', async () => {
+  await page.getByRole('button', { name: 'Connections', exact: true }).click()
+  await page.keyboard.press('Control+n')
+  const form = page.getByLabel('Connection form')
+  await form.getByRole('radio', { name: 'PostgreSQL' }).click()
+  await form.getByRole('switch').click()
+  const keyField = form.getByPlaceholder('~/.ssh/id_ed25519')
+
+  // A file that isn't a key is flagged right away.
+  const notKey = join(dir, 'notes.txt')
+  writeFileSync(notKey, 'hello')
+  writeFileSync(join(dir, 'open-next'), notKey)
+  await form.getByRole('button', { name: 'Choose the key file' }).click()
+  await expect(keyField).toHaveValue(notKey)
+  await expect(form.getByRole('alert')).toHaveText('this file is not an SSH private key')
+
+  // An encrypted key asks for its passphrase until one is typed.
+  const key = join(dir, 'id_ed25519')
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', 'pp', '-f', key])
+  writeFileSync(join(dir, 'open-next'), key)
+  await form.getByRole('button', { name: 'Choose the key file' }).click()
+  await expect(keyField).toHaveValue(key)
+  await expect(form.getByRole('alert')).toHaveCount(0)
+  await expect(form.getByText('This key is encrypted: enter its passphrase.')).toBeVisible()
+  await form.getByPlaceholder('if the key is encrypted').fill('pp')
+  await expect(form.getByText('This key is encrypted: enter its passphrase.')).toHaveCount(0)
+
+  // A cancelled dialog leaves the path as it was.
+  rmSync(join(dir, 'open-next'))
+  await form.getByRole('button', { name: 'Choose the key file' }).click()
+  await expect(keyField).toHaveValue(key)
 })

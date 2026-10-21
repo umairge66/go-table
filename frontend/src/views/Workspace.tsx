@@ -50,6 +50,8 @@ export interface Tab {
   autoRun?: boolean
   /** focusFilter opens a table filtered to one row (a followed foreign key). */
   focusFilter?: { pairs: { column: string; value: Cell }[]; key: number }
+  /** structure opens a table tab on its Structure view (after a rename). */
+  structure?: boolean
 }
 
 type PersistedQuery = { sql: string; title?: string; savedId?: string; savedSql?: string }
@@ -609,13 +611,11 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
           <TagPill tag={conn.tag} />
           <ChevronDown className="size-3.5 text-muted" />
         </button>
-        {/* Server, address and the database being worked in (on hover). */}
+        {/* The server version; its address and the database show on hover. */}
         <span data-testid="server-info" className="hidden min-w-0 max-w-[38%] items-center gap-1.5 text-[12px] text-muted lg:flex"
           title={`${activeDb.info.version}\n${subtitle(pg ? { ...conn, database: activeDb.info.database } : conn)}\nDatabase: ${label(activeDb)}${dbs.length > 1 ? ` (${dbs.length} open)` : ''}`}>
           <span className="size-1.5 shrink-0 rounded-full bg-ok" aria-hidden />
-          <span className="shrink-0 font-medium text-fg-2">{activeDb.info.version}</span>
-          <span className="text-faint">·</span>
-          <span className="truncate">{subtitle(pg ? { ...conn, database: activeDb.info.database } : conn)}</span>
+          <span className="truncate font-medium text-fg-2">{activeDb.info.version}</span>
         </span>
         <div className="flex-1" />
         <button onClick={() => setPicker('all')}
@@ -776,11 +776,20 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
                     : t.kind === 'table' && t.object
                     ? <DataView session={tdb.info} object={t.object} active={active && t.id === activeTab} tabId={t.id} inspector={inspector}
                         onDirty={(d) => updateTab(t.id, { dirty: d })} openQuery={(sql) => newQuery(sql, tdb.key)}
-                        onOpenReference={(ref, vs) => openReference(tdb, ref, vs)} focusFilter={t.focusFilter} />
+                        onOpenReference={(ref, vs) => openReference(tdb, ref, vs)} focusFilter={t.focusFilter} initialMode={t.structure ? 'structure' : undefined}
+                        onStructureChanged={() => loadObjects(tdb.key)}
+                        onRenamed={(name) => {
+                          // The tab follows the table to its new name.
+                          const id = `t:${tdb.key}:${name}`
+                          setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, id, title: name, object: { ...t.object!, name }, structure: true, dirty: false } : x)))
+                          if (activeTab === t.id) setActiveTab(id)
+                          loadObjects(tdb.key)
+                        }} />
                     : <QueryView session={tdb.info} schema={tdb.schema} active={active && t.id === activeTab} initialSql={t.sql ?? ''} completions={tdb.completions}
                         onChange={(sql) => { queryText.current.set(t.id, sql); persistQueries(tabs); if (t.savedId) updateTab(t.id, { modified: sql !== t.savedSql }) }}
                         onSchemaChanged={() => loadObjects(tdb.key)}
-                        onSave={(sql) => saveQueryTab(t.id, sql)} savedName={t.savedId ? t.title : undefined} autoRun={t.autoRun} />}
+                        onSave={(sql) => saveQueryTab(t.id, sql)} savedName={t.savedId ? t.title : undefined} autoRun={t.autoRun}
+                        onDirty={(d) => updateTab(t.id, { dirty: d })} />}
                 </div>
               )
             })}
@@ -909,7 +918,7 @@ function Section({ title, items, db, activeId, selected, onClick, onMenu }: {
         return (
           <button key={o.name} onClick={(e) => onClick(e, db, o)} onContextMenu={(e) => onMenu(e, db, o)} title={o.name}
             aria-selected={selected.has(o.name)} data-testid={`sidebar-${o.name}`} data-item={o.name} data-active={active}
-            className={clsx('flex h-7 w-full select-none items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
+            className={clsx('flex h-7 w-full scroll-my-1 select-none items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
               isSel ? 'bg-selected font-medium text-fg' : active ? 'bg-active font-medium text-accent' : 'text-fg-2 hover:bg-hover')}>
             {o.kind === 'view' ? <Eye className="size-3.5 shrink-0 text-muted" /> : <Table2 className={clsx('size-3.5 shrink-0', active ? 'text-accent' : 'text-muted')} />}
             <span className="truncate">{o.name}</span>

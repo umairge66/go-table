@@ -160,6 +160,13 @@ test('browsing: paging, quick search, filters and sorting', async () => {
   await view.getByRole('columnheader', { name: /balance/ }).click()
   await expect(view.getByRole('gridcell').nth(0)).toHaveText('450')
   await view.getByRole('columnheader', { name: /balance/ }).click() // back to unsorted
+
+  // Rows per page is picked in the footer.
+  await view.getByLabel('Rows per page').selectOption('100')
+  await expect(view.getByText('1–100 of 450 rows')).toBeVisible()
+  await expect(view.getByText('1 / 5')).toBeVisible()
+  await view.getByLabel('Rows per page').selectOption('300')
+  await expect(view.getByText('1–300 of 450 rows')).toBeVisible()
 })
 
 test('editing: inline edit, add, delete, review and commit', async () => {
@@ -216,6 +223,172 @@ test('editing: inline edit, add, delete, review and commit', async () => {
   await expect(cells.nth(3)).toHaveText('1')
 })
 
+test('query results from one table are editable', async () => {
+  // A scratch row to delete, so the table keeps its 450 rows for later tests.
+  await runSQL("INSERT INTO customers (id, name) VALUES (1000, 'Scratch');\nSELECT id, name, city FROM customers WHERE id IN (4, 5, 1000) ORDER BY id")
+  await expect(page.getByTestId('result-editable').last()).toHaveText('Editable · customers')
+  const cells = () => grid().last().getByRole('gridcell')
+  await cells().nth(1).dblclick()
+  await page.keyboard.type(' edited')
+  await page.keyboard.press('Enter')
+  await cells().nth(8).click() // the scratch row
+  await page.keyboard.press('Delete')
+  await expect(page.getByText('2 unsaved changes to customers')).toBeVisible()
+  // Running another query asks first.
+  await page.getByRole('button', { name: 'Run all' }).last().click()
+  await page.getByRole('dialog', { name: 'Unsaved changes in the result' }).getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('button', { name: 'Review & commit' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Review changes' })
+  await expect(dialog).toContainText('UPDATE "customers" SET "name" = \'Customer 4 edited\'')
+  await expect(dialog).toContainText('DELETE FROM "customers" WHERE "id" = \'1000\'')
+  await dialog.getByRole('button', { name: 'Commit' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Saved 2 changes' })).toBeVisible()
+  // The SELECT runs again and shows the rows as stored.
+  await expect(cells()).toHaveCount(6)
+  await expect(cells().nth(1)).toHaveText('Customer 4 edited')
+  await expect(page.getByText('unsaved change')).toHaveCount(0)
+
+  // Results that can't be mapped back to rows stay read-only.
+  for (const sql of ['SELECT COUNT(*) FROM customers', 'SELECT name FROM customers LIMIT 3']) {
+    await page.keyboard.press('Control+w')
+    await runSQL(sql)
+    await expect(page.getByTestId('result-readonly').last()).toBeVisible()
+    await cells().first().dblclick()
+    await expect(page.getByLabel('Edit cell')).toHaveCount(0)
+  }
+  await page.keyboard.press('Control+w')
+})
+
+test('cells get an editor for their type: calendar, time, choices', async () => {
+  await runSQL(`CREATE TABLE events (id INTEGER PRIMARY KEY, day DATE, at DATETIME, starts TIME, done BOOLEAN NOT NULL);
+INSERT INTO events VALUES (1, '2024-03-15', '2024-03-15 10:20:30', '09:00:00', 0);`)
+  await page.keyboard.press('Control+w')
+  await sidebar().getByRole('button', { name: 'events', exact: true }).click()
+  const view = page.getByTestId('data-events')
+  const cells = view.getByRole('gridcell')
+  const picker = page.getByTestId('cell-picker')
+
+  // DATE: a calendar on the value's month; picking a day finishes the edit.
+  await cells.nth(1).dblclick()
+  await expect(picker).toContainText('March 2024')
+  await picker.getByRole('gridcell', { name: '2024-03-20' }).click()
+  await expect(picker).toHaveCount(0)
+  await expect(cells.nth(1)).toHaveText('2024-03-20')
+
+  // DATETIME: calendar plus time fields, then Done.
+  await cells.nth(2).dblclick()
+  await picker.getByRole('gridcell', { name: '2024-03-01' }).click()
+  await picker.getByLabel('Hours').fill('14')
+  await expect(page.getByLabel('Edit cell')).toHaveValue('2024-03-01 14:20:30')
+  await picker.getByRole('button', { name: 'Done' }).click()
+  await expect(cells.nth(2)).toHaveText('2024-03-01 14:20:30')
+
+  // TIME: arrow keys step a field; Enter finishes.
+  await cells.nth(3).dblclick()
+  await picker.getByLabel('Minutes').focus()
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('Enter')
+  await expect(cells.nth(3)).toHaveText('09:01:00')
+
+  // BOOLEAN: a list; not nullable, so no NULL choice.
+  await cells.nth(4).dblclick()
+  await expect(picker.getByRole('option')).toHaveText(['1 (true)', '0 (false)'])
+  await picker.getByRole('option', { name: '1 (true)' }).click()
+  await expect(cells.nth(4)).toHaveText('1')
+
+  // Typing still works, and Escape cancels.
+  await cells.nth(1).dblclick()
+  await page.keyboard.press('Escape')
+  await expect(cells.nth(1)).toHaveText('2024-03-20')
+
+  await page.keyboard.press('Control+s')
+  await page.getByRole('dialog', { name: 'Review changes' }).getByRole('button', { name: 'Commit' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Saved 1 change' })).toBeVisible()
+  await expect(cells.nth(2)).toHaveText('2024-03-01 14:20:30')
+  await page.keyboard.press('Control+w')
+})
+
+test('structure: edit columns, indexes, foreign keys and the table itself', async () => {
+  await runSQL(`CREATE TABLE makers (id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE gadgets (id INTEGER PRIMARY KEY, name TEXT, price REAL, maker_id INTEGER);
+INSERT INTO makers VALUES (1, 'Acme');
+INSERT INTO gadgets VALUES (1, 'Widget', 9.5, 1), (2, 'Gizmo', 3, 1);`)
+  await page.keyboard.press('Control+w')
+  await sidebar().getByRole('button', { name: 'gadgets', exact: true }).click()
+  await page.getByTestId('data-gadgets').getByRole('tab', { name: 'Structure' }).click()
+  const st = page.getByTestId('structure')
+  const review = async () => {
+    await expect(page.getByTestId('alter-review')).toBeVisible()
+    await page.getByRole('button', { name: 'Run', exact: true }).click()
+    await expect(page.getByTestId('alter-review')).toHaveCount(0)
+  }
+
+  // Add a column.
+  await st.getByRole('button', { name: 'Add column' }).click()
+  await page.getByLabel('Column name').fill('sku')
+  await expect(page.getByTestId('alter-sql')).toContainText('ADD COLUMN "sku"')
+  await page.getByRole('button', { name: 'Add column', exact: true }).last().click()
+  await expect(st.getByTestId('column-sku')).toBeVisible()
+
+  // Rename price and make it NOT NULL (SQLite rebuilds the table).
+  await st.getByRole('button', { name: 'Edit price' }).click()
+  await expect(page.getByTestId('alter-sql')).toHaveText('No changes yet.')
+  await page.getByLabel('Column name').fill('cost')
+  await page.getByRole('dialog').getByText('Allow NULL').click()
+  await expect(page.getByTestId('alter-sql')).toContainText('"cost" REAL NOT NULL')
+  await page.getByRole('button', { name: 'Save column' }).click()
+  await expect(st.getByTestId('column-cost')).toContainText('NOT NULL')
+  await expect(st.getByTestId('column-price')).toHaveCount(0)
+
+  // An index from the column menu, renamed, then dropped.
+  await st.getByRole('button', { name: 'More for name' }).click()
+  await page.getByRole('menuitem', { name: 'Index', exact: true }).click()
+  await review()
+  await expect(st.getByTestId('index-gadgets_name_idx')).toBeVisible()
+  await st.getByRole('button', { name: 'Rename gadgets_name_idx' }).click()
+  await page.getByLabel('New index name').fill('by_name')
+  await page.getByRole('button', { name: 'Rename', exact: true }).last().click()
+  await expect(st.getByTestId('index-by_name')).toBeVisible()
+  await st.getByRole('button', { name: 'Drop by_name' }).click()
+  await review()
+  await expect(st.getByTestId('index-by_name')).toHaveCount(0)
+
+  // Several columns at once: a unique index on (name, sku).
+  await st.getByLabel('Select name').check()
+  await st.getByLabel('Select sku').check()
+  await st.getByRole('toolbar', { name: 'Selected columns' }).getByRole('button', { name: 'Unique' }).click()
+  await review()
+  await expect(st.getByTestId('index-gadgets_name_sku_key')).toContainText('UNIQUE')
+
+  // A foreign key to makers.
+  await st.getByRole('button', { name: 'Add foreign key' }).click()
+  await page.getByLabel('Referenced table').selectOption('makers')
+  await page.getByLabel('Column 1', { exact: true }).selectOption('maker_id')
+  await expect(page.getByLabel('Referenced column 1')).toHaveValue('id')
+  await page.getByLabel('On delete').selectOption('CASCADE')
+  await page.getByRole('button', { name: 'Add foreign key', exact: true }).last().click()
+  await expect(st.getByRole('region', { name: 'Foreign keys' })).toContainText('makers(id)')
+  await expect(st.getByRole('region', { name: 'Foreign keys' })).toContainText('CASCADE')
+
+  // Drop a column, rename the table: the tab follows it.
+  await st.getByRole('button', { name: 'Drop sku' }).click()
+  await review()
+  await expect(st.getByTestId('column-sku')).toHaveCount(0)
+  await st.getByLabel('New table name').fill('gizmos')
+  await st.getByRole('button', { name: 'Rename', exact: true }).click()
+  await review()
+  await expect(page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab', { selected: true })).toContainText('gizmos')
+  await expect(sidebar().getByRole('button', { name: 'gizmos', exact: true })).toBeVisible()
+  await expect(page.getByTestId('data-gizmos').getByTestId('column-cost')).toBeVisible()
+
+  await runSQL('SELECT name, cost, maker_id FROM gizmos ORDER BY id')
+  await expect(grid().last().getByRole('gridcell').nth(1)).toHaveText('9.5')
+  await runSQL("SELECT sql FROM sqlite_master WHERE name = 'gizmos'")
+  await expect(grid().last().getByRole('gridcell').first()).toContainText('ON DELETE CASCADE')
+  await page.keyboard.press('Control+w')
+  await page.keyboard.press('Control+w')
+})
+
 test('row inspector, structure and definition', async () => {
   await sidebar().getByRole('button', { name: 'customers', exact: true }).click()
   const view = page.getByTestId('data-customers')
@@ -266,7 +439,7 @@ test('structure: add a column with a live SQL preview', async () => {
   await view.getByRole('tab', { name: 'Structure' }).click()
   await view.getByRole('button', { name: 'Add column' }).click()
   const dialog = page.getByRole('dialog', { name: 'Add column' })
-  const sql = dialog.getByTestId('column-sql')
+  const sql = dialog.getByTestId('alter-sql')
 
   // Existing names are flagged.
   await dialog.getByLabel('Column name').fill('city')
@@ -849,6 +1022,32 @@ test('arrow keys walk through the tables in the sidebar', async () => {
   await expect(sidebar().locator('[data-item][aria-selected="true"]')).toHaveCount(0)
 })
 
+test('arrow keys keep the focused table and cell fully in view', async () => {
+  // Whether el (plus its focus ring) lies inside the visible part of the
+  // scroll area, below the grid's sticky header when there is one.
+  const inView = (el: HTMLElement, scroller: HTMLElement, ring: number, header: number) => {
+    const r = el.getBoundingClientRect()
+    const s = scroller.getBoundingClientRect()
+    return r.top - ring >= s.top + header - 0.5 && r.bottom + ring <= s.top + scroller.clientHeight + 0.5
+  }
+  const nav = sidebar()
+  await nav.locator('[data-item]').first().focus()
+  for (const key of ['End', ...Array(20).fill('ArrowUp'), 'Home', ...Array(20).fill('ArrowDown')]) {
+    await page.keyboard.press(key)
+    expect(await nav.evaluate((n, f) => new Function('return ' + f)()(document.activeElement, n, 2, 0), inView.toString())).toBe(true)
+  }
+  await page.keyboard.press('Escape')
+
+  await nav.getByRole('button', { name: 'customers', exact: true }).click()
+  const grid = page.getByTestId('data-customers').getByTestId('grid')
+  await grid.getByRole('gridcell').first().click()
+  for (const key of [...Array(40).fill('ArrowDown'), ...Array(40).fill('ArrowUp')]) {
+    await page.keyboard.press(key)
+    expect(await grid.evaluate((g, f) => new Function('return ' + f)()(g.querySelector('.outline-accent'), g, 0, 30), inView.toString())).toBe(true)
+  }
+  await page.keyboard.press('Control+w')
+})
+
 test('Ctrl+P / Ctrl+D open on the current item without flashing the first row', async () => {
   // Record what each painted frame highlights (sampled right before paint).
   // Chrome happens to hide the old bug (it never painted the in-between
@@ -1021,6 +1220,36 @@ test('theme toggle and returning to the connection list', async () => {
   // The session stays open: double-click switches back instantly.
   await page.getByRole('option', { name: /shop/ }).dblclick()
   await expect(page.getByTestId('data-customers')).toBeAttached()
+})
+
+test('a connection that takes a while: progress shown, opened only once', async () => {
+  await page.getByRole('button', { name: 'Connections' }).click()
+  await page.keyboard.press('Control+n')
+  await form().getByRole('radio', { name: 'SQLite' }).click()
+  await form().getByPlaceholder('/home/you/data/app.sqlite').fill(join(process.env.GOTABLE_TMP!, 'slow.sqlite'))
+  await form().getByRole('button', { name: 'Save', exact: true }).click()
+  const item = page.getByRole('option', { name: /slow/ })
+  await expect(item).toBeVisible()
+
+  // Opening the session is slow (like an SSH tunnel); clicks meanwhile do nothing.
+  let opens = 0
+  let release!: () => void
+  const held = new Promise<void>((ok) => { release = ok })
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() === 'POST') { opens++; await held }
+    await route.fallback()
+  })
+  await item.dblclick()
+  await expect(item).toHaveAttribute('aria-busy', 'true')
+  await expect(item).toContainText('Connecting…')
+  await expect(form().getByRole('button', { name: 'Connecting…' })).toBeDisabled()
+  await item.dblclick()
+  await item.dblclick()
+  release()
+  await expect(page.getByRole('navigation', { name: 'Tables' }).last()).toBeVisible()
+  expect(opens).toBe(1)
+  await page.unroute('**/api/sessions')
+  await page.getByRole('button', { name: 'Disconnect' }).click()
 })
 
 test('PostgreSQL via a pasted URL (needs GOTABLE_E2E_PG)', async () => {

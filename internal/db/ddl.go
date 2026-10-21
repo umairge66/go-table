@@ -191,6 +191,11 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 		return err
 	}
 	defer c.mu.Unlock()
+	return c.runDDLLocked(ctx, stmts)
+}
+
+// runDDLLocked is runDDL for callers that hold c.mu.
+func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
 	tx, err := c.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err

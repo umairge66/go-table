@@ -2,7 +2,9 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import clsx from 'clsx'
 import { ArrowDown, ArrowUp, ArrowUpRight, KeyRound, Link2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CellKind } from '../lib/cellKind'
 import type { CellStatus } from '../lib/edits'
+import { CellPicker } from './CellPicker'
 import type { Cell, Sort } from '../types'
 
 export interface GridColumn {
@@ -11,6 +13,9 @@ export interface GridColumn {
   pk?: boolean
   /** ref names the referenced table.column of a foreign key column. */
   ref?: string
+  /** edit picks the editor: a calendar, time fields, a list of choices… (text when unset). */
+  edit?: CellKind
+  nullable?: boolean
 }
 
 export interface GridProps {
@@ -116,9 +121,14 @@ export const Grid = memo(function Grid(p: GridProps) {
   }
 
   const ensureVisible = (r: number, c: number) => {
-    virt.scrollToIndex(r, { align: 'auto' })
     const el = scrollRef.current
     if (!el) return
+    // Rows sit below the sticky header (ROW_H), which the virtualizer
+    // doesn't know about: keep the row clear of it and of the bottom edge.
+    const top = r * ROW_H
+    const bottom = top + 2 * ROW_H
+    if (top < el.scrollTop) el.scrollTop = top
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight
     const left = GUTTER + widths.slice(0, c).reduce((a, b) => a + b, 0)
     const right = left + widths[c]
     if (left - GUTTER < el.scrollLeft) el.scrollLeft = left - GUTTER
@@ -243,6 +253,7 @@ export const Grid = memo(function Grid(p: GridProps) {
                 const isSel = sel?.r === r && sel?.c === c
                 if (editing && editing.r === r && editing.c === c) {
                   return <CellEditor key={c} width={widths[c]} initial={editing.value} wasNull={value === null}
+                    spec={columns[c].edit} nullable={columns[c].nullable ?? true}
                     onDone={commitEdit} onCancel={() => { setEditing(null); scrollRef.current?.focus() }} />
                 }
                 return (
@@ -290,11 +301,13 @@ export const Grid = memo(function Grid(p: GridProps) {
   )
 })
 
-function CellEditor({ width, initial, wasNull, onDone, onCancel }: {
-  width: number; initial: string; wasNull: boolean; onDone: (v: Cell) => void; onCancel: () => void
+function CellEditor({ width, initial, wasNull, spec, nullable, onDone, onCancel }: {
+  width: number; initial: string; wasNull: boolean; spec?: CellKind; nullable: boolean; onDone: (v: Cell) => void; onCancel: () => void
 }) {
   const [v, setV] = useState(initial)
   const ref = useRef<HTMLInputElement>(null)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const picker = spec && spec.kind !== 'text' ? spec : null
   // Blur also fires after Enter/Escape unmount the editor; act only once.
   const done = useRef(false)
   const finish = (val: Cell | undefined) => {
@@ -302,6 +315,23 @@ function CellEditor({ width, initial, wasNull, onDone, onCancel }: {
     done.current = true
     if (val === undefined) onCancel()
     else onDone(val)
+  }
+  // Moving the focus into the picker (its time fields) keeps editing.
+  const focusOut = (to: EventTarget | null) => {
+    if (to instanceof Node && (to === ref.current || pickerRef.current?.contains(to))) return
+    finish(v)
+  }
+  // Choices: the typed text filters them (unless it is one of them); arrows move the highlight.
+  const options = picker?.kind === 'choice' ? picker.options : []
+  const exact = options.findIndex((o) => o.value === v)
+  const choices = exact >= 0 ? options : options.filter((o) => o.label.toLowerCase().includes(v.toLowerCase()))
+  const [hi, setHi] = useState(Math.max(0, exact))
+  useEffect(() => { setHi(Math.max(0, choices.findIndex((o) => o.value === v))) }, [v]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(picker?.kind === 'choice' && choices[hi] ? choices[hi].value : v) }
+    if (e.key === 'Escape') { e.preventDefault(); finish(undefined) }
+    // Ctrl+Shift+N stores NULL.
+    if (e.key.toLowerCase() === 'n' && e.ctrlKey && e.shiftKey) { e.preventDefault(); finish(null) }
   }
   // Caret at the end: double-click/Enter continue the value, typing a
   // character starts with just that character.
@@ -319,16 +349,22 @@ function CellEditor({ width, initial, wasNull, onDone, onCancel }: {
         value={v}
         placeholder={wasNull ? 'NULL' : ''}
         onChange={(e) => setV(e.target.value)}
-        onBlur={() => finish(v)}
+        onBlur={(e) => focusOut(e.relatedTarget)}
         onKeyDown={(e) => {
           e.stopPropagation()
-          if (e.key === 'Enter') { e.preventDefault(); finish(v) }
-          if (e.key === 'Escape') { e.preventDefault(); finish(undefined) }
-          // Ctrl+Shift+N stores NULL.
-          if (e.key.toLowerCase() === 'n' && e.ctrlKey && e.shiftKey) { e.preventDefault(); finish(null) }
+          if (picker?.kind === 'choice' && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && choices.length) {
+            e.preventDefault()
+            setHi((h) => (h + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length)
+            return
+          }
+          onKey(e)
         }}
         className="h-[30px] w-full border-2 border-accent bg-panel px-2 font-mono text-[12.5px] shadow-pop outline-none"
       />
+      {picker && (
+        <CellPicker spec={picker} anchor={ref} pickerRef={pickerRef} value={v} nullable={nullable} choices={choices} highlight={hi}
+          onChange={setV} onCommit={finish} onKeyDown={onKey} onFocusOut={focusOut} />
+      )}
     </div>
   )
 }

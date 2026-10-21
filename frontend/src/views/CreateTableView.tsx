@@ -6,7 +6,7 @@ import { Button, IconButton, Select, Switch, errorParts, useToast } from '../com
 import { TypeSelect } from '../components/TypeSelect'
 import { category, findType, groupOf, has, paramProblem, typeString, type TypeSpec } from '../lib/sqlTypes'
 import type { Driver, SessionInfo } from '../types'
-import { EXPRESSIONS } from './AddColumnDialog'
+import { EXPRESSIONS } from './ColumnDialog'
 
 type IndexKind = '' | 'primary' | 'unique' | 'index' | 'fulltext'
 
