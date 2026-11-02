@@ -198,6 +198,65 @@ export const Grid = memo(function Grid(p: GridProps) {
 
   const sortOf = (name: string) => p.sort?.find((s) => s.column === name)?.dir
 
+  // Columns are virtualised too: only those in (or near) the viewport are
+  // drawn. lefts[c] is where column c starts, after the row-number gutter.
+  const lefts = useMemo(() => {
+    const out = new Array<number>(widths.length + 1)
+    out[0] = 0
+    for (let i = 0; i < widths.length; i++) out[i + 1] = out[i] + widths[i]
+    return out
+  }, [widths])
+  const [view, setView] = useState({ left: 0, width: 1600 })
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let frame = 0
+    const update = () => {
+      frame = 0
+      setView((v) => (v.left === el.scrollLeft && v.width === el.clientWidth ? v : { left: el.scrollLeft, width: el.clientWidth }))
+    }
+    const later = () => { if (!frame) frame = requestAnimationFrame(update) }
+    update()
+    el.addEventListener('scroll', later, { passive: true })
+    const ro = new ResizeObserver(later)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', later); ro.disconnect(); cancelAnimationFrame(frame) }
+  }, [])
+  // The visible range, with a few columns either side so Tab and quick
+  // horizontal scrolls don't show gaps; it only changes as columns enter.
+  const [first, last] = useMemo(() => {
+    const from = Math.max(0, view.left - 300)
+    const to = view.left + view.width + 300
+    let a = 0
+    while (a < widths.length - 1 && lefts[a + 1] <= from) a++
+    let b = a
+    while (b < widths.length - 1 && lefts[b + 1] < to) b++
+    // Keep the edited column drawn even if it scrolls out of view.
+    if (editing) { a = Math.min(a, editing.c); b = Math.max(b, editing.c) }
+    return [a, b]
+  }, [view, lefts, widths.length, editing])
+
+  // Rows call back through a ref, so their props stay equal between renders
+  // and React skips the rows that didn't change.
+  const handlers = useRef<RowHandlers>(null!)
+  handlers.current = {
+    mouseDown: (e, r, c) => { if (e.button === 0) select(r, c, e.shiftKey ? 'range' : e.metaKey || e.ctrlKey ? 'toggle' : 'set') },
+    gutterDown: (e, r) => select(r, sel?.c ?? 0, e.shiftKey ? 'range' : e.metaKey || e.ctrlKey ? 'toggle' : 'set'),
+    doubleClick: (r, c) => startEdit(r, c),
+    contextMenu: (e, r, c) => {
+      if (!rows.has(r)) select(r, c)
+      p.onContextMenu?.(e, r, c, rows.has(r) ? [...rows] : [r])
+    },
+    follow: (r, c) => p.onFollow?.(r, c),
+  }
+  const editor = editing && (
+    <CellEditor key={editing.c} width={widths[editing.c]} initial={editing.value} wasNull={cell(editing.r, editing.c).value === null}
+      spec={columns[editing.c].edit} nullable={columns[editing.c].nullable ?? true}
+      onDone={commitEdit} onCancel={() => { setEditing(null); scrollRef.current?.focus() }} />
+  )
+  const pad = lefts[first]
+  const cols = columns.slice(first, last + 1)
+
   return (
     <div
       ref={scrollRef}
@@ -210,93 +269,123 @@ export const Grid = memo(function Grid(p: GridProps) {
         {/* header */}
         <div className="sticky top-0 z-20 flex h-[30px] border-b border-line bg-panel-2 font-sans text-[12px] font-semibold text-fg-2" style={{ width: total }}>
           <div className="sticky left-0 z-10 shrink-0 border-r border-line bg-panel-2" style={{ width: GUTTER }} />
-          {columns.map((col, c) => (
-            <div
-              key={col.name + c}
-              role="columnheader"
-              title={(col.type ? `${col.name} · ${col.type}` : col.name) + (col.ref ? `\nReferences ${col.ref}` : '')}
-              onClick={() => p.onSort?.(col.name)}
-              className={clsx('group relative flex shrink-0 items-center gap-1 border-r border-line-2 px-2.5', p.onSort && 'cursor-pointer hover:bg-hover')}
-              style={{ width: widths[c] }}
-            >
-              {col.pk && <KeyRound className="size-3 shrink-0 text-warn" />}
-              {col.ref && !col.pk && <Link2 className="size-3 shrink-0 text-accent" aria-label="foreign key" />}
-              <span className="truncate">{col.name}</span>
-              {col.type && <span className="truncate font-normal text-faint text-[11px]">{shortType(col.type)}</span>}
-              <span className="ml-auto shrink-0 text-accent">
-                {sortOf(col.name) === 'asc' && <ArrowUp className="size-3.5" />}
-                {sortOf(col.name) === 'desc' && <ArrowDown className="size-3.5" />}
-              </span>
-              <div onMouseDown={resize(c)} onClick={(e) => e.stopPropagation()} className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-accent/40" />
-            </div>
-          ))}
+          {pad > 0 && <div className="shrink-0" style={{ width: pad }} />}
+          {cols.map((col, i) => {
+            const c = first + i
+            return (
+              <div
+                key={col.name + c}
+                role="columnheader"
+                title={(col.type ? `${col.name} · ${col.type}` : col.name) + (col.ref ? `\nReferences ${col.ref}` : '')}
+                onClick={() => p.onSort?.(col.name)}
+                className={clsx('group relative flex shrink-0 items-center gap-1 border-r border-line-2 px-2.5', p.onSort && 'cursor-pointer hover:bg-hover')}
+                style={{ width: widths[c] }}
+              >
+                {col.pk && <KeyRound className="size-3 shrink-0 text-warn" />}
+                {col.ref && !col.pk && <Link2 className="size-3 shrink-0 text-accent" aria-label="foreign key" />}
+                <span className="truncate">{col.name}</span>
+                {col.type && <span className="truncate font-normal text-faint text-[11px]">{shortType(col.type)}</span>}
+                <span className="ml-auto shrink-0 text-accent">
+                  {sortOf(col.name) === 'asc' && <ArrowUp className="size-3.5" />}
+                  {sortOf(col.name) === 'desc' && <ArrowDown className="size-3.5" />}
+                </span>
+                <div onMouseDown={resize(c)} onClick={(e) => e.stopPropagation()} className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-accent/40" />
+              </div>
+            )
+          })}
         </div>
         {/* rows */}
         {virt.getVirtualItems().map((vr) => {
           const r = vr.index
-          const rowSel = rows.has(r)
           return (
-            <div
-              key={r}
-              data-row={r}
-              className={clsx('absolute left-0 flex border-b border-line-2', r % 2 === 1 && 'bg-zebra')}
-              style={{ top: vr.start + ROW_H, height: ROW_H, width: total }}
-            >
-              <div className={clsx('sticky left-0 z-10 flex shrink-0 items-center justify-end border-r border-line pr-2 font-sans text-[11px] text-faint',
-                rowSel ? 'bg-selected text-accent' : 'bg-panel-2')} style={{ width: GUTTER }}
-                onMouseDown={(e) => select(r, sel?.c ?? 0, e.shiftKey ? 'range' : e.metaKey || e.ctrlKey ? 'toggle' : 'set')}
-              >
-                {(p.rowOffset ?? 0) + r + 1}
-              </div>
-              {columns.map((_, c) => {
-                const { value, status } = cell(r, c)
-                const isSel = sel?.r === r && sel?.c === c
-                if (editing && editing.r === r && editing.c === c) {
-                  return <CellEditor key={c} width={widths[c]} initial={editing.value} wasNull={value === null}
-                    spec={columns[c].edit} nullable={columns[c].nullable ?? true}
-                    onDone={commitEdit} onCancel={() => { setEditing(null); scrollRef.current?.focus() }} />
-                }
-                return (
-                  <div
-                    key={c}
-                    role="gridcell"
-                    data-col={c}
-                    onMouseDown={(e) => { if (e.button === 0) select(r, c, e.shiftKey ? 'range' : e.metaKey || e.ctrlKey ? 'toggle' : 'set') }}
-                    onDoubleClick={() => startEdit(r, c)}
-                    onContextMenu={(e) => {
-                      if (!rows.has(r)) select(r, c)
-                      p.onContextMenu?.(e, r, c, rows.has(r) ? [...rows] : [r])
-                    }}
-                    className={clsx('group/cell relative flex shrink-0 items-center overflow-hidden border-r border-line-2 px-2.5',
-                      status === 'edited' && 'bg-edited', status === 'inserted' && 'bg-inserted',
-                      status === 'deleted' && 'bg-deleted text-faint line-through',
-                      rowSel && status === 'clean' && 'bg-selected/60',
-                      isSel && 'z-[5] outline-2 -outline-offset-2 outline-accent')}
-                    style={{ width: widths[c] }}
-                  >
-                    {value === null
-                      ? <span className="rounded bg-hover px-1 font-sans text-[10.5px] font-medium uppercase tracking-wide text-faint">null</span>
-                      : <span className={clsx('truncate', numeric[c] && 'ml-auto tabular-nums')}>{display(value)}</span>}
-                    {columns[c].ref && value !== null && p.onFollow && status !== 'deleted' && (
-                      <button
-                        aria-label={columns[c].ref!.includes('(') ? `Open ${columns[c].ref}` : `Open ${columns[c].ref} = ${value}`}
-                        title={columns[c].ref!.includes('(') ? `Open ${columns[c].ref}` : `Open ${columns[c].ref} = ${value}`}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onDoubleClick={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); p.onFollow?.(r, c) }}
-                        className={clsx('ml-1 flex size-[18px] shrink-0 items-center justify-center rounded bg-accent/10 font-sans text-accent hover:bg-accent hover:text-accent-fg',
-                          isSel ? 'flex' : 'hidden group-hover/cell:flex')}
-                      >
-                        <ArrowUpRight className="size-3" />
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+            <GridRow key={r} r={r} top={vr.start + ROW_H} total={total} label={(p.rowOffset ?? 0) + r + 1}
+              columns={columns} widths={widths} first={first} last={last} pad={pad} numeric={numeric} cell={cell}
+              rowSel={rows.has(r)} selCol={sel?.r === r ? sel.c : -1}
+              editor={editing?.r === r ? editor : null} editCol={editing?.r === r ? editing.c : -1}
+              canFollow={!!p.onFollow} handlers={handlers} />
           )
         })}
       </div>
+    </div>
+  )
+})
+
+interface RowHandlers {
+  mouseDown: (e: React.MouseEvent, r: number, c: number) => void
+  gutterDown: (e: React.MouseEvent, r: number) => void
+  doubleClick: (r: number, c: number) => void
+  contextMenu: (e: React.MouseEvent, r: number, c: number) => void
+  follow: (r: number, c: number) => void
+}
+
+/**
+ * GridRow draws one row's visible cells. It is memoised: scrolling and
+ * moving the selection only re-render the rows whose props change.
+ */
+const GridRow = memo(function GridRow({ r, top, total, label, columns, widths, first, last, pad, numeric, cell, rowSel, selCol, editor, editCol, canFollow, handlers }: {
+  r: number; top: number; total: number; label: number
+  columns: GridColumn[]; widths: number[]; first: number; last: number; pad: number; numeric: boolean[]
+  cell: GridProps['cell']; rowSel: boolean; selCol: number; editor: React.ReactNode; editCol: number; canFollow: boolean
+  handlers: React.RefObject<RowHandlers>
+}) {
+  const h = () => handlers.current!
+  const cells = []
+  for (let c = first; c <= last; c++) {
+    if (c === editCol) {
+      cells.push(editor)
+      continue
+    }
+    const { value, status } = cell(r, c)
+    const isSel = selCol === c
+    const ref = columns[c].ref
+    cells.push(
+      <div
+        key={c}
+        role="gridcell"
+        data-col={c}
+        onMouseDown={(e) => h().mouseDown(e, r, c)}
+        onDoubleClick={() => h().doubleClick(r, c)}
+        onContextMenu={(e) => h().contextMenu(e, r, c)}
+        className={clsx('group/cell relative flex shrink-0 items-center overflow-hidden border-r border-line-2 px-2.5',
+          status === 'edited' && 'bg-edited', status === 'inserted' && 'bg-inserted',
+          status === 'deleted' && 'bg-deleted text-faint line-through',
+          rowSel && status === 'clean' && 'bg-selected/60',
+          isSel && 'z-[5] outline-2 -outline-offset-2 outline-accent')}
+        style={{ width: widths[c] }}
+      >
+        {value === null
+          ? <span className="rounded bg-hover px-1 font-sans text-[10.5px] font-medium uppercase tracking-wide text-faint">null</span>
+          : <span className={clsx('truncate', numeric[c] && 'ml-auto tabular-nums')}>{display(value)}</span>}
+        {ref && value !== null && canFollow && status !== 'deleted' && (
+          <button
+            aria-label={ref.includes('(') ? `Open ${ref}` : `Open ${ref} = ${value}`}
+            title={ref.includes('(') ? `Open ${ref}` : `Open ${ref} = ${value}`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); h().follow(r, c) }}
+            className={clsx('ml-1 flex size-[18px] shrink-0 items-center justify-center rounded bg-accent/10 font-sans text-accent hover:bg-accent hover:text-accent-fg',
+              isSel ? 'flex' : 'hidden group-hover/cell:flex')}
+          >
+            <ArrowUpRight className="size-3" />
+          </button>
+        )}
+      </div>,
+    )
+  }
+  return (
+    <div
+      data-row={r}
+      className={clsx('absolute left-0 flex border-b border-line-2', r % 2 === 1 && 'bg-zebra')}
+      style={{ top, height: ROW_H, width: total }}
+    >
+      <div className={clsx('sticky left-0 z-10 flex shrink-0 items-center justify-end border-r border-line pr-2 font-sans text-[11px] text-faint',
+        rowSel ? 'bg-selected text-accent' : 'bg-panel-2')} style={{ width: GUTTER }}
+        onMouseDown={(e) => h().gutterDown(e, r)}
+      >
+        {label}
+      </div>
+      {pad > 0 && <div className="shrink-0" style={{ width: pad }} />}
+      {cells}
     </div>
   )
 })
