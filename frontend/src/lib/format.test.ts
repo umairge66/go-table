@@ -42,3 +42,14 @@ test('compatible servers format like the engine they follow', () => {
   expect(formatSQL('select $1::int', 'cockroachdb')).toBe('SELECT\n  $1::INT')
   expect(formatSQL('select $1::int', 'yugabytedb')).toBe('SELECT\n  $1::INT')
 })
+
+test('shortcut hints read the Mac way on a Mac', async () => {
+  const { keys, macKeys } = await import('./platform')
+  expect(keys('Ctrl+Shift+I', false)).toBe('Ctrl+Shift+I')
+  expect(macKeys('Ctrl+Shift+I')).toBe('⌘⇧I')
+  expect(macKeys('Ctrl S')).toBe('⌘S')
+  expect(macKeys('Ctrl ↵')).toBe('⌘↵')
+  expect(macKeys('Row inspector (Ctrl+Shift+I)')).toBe('Row inspector (⌘⇧I)')
+  expect(macKeys('Ctrl+Tab')).toBe('⌃Tab')
+  expect(macKeys('Alt+Up')).toBe('⌥Up')
+})

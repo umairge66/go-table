@@ -3,6 +3,7 @@ import { ChevronDown, Database, Loader2, RefreshCw, X } from 'lucide-react'
 import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { DRIVER_LOGOS } from '../lib/driverLogos'
+import { keys } from '../lib/platform'
 import { driverInfo, tagInfo, type Driver, type Tag } from '../types'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'subtle'
@@ -38,8 +39,8 @@ export function IconButton({ label, className, active, ...rest }: ButtonHTMLAttr
   return (
     <button
       type="button" // never submits a surrounding form
-      aria-label={label}
-      title={label}
+      aria-label={keys(label)}
+      title={keys(label)}
       className={clsx('inline-flex size-7 items-center justify-center rounded-md text-muted transition-colors enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-40',
         active && 'bg-active text-accent', className)}
       {...rest}
@@ -143,7 +144,7 @@ export function Switch({ checked, onChange, label, id }: { checked: boolean; onC
 }
 
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
-  return <kbd className={clsx('rounded border border-line bg-panel-2 px-1 font-sans text-[10.5px] font-medium text-muted', className)}>{children}</kbd>
+  return <kbd className={clsx('rounded border border-line bg-panel-2 px-1 font-sans text-[10.5px] font-medium text-muted', className)}>{typeof children === 'string' ? keys(children) : children}</kbd>
 }
 
 export function Spinner({ className }: { className?: string }) {
@@ -279,7 +280,7 @@ export function Menu({ x, y, items, onClose }: { x: number; y: number; items: Me
           >
             <span className="flex w-4 justify-center [&>svg]:size-3.5">{it.icon}</span>
             <span className="flex-1">{it.label}</span>
-            {it.kbd && <span className="text-[11px] opacity-60">{it.kbd}</span>}
+            {it.kbd && <span className="text-[11px] opacity-60">{keys(it.kbd)}</span>}
           </button>
         ),
       )}

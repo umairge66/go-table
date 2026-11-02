@@ -160,8 +160,13 @@ Download the file for your system from the [latest release](https://github.com/u
 | Fedora 36+ | `gotable-<version>-1.x86_64.rpm` | `sudo dnf install ./gotable-*.x86_64.rpm` |
 | Any Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it — self-contained (WebKitGTK included) |
 | Windows 10 / 11 | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | run it |
+| macOS 11+ (Apple silicon and Intel) | `GoTable-<version>-macos-universal.dmg` (or the `.zip`) | open it and drag GoTable to Applications |
 
 The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.
+
+The Mac app isn't signed with an Apple Developer ID, so macOS blocks it the
+first time: open it, then choose **Open Anyway** in System Settings → Privacy
+& Security (or run `xattr -dr com.apple.quarantine /Applications/GoTable.app`).
 `gotable -version` prints the installed version.
 
 ## Supported platforms
@@ -170,7 +175,8 @@ The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.
 |---|---|---|
 | **Linux**, Wayland session — GNOME, KDE Plasma, Sway, Hyprland… on Fedora, Ubuntu 22.04+, Debian 12+, Arch, … | native (WebKitGTK 4.1), GoTable's own title bar | tested on Fedora 44 / KDE Plasma; other distros and desktops use the same libraries and are expected to work |
 | **Windows** 10 / 11 | native (WebView2, built into Windows), system title bar | builds and passes the checks; not yet tried on real Windows |
-| **macOS**, or Linux on **X11** | open GoTable in a browser (`-no-window`) or the Chrome app window (`make build-browser`) | the native window isn't supported yet |
+| **macOS** 11+, Apple silicon and Intel | native (WKWebView), system title bar and menu bar | built by CI; not yet tried on a real Mac |
+| Linux on **X11** | open GoTable in a browser (`-no-window`) or the Chrome app window (`make build-browser`) | the native window needs Wayland |
 
 On Linux the native window needs a Wayland session (the default on current
 GNOME and KDE). In an X11 session GoTable says so and exits; use
@@ -213,6 +219,17 @@ It is built without cgo, so it can't open DuckDB files; every other
 database works.
 On Windows GoTable keeps the system title bar; shortcuts, the native
 Save/Open dialogs and saved passwords (Credential Manager) work as on Linux.
+
+### macOS
+
+With Xcode's command line tools (`xcode-select --install`), Go and Node:
+
+```sh
+make package-macos   # dist/GoTable-…-macos-universal.dmg and .zip (Apple silicon + Intel)
+```
+
+`scripts/package.sh macos` builds each architecture with cgo (WKWebView,
+DuckDB), joins them with `lipo`, makes `GoTable.app` and signs it ad hoc.
 
 ### Any system, in a browser
 
@@ -265,7 +282,8 @@ GitHub Actions (`.github/workflows/`):
   PostgreSQL scenario (`scripts/e2e-demo.sql`) and one per SQL Server,
   ClickHouse and DuckDB. Each job keeps its own Go build cache.
 - **Build** — on every push to `main`: the `.deb`, `.rpm`, AppImage,
-  `.tar.gz` and Windows `.zip`, downloadable from the run's artifacts. A
+  `.tar.gz`, Windows `.zip` and the macOS `.dmg` (built on a Mac runner),
+  downloadable from the run's artifacts. A
   newer push cancels the older build.
 
 Changes to Markdown files or the licence alone run neither.

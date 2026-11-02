@@ -3,6 +3,7 @@
 #
 #   scripts/package.sh linux   [VERSION]   .tar.gz, .deb, .rpm and .AppImage
 #   scripts/package.sh windows [VERSION]   gotable.exe, and a .zip with it
+#   scripts/package.sh macos   [VERSION]   GoTable.app (Apple silicon and Intel) in a .dmg and a .zip
 #
 # VERSION is a tag such as v1.2.0; without one, a dev version is used.
 # Linux needs gcc and WebKitGTK 4.1 headers (see README). nfpm, go-winres,
@@ -10,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-target=${1:?usage: scripts/package.sh linux|windows [VERSION]}
+target=${1:?usage: scripts/package.sh linux|windows|macos [VERSION]}
 version=${2:-}
 if [[ $version =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
 	pkgver=${version#v}
@@ -112,8 +113,70 @@ windows)
 	# The bare .exe too, for people who just want to run it.
 	cp build/windows/gotable.exe "dist/gotable-$pkgver-windows-amd64.exe"
 	;;
+macos)
+	# Runs on a Mac (Xcode command line tools). One app for both Apple
+	# silicon and Intel: each architecture is built with cgo (WKWebView,
+	# DuckDB), then joined with lipo.
+	export MACOSX_DEPLOYMENT_TARGET=11.0
+	export CGO_ENABLED=1
+	export CGO_CFLAGS="-mmacosx-version-min=11.0"
+	# The file dialogs use UniformTypeIdentifiers (what `wails build` adds).
+	export CGO_LDFLAGS="-framework UniformTypeIdentifiers -mmacosx-version-min=11.0"
+	mkdir -p build/macos
+	for arch in arm64 amd64; do
+		cc="clang -arch arm64"
+		if [[ $arch == amd64 ]]; then cc="clang -arch x86_64"; fi
+		CC="$cc" GOOS=darwin GOARCH=$arch go build -trimpath -tags desktop,production \
+			-ldflags "$ldflags" -o "build/macos/gotable-$arch" ./cmd/gotable
+	done
+	app=build/macos/GoTable.app
+	rm -rf "$app" && mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+	lipo -create -output "$app/Contents/MacOS/gotable" build/macos/gotable-arm64 build/macos/gotable-amd64
+
+	# The icon, in every size macOS asks for.
+	iconset=build/macos/gotable.iconset
+	rm -rf "$iconset" && mkdir -p "$iconset"
+	for size in 16 32 128 256 512; do
+		sips -z $size $size packaging/gotable.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+		if [[ $size -le 256 ]]; then
+			sips -z $((size * 2)) $((size * 2)) packaging/gotable.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+		fi
+	done
+	iconutil -c icns "$iconset" -o "$app/Contents/Resources/gotable.icns"
+
+	cat >"$app/Contents/Info.plist" <<-EOF
+		<?xml version="1.0" encoding="UTF-8"?>
+		<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+		<plist version="1.0">
+		<dict>
+			<key>CFBundleName</key><string>GoTable</string>
+			<key>CFBundleDisplayName</key><string>GoTable</string>
+			<key>CFBundleIdentifier</key><string>io.github.umairge66.gotable</string>
+			<key>CFBundleVersion</key><string>$pkgver</string>
+			<key>CFBundleShortVersionString</key><string>$pkgver</string>
+			<key>CFBundleExecutable</key><string>gotable</string>
+			<key>CFBundleIconFile</key><string>gotable</string>
+			<key>CFBundlePackageType</key><string>APPL</string>
+			<key>LSMinimumSystemVersion</key><string>11.0</string>
+			<key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+			<key>NSHighResolutionCapable</key><true/>
+			<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+		</dict>
+		</plist>
+	EOF
+	# No Apple Developer ID here: sign ad hoc, which Apple silicon needs to
+	# run the app at all. (Downloaded copies still need "Open Anyway" once.)
+	codesign --force --deep --sign - "$app"
+
+	ditto -c -k --keepParent "$app" "dist/GoTable-$pkgver-macos-universal.zip"
+	dmg=build/macos/dmg
+	rm -rf "$dmg" && mkdir -p "$dmg"
+	cp -R "$app" "$dmg/"
+	ln -s /Applications "$dmg/Applications"
+	hdiutil create -volname GoTable -srcfolder "$dmg" -format UDZO -ov "dist/GoTable-$pkgver-macos-universal.dmg" >/dev/null
+	;;
 *)
-	echo "unknown target $target (linux or windows)" >&2
+	echo "unknown target $target (linux, windows or macos)" >&2
 	exit 1
 	;;
 esac

@@ -3,6 +3,7 @@ import { Check, Search } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Kbd, Spinner } from './ui'
+import { keys } from '../lib/platform'
 
 export interface Command {
   id: string
@@ -94,7 +95,7 @@ export function CommandPalette({ commands, onClose, title, placeholder = 'Type a
                 <span className="flex w-4 justify-center [&>svg]:size-4">{c.icon}</span>
                 <span className={clsx('flex-1 truncate', c.active && 'font-semibold')}>{c.label}</span>
                 {c.active && <Check className={clsx('size-4', idx === i ? '' : 'text-accent')} aria-label="current" />}
-                {c.hint && <span className={clsx('text-[11.5px]', idx === i ? 'opacity-80' : 'text-faint')}>{c.hint}</span>}
+                {c.hint && <span className={clsx('text-[11.5px]', idx === i ? 'opacity-80' : 'text-faint')}>{keys(c.hint)}</span>}
               </button>
             </div>
           ))}

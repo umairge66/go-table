@@ -24,12 +24,20 @@ jobs:
   package:
     name: Package (${{ matrix.target }})
     # Ubuntu 22.04's older system libraries let one Linux binary run on
-    # Ubuntu 22.04+, Debian 12+ and Fedora 36+.
-    runs-on: ubuntu-22.04
+    # Ubuntu 22.04+, Debian 12+ and Fedora 36+. The Mac app is built on a
+    # Mac (WKWebView and cgo need Apple's SDK).
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        target: [linux, windows]
+        include:
+          - target: linux
+            os: ubuntu-22.04
+          - target: windows
+            os: ubuntu-22.04
+          - target: macos
+            os: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -40,6 +48,7 @@ jobs:
         with:
           path: |
             ~/.cache/go-build
+            ~/Library/Caches/go-build
             ~/go/pkg/mod
           key: go-package-${{ matrix.target }}-${{ hashFiles('go.sum') }}
           restore-keys: go-package-${{ matrix.target }}-

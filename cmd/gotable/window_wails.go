@@ -88,6 +88,9 @@ func runWindow(ctx context.Context, url string, srv *server.Server) error {
 		// WebView2: no Ctrl+wheel / Ctrl+plus zoom (browser shortcuts are
 		// already off in Wails), title bar follows the system theme.
 		Windows: &windows.Options{IsZoomControlEnabled: false, Theme: windows.SystemDefault},
+		// macOS: the menu bar (with Edit, for ⌘C/⌘V) and window options; nil elsewhere.
+		Menu: appMenu(),
+		Mac:  macOptions(),
 		Linux: &linux.Options{
 			Icon:             appIcon,
 			ProgramName:      "gotable",

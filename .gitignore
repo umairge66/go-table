@@ -26,3 +26,4 @@
 /build/
 /dist/
 *.syso
+/gotable

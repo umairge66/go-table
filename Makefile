@@ -7,7 +7,7 @@
 #   make build-browser  CGO-free binary that shows the UI in a Chrome/Chromium
 #                       app window instead.
 
-.PHONY: build build-browser build-windows package-linux package-windows web test e2e dev clean
+.PHONY: build build-browser build-windows package-linux package-windows package-macos web test e2e dev clean
 
 WAILS_TAGS = desktop,production,webkit2_41
 
@@ -23,6 +23,10 @@ package-linux: web
 
 package-windows: web
 	scripts/package.sh windows $(VERSION)
+
+# On a Mac: GoTable.app for Apple silicon and Intel, as .dmg and .zip.
+package-macos: web
+	scripts/package.sh macos $(VERSION)
 
 # Windows (WebView2, built into Windows 10/11); cross-compiles from Linux too.
 build-windows: web
