@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, ArrowUpRight, KeyRound, Link2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CellKind } from '../lib/cellKind'
 import type { CellStatus } from '../lib/edits'
-import { CellPicker } from './CellPicker'
+import { CellPicker, useChoices } from './CellPicker'
 import type { Cell, Sort } from '../types'
 
 export interface GridColumn {
@@ -322,13 +322,9 @@ function CellEditor({ width, initial, wasNull, spec, nullable, onDone, onCancel 
     finish(v)
   }
   // Choices: the typed text filters them (unless it is one of them); arrows move the highlight.
-  const options = picker?.kind === 'choice' ? picker.options : []
-  const exact = options.findIndex((o) => o.value === v)
-  const choices = exact >= 0 ? options : options.filter((o) => o.label.toLowerCase().includes(v.toLowerCase()))
-  const [hi, setHi] = useState(Math.max(0, exact))
-  useEffect(() => { setHi(Math.max(0, choices.findIndex((o) => o.value === v))) }, [v]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { choices, hi, arrow, picked } = useChoices(picker, v)
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') { e.preventDefault(); finish(picker?.kind === 'choice' && choices[hi] ? choices[hi].value : v) }
+    if (e.key === 'Enter') { e.preventDefault(); finish(picked) }
     if (e.key === 'Escape') { e.preventDefault(); finish(undefined) }
     // Ctrl+Shift+N stores NULL.
     if (e.key.toLowerCase() === 'n' && e.ctrlKey && e.shiftKey) { e.preventDefault(); finish(null) }
@@ -352,12 +348,7 @@ function CellEditor({ width, initial, wasNull, spec, nullable, onDone, onCancel 
         onBlur={(e) => focusOut(e.relatedTarget)}
         onKeyDown={(e) => {
           e.stopPropagation()
-          if (picker?.kind === 'choice' && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && choices.length) {
-            e.preventDefault()
-            setHi((h) => (h + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length)
-            return
-          }
-          onKey(e)
+          if (!arrow(e)) onKey(e)
         }}
         className="h-[30px] w-full border-2 border-accent bg-panel px-2 font-mono text-[12.5px] shadow-pop outline-none"
       />

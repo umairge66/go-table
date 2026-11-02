@@ -389,6 +389,55 @@ INSERT INTO gadgets VALUES (1, 'Widget', 9.5, 1), (2, 'Gizmo', 3, 1);`)
   await page.keyboard.press('Control+w')
 })
 
+test('the row inspector edits fields with the same editors as the grid', async () => {
+  await runSQL(`CREATE TABLE visits (id INTEGER PRIMARY KEY, day DATE, at DATETIME, paid BOOLEAN NOT NULL, customer_id INT REFERENCES customers(id));
+INSERT INTO visits VALUES (1, '2024-03-15', '2024-03-15 10:20:30', 0, 10);`)
+  await page.keyboard.press('Control+w')
+  await sidebar().getByRole('button', { name: 'visits', exact: true }).click()
+  const view = page.getByTestId('data-visits')
+  const cells = view.getByRole('gridcell')
+  await cells.first().click()
+  const inspector = view.getByLabel('Row inspector')
+  const picker = page.getByTestId('cell-picker')
+
+  // DATE: focusing the field opens the calendar; picking a day stores it.
+  await inspector.getByLabel('day', { exact: true }).click()
+  await expect(picker).toContainText('March 2024')
+  await picker.getByRole('gridcell', { name: '2024-03-20' }).click()
+  await expect(picker).toHaveCount(0)
+  await expect(cells.nth(1)).toHaveText('2024-03-20')
+
+  // DATETIME: calendar and time fields, then Done.
+  await inspector.getByLabel('at', { exact: true }).click()
+  await picker.getByRole('gridcell', { name: '2024-03-01' }).click()
+  await picker.getByLabel('Hours').fill('14')
+  await picker.getByRole('button', { name: 'Done' }).click()
+  await expect(cells.nth(2)).toHaveText('2024-03-01 14:20:30')
+
+  // BOOLEAN (like ENUM): a list of choices; Escape leaves the value alone.
+  await inspector.getByLabel('paid', { exact: true }).click()
+  await expect(picker.getByRole('option')).toHaveText(['1 (true)', '0 (false)'])
+  await page.keyboard.press('Escape')
+  await expect(picker).toHaveCount(0)
+  await inspector.getByLabel('paid', { exact: true }).click()
+  await picker.getByRole('option', { name: '1 (true)' }).click()
+  await expect(cells.nth(3)).toHaveText('1')
+
+  // Foreign key: the chooser lists the referenced rows.
+  await inspector.getByRole('button', { name: 'Choose customer_id' }).click()
+  const pick = page.getByRole('dialog', { name: 'Choose customers.id' })
+  await pick.getByLabel('Search referenced rows').fill('Customer 33')
+  await expect(pick.getByRole('option').first()).toContainText('Customer 33')
+  await page.keyboard.press('Enter')
+  await expect(pick).toHaveCount(0)
+  await expect(cells.nth(4)).toHaveText('33')
+  await expect(inspector.getByLabel('customer_id', { exact: true })).toHaveValue('33')
+
+  await view.getByRole('button', { name: 'Discard' }).click()
+  await expect(cells.nth(1)).toHaveText('2024-03-15')
+  await page.keyboard.press('Control+w')
+})
+
 test('row inspector, structure and definition', async () => {
   await sidebar().getByRole('button', { name: 'customers', exact: true }).click()
   const view = page.getByTestId('data-customers')

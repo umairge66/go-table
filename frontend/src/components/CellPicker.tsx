@@ -8,6 +8,29 @@ import type { Cell } from '../types'
 export type PickerKind = Exclude<CellKind, { kind: 'text' }>
 
 /**
+ * useChoices: the options a choice picker shows for the typed text (all of
+ * them when the text is one of them, else those containing it), the
+ * highlighted one, and arrow-key handling that moves the highlight.
+ */
+export function useChoices(picker: PickerKind | null, v: string) {
+  const options = picker?.kind === 'choice' ? picker.options : []
+  const exact = options.findIndex((o) => o.value === v)
+  const choices = exact >= 0 ? options : options.filter((o) => o.label.toLowerCase().includes(v.toLowerCase()))
+  const [hi, setHi] = useState(Math.max(0, exact))
+  useEffect(() => { setHi(Math.max(0, choices.findIndex((o) => o.value === v))) }, [v]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** arrow moves the highlight on ArrowUp/ArrowDown and reports whether it did. */
+  const arrow = (e: KeyboardEvent) => {
+    if (picker?.kind !== 'choice' || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || !choices.length) return false
+    e.preventDefault()
+    setHi((h) => (h + (e.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length)
+    return true
+  }
+  /** picked: what Enter stores — the highlighted choice, or the typed text. */
+  const picked = picker?.kind === 'choice' && choices[hi] ? choices[hi].value : v
+  return { choices, hi, arrow, picked }
+}
+
+/**
  * CellPicker opens under a cell's text editor: a calendar, time fields,
  * a list of choices or checkboxes. The text stays editable; the picker
  * writes into it (onChange) or finishes the edit (onCommit).

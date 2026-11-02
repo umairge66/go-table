@@ -8,7 +8,8 @@ import { useConfirm } from '../components/Confirm'
 import { Grid } from '../components/Grid'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, errorParts, useMenu, useToast } from '../components/ui'
-import { cellKind } from '../lib/cellKind'
+import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
+import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo } from '../types'
 import { ExportDialog } from './ExportDialog'
@@ -384,7 +385,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               )}
             </div>
             {inspector && columns && (
-              <Inspector columns={columns} row={sel?.r ?? null} cell={cell} readOnly={readOnly} onEdit={edit} />
+              <Inspector columns={columns} kinds={gridColumns.map((g) => g.edit)} row={sel?.r ?? null} cell={cell} readOnly={readOnly} onEdit={edit}
+                onLookup={(r, c, rect) => setLookup({ r, c, rect })} />
             )}
           </div>
         </>
@@ -465,8 +467,16 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   )
 }
 
-function Inspector({ columns, row, cell, readOnly, onEdit }: {
-  columns: Column[]; row: number | null; cell: (r: number, c: number) => { value: Cell; status: string }; readOnly: boolean; onEdit: (r: number, c: number, v: Cell) => void
+function Inspector({ columns, kinds, row, cell, readOnly, onEdit, onLookup }: {
+  columns: Column[]
+  /** kinds: each column's editor, as the grid uses it. */
+  kinds: CellKind[]
+  row: number | null
+  cell: (r: number, c: number) => { value: Cell; status: string }
+  readOnly: boolean
+  onEdit: (r: number, c: number, v: Cell) => void
+  /** onLookup opens the foreign key chooser under the field. */
+  onLookup: (r: number, c: number, rect: DOMRect) => void
 }) {
   const [q, setQ] = useState('')
   return (
@@ -494,7 +504,9 @@ function Inspector({ columns, row, cell, readOnly, onEdit }: {
                     <button className="ml-auto text-[11px] text-muted hover:text-accent" onClick={() => onEdit(row, c, null)}>set NULL</button>
                   )}
                 </div>
-                <InspectorField value={value} readOnly={readOnly || status === 'deleted'} onCommit={(v) => onEdit(row, c, v)} />
+                <InspectorField name={col.name} value={value} readOnly={readOnly || status === 'deleted'} spec={kinds[c]} nullable={col.nullable}
+                  onCommit={(v) => onEdit(row, c, v)}
+                  onLookup={col.references ? (rect) => onLookup(row, c, rect) : undefined} />
               </div>
             )
           })}
@@ -504,20 +516,92 @@ function Inspector({ columns, row, cell, readOnly, onEdit }: {
   )
 }
 
-function InspectorField({ value, readOnly, onCommit }: { value: Cell; readOnly: boolean; onCommit: (v: Cell) => void }) {
+const FIELD = 'w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[12px] placeholder:italic placeholder:text-faint focus:border-accent focus:outline-none read-only:text-muted'
+
+/**
+ * InspectorField edits one field of the inspected row with the editor the grid
+ * uses for its column: a calendar, time fields, a list of choices, checkboxes,
+ * or (foreign keys) a chooser of the referenced rows; plain text otherwise.
+ */
+function InspectorField({ name, value, readOnly, spec, nullable, onCommit, onLookup }: {
+  name: string; value: Cell; readOnly: boolean; spec: CellKind; nullable: boolean; onCommit: (v: Cell) => void
+  onLookup?: (rect: DOMRect) => void
+}) {
   const [v, setV] = useState(value ?? '')
   useEffect(() => setV(value ?? ''), [value])
+  const box = useRef<HTMLDivElement>(null)
+  const commit = (next: Cell) => {
+    if (next === null ? value !== null : (value ?? '') !== next || (value === null && next !== '')) onCommit(next)
+    else setV(value ?? '')
+  }
+  const lookup = onLookup && !readOnly && (
+    <IconButton label={`Choose ${name}`} className="shrink-0" onClick={() => box.current && onLookup(box.current.getBoundingClientRect())}>
+      <Search className="size-3.5" />
+    </IconButton>
+  )
+  if (spec.kind !== 'text') {
+    return <PickerField name={name} value={value} v={v} setV={setV} readOnly={readOnly} spec={spec} nullable={nullable} commit={commit} />
+  }
   return (
-    <textarea
-      value={v}
-      readOnly={readOnly}
-      placeholder={value === null ? 'NULL' : ''}
-      rows={Math.min(6, Math.max(1, Math.ceil((v.length || 1) / 34)))}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={() => { if ((value ?? '') !== v || (value === null && v !== '')) onCommit(v) }}
-      onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) (e.target as HTMLTextAreaElement).blur(); if (e.key === 'Escape') { setV(value ?? ''); (e.target as HTMLTextAreaElement).blur() } }}
-      className="w-full resize-none rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-[12px] placeholder:italic placeholder:text-faint focus:border-accent focus:outline-none"
-    />
+    <div ref={box} className="flex items-start gap-1">
+      <textarea
+        aria-label={name}
+        value={v}
+        readOnly={readOnly}
+        placeholder={value === null ? 'NULL' : ''}
+        rows={Math.min(6, Math.max(1, Math.ceil((v.length || 1) / 34)))}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => commit(v)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) (e.target as HTMLTextAreaElement).blur(); if (e.key === 'Escape') { setV(value ?? ''); (e.target as HTMLTextAreaElement).blur() } }}
+        className={clsx(FIELD, 'resize-none')}
+      />
+      {lookup}
+    </div>
+  )
+}
+
+/** PickerField: a one-line field whose picker opens while it has the focus. */
+function PickerField({ name, value, v, setV, readOnly, spec, nullable, commit }: {
+  name: string; value: Cell; v: string; setV: (v: string) => void; readOnly: boolean; spec: PickerKind; nullable: boolean; commit: (v: Cell) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const { choices, hi, arrow, picked } = useChoices(spec, v)
+  const finish = (next: Cell) => {
+    setOpen(false)
+    commit(next)
+    ref.current?.blur()
+  }
+  // Moving the focus into the picker (its time fields) keeps it open.
+  const focusOut = (to: EventTarget | null) => {
+    if (to instanceof Node && (to === ref.current || pickerRef.current?.contains(to))) return
+    if (open) { setOpen(false); commit(v) }
+  }
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(picked) }
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); setV(value ?? ''); ref.current?.blur() }
+  }
+  return (
+    <>
+      <input
+        ref={ref}
+        aria-label={name}
+        value={v}
+        readOnly={readOnly}
+        placeholder={value === null ? 'NULL' : ''}
+        onFocus={() => !readOnly && setOpen(true)}
+        onMouseDown={() => { if (!readOnly && document.activeElement === ref.current) setOpen(true) }}
+        onChange={(e) => { setV(e.target.value); setOpen(true) }}
+        onBlur={(e) => focusOut(e.relatedTarget)}
+        onKeyDown={(e) => { if (open && arrow(e)) return; onKey(e) }}
+        className={clsx(FIELD, 'h-[30px]')}
+      />
+      {open && (
+        <CellPicker spec={spec} anchor={ref} pickerRef={pickerRef} value={v} nullable={nullable} choices={choices} highlight={hi}
+          onChange={setV} onCommit={finish} onKeyDown={onKey} onFocusOut={focusOut} />
+      )}
+    </>
   )
 }
 
