@@ -36,3 +36,9 @@ test('data types are upper-cased and functions lower-cased', () => {
 test('invalid SQL throws instead of producing garbage', () => {
   expect(() => formatSQL("select 'unterminated", 'postgres')).toThrow()
 })
+
+test('compatible servers format like the engine they follow', () => {
+  expect(formatSQL('select `order` from `t`', 'tidb')).toBe('SELECT\n  `order`\nFROM\n  `t`')
+  expect(formatSQL('select $1::int', 'cockroachdb')).toBe('SELECT\n  $1::INT')
+  expect(formatSQL('select $1::int', 'yugabytedb')).toBe('SELECT\n  $1::INT')
+})

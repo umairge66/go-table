@@ -5,9 +5,9 @@ import { AlterDialog } from './StructureDialogs'
 import { TypeSelect } from '../components/TypeSelect'
 import { Field, Input, Select, Switch } from '../components/ui'
 import { findType, has, paramProblem, parseType, typeString, type TypeSpec } from '../lib/sqlTypes'
-import type { Column, Driver, SessionInfo } from '../types'
+import { family, forDriver, type Column, type PerDriver, type SessionInfo } from '../types'
 
-export const TYPES: Record<Driver, string[]> = {
+export const TYPES: PerDriver<string[]> = {
   postgres: ['text', 'varchar(255)', 'integer', 'bigint', 'numeric(10,2)', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid',
     'double precision', 'timestamp', 'bytea', 'text[]', 'smallint', 'real', 'time', 'inet'],
   mysql: ['varchar(255)', 'text', 'int', 'bigint', 'decimal(10,2)', 'tinyint(1)', 'date', 'datetime', 'json', 'timestamp',
@@ -17,7 +17,7 @@ export const TYPES: Record<Driver, string[]> = {
   sqlite: ['TEXT', 'INTEGER', 'REAL', 'NUMERIC', 'BLOB', 'BOOLEAN', 'DATETIME'],
 }
 
-export const EXPRESSIONS: Record<Driver, string[]> = {
+export const EXPRESSIONS: PerDriver<string[]> = {
   postgres: ['now()', 'CURRENT_DATE', 'gen_random_uuid()', "'{}'::jsonb"],
   mysql: ['CURRENT_TIMESTAMP', '(UUID())'],
   mariadb: ['CURRENT_TIMESTAMP', 'uuid()'],
@@ -38,14 +38,14 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
   onDone: (name: string) => void
 }) {
   const driver = session.connection.driver
-  const mysql = driver === 'mysql' || driver === 'mariadb'
+  const mysql = family(driver) === 'mysql'
   const [def, setDef] = useState<ColumnDef>(() => editing
     ? { name: editing.name, type: editing.type, nullable: editing.nullable, defaultKind: editing.defaultKind ?? '', default: editing.defaultText ?? '',
         comment: editing.comment, position: '', collation: editing.collation ?? '', onUpdateNow: !!editing.onUpdateNow }
     : { name: '', type: '', nullable: true, defaultKind: '', default: '', comment: '', position: '', collation: '', onUpdateNow: false })
   // The type is picked from the database's list (see lib/sqlTypes).
   const [spec, setSpec] = useState<TypeSpec>(() => {
-    const p = parseType(driver, editing?.type ?? TYPES[driver][0])
+    const p = parseType(driver, editing?.type ?? forDriver(TYPES, driver)[0])
     // A bracket value the type list doesn't know (e.g. SQLite NUMERIC(10,2)): keep the type as written.
     return editing && !p.custom && p.param && !findType(driver, p.base)?.param ? { base: editing.type, param: '', unsigned: false, array: false, custom: true } : p
   })
@@ -89,7 +89,7 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
           {mysql && has(t, 'unsigned') && <Switch checked={spec.unsigned} onChange={(v) => setSpec({ ...spec, unsigned: v })} label="UNSIGNED" />}
           {mysql && editing && (has(t, 'int') || spec.custom) && <Switch checked={autoIncrement} onChange={setAutoIncrement} label="AUTO_INCREMENT" />}
           {mysql && has(t, 'time') && <Switch checked={!!def.onUpdateNow} onChange={(v) => set('onUpdateNow', v)} label="On update: CURRENT_TIMESTAMP" />}
-          {driver === 'postgres' && !spec.custom && <Switch checked={spec.array} onChange={(v) => setSpec({ ...spec, array: v })} label="Array ( [ ] )" />}
+          {family(driver) === 'postgres' && !spec.custom && <Switch checked={spec.array} onChange={(v) => setSpec({ ...spec, array: v })} label="Array ( [ ] )" />}
           {(has(t, 'text') || spec.custom) && (
             <label className="flex items-center gap-2 text-[12.5px] text-muted">Collation
               <input className="h-7 w-48 rounded-md border border-line bg-panel px-2 font-mono text-[12px] text-fg focus:border-accent focus:outline-none" list="add-column-collations"
@@ -116,11 +116,11 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
         {(def.defaultKind === 'value' || def.defaultKind === 'expression') && (
           <div className="animate-fade">
             <Input mono value={def.default} aria-label="Default value"
-              placeholder={def.defaultKind === 'value' ? 'stored as text, e.g. pending or 0' : EXPRESSIONS[driver][0] ?? 'expression'}
+              placeholder={def.defaultKind === 'value' ? 'stored as text, e.g. pending or 0' : forDriver(EXPRESSIONS, driver)[0] ?? 'expression'}
               onChange={(e) => set('default', e.target.value)} />
-            {def.defaultKind === 'expression' && EXPRESSIONS[driver].length > 0 && (
+            {def.defaultKind === 'expression' && forDriver(EXPRESSIONS, driver).length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {EXPRESSIONS[driver].map((x) => (
+                {forDriver(EXPRESSIONS, driver).map((x) => (
                   <button type="button" key={x} onClick={() => set('default', x)} className="h-6 rounded-full border border-line px-2 font-mono text-[11.5px] text-muted hover:bg-hover hover:text-fg">{x}</button>
                 ))}
               </div>
@@ -129,7 +129,7 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
         )}
 
         <div className={clsx('grid gap-3', mysql ? 'grid-cols-2' : 'grid-cols-1')}>
-          {driver !== 'sqlite' && (
+          {family(driver) !== 'sqlite' && (
             <Field label="Comment"><Input value={def.comment} placeholder="optional" onChange={(e) => set('comment', e.target.value)} aria-label="Column comment" /></Field>
           )}
           {mysql && (

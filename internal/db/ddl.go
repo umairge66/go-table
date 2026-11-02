@@ -71,7 +71,7 @@ func (c ColumnDef) check(d Dialect, inCreate bool) error {
 	if !c.Nullable && c.DefaultKind == DefaultNull {
 		return errors.New("a NOT NULL column can't default to NULL")
 	}
-	if d.kind == model.DriverSQLite && !inCreate {
+	if d.family == model.DriverSQLite && !inCreate {
 		if !c.Nullable && (c.DefaultKind == DefaultNone) {
 			return errors.New("SQLite can only add a NOT NULL column if it has a default value; set a default or allow NULL")
 		}
@@ -107,7 +107,7 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 	var b strings.Builder
 	b.WriteString(d.QuoteIdent(strings.TrimSpace(c.Name)) + " " + strings.TrimSpace(c.Type))
 	if cl := strings.TrimSpace(c.Collation); cl != "" {
-		if d.kind == model.DriverPostgres {
+		if d.family == model.DriverPostgres {
 			cl = d.QuoteIdent(cl)
 		}
 		b.WriteString(" COLLATE " + cl)
@@ -120,7 +120,7 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 		b.WriteString(" DEFAULT " + d.QuoteLiteral(Text(c.Default)))
 	case DefaultExpression:
 		e := strings.TrimSpace(c.Default)
-		if d.kind == model.DriverSQLite && !sqliteLiteral.MatchString(e) && !strings.HasPrefix(e, "(") {
+		if d.family == model.DriverSQLite && !sqliteLiteral.MatchString(e) && !strings.HasPrefix(e, "(") {
 			e = "(" + e + ")" // SQLite wants expressions in brackets
 		}
 		b.WriteString(" DEFAULT " + e)
@@ -164,7 +164,7 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 	}
 	out := []string{b.String() + ";"}
 	if comment != "" {
-		switch d.kind {
+		switch d.family {
 		case model.DriverPostgres:
 			out = append(out, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s;", d.QualifiedName(t), d.QuoteIdent(strings.TrimSpace(c.Name)), d.QuoteLiteral(Text(comment))))
 		case model.DriverSQLite:
@@ -196,6 +196,17 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 
 // runDDLLocked is runDDL for callers that hold c.mu.
 func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
+	if c.Config.Driver == model.DriverCockroachDB {
+		// CockroachDB refuses some schema changes (ALTER COLUMN TYPE) inside
+		// a transaction, so each statement commits on its own there: a later
+		// failure leaves the earlier statements applied.
+		for _, s := range stmts {
+			if _, err := c.conn.ExecContext(ctx, s); err != nil {
+				return fmt.Errorf("%s %w", s, err)
+			}
+		}
+		return nil
+	}
 	tx, err := c.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -229,7 +240,7 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 		}
 	}
 	var out []string
-	switch d.kind {
+	switch d.family {
 	case model.DriverPostgres:
 		suffix := ";"
 		if cascade {
@@ -241,7 +252,7 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 		if len(tables) > 0 {
 			out = append(out, "DROP TABLE "+strings.Join(tables, ", ")+suffix)
 		}
-	case model.DriverMySQL, model.DriverMariaDB:
+	case model.DriverMySQL:
 		// One statement drops tables that reference each other; CASCADE is
 		// done by turning foreign key checks off for the session.
 		if cascade {
@@ -280,7 +291,7 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 		return nil, err
 	}
 	defer c.mu.Unlock()
-	if c.Config.Driver != model.DriverPostgres {
+	if c.Config.Driver.Family() != model.DriverPostgres {
 		// PostgreSQL resolves dependencies within one DROP statement; the
 		// others drop in the order given, so children must come first.
 		objs = c.dropOrder(ctx, objs)
@@ -292,7 +303,7 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 	// PRAGMA foreign_keys only takes effect outside a transaction.
 	var pre, post []string
 	body := stmts
-	if c.Config.Driver == model.DriverSQLite && cascade {
+	if c.Config.Driver.Family() == model.DriverSQLite && cascade {
 		pre, post, body = stmts[:1], stmts[len(stmts)-1:], stmts[1:len(stmts)-1]
 	}
 	for _, s := range pre {
@@ -341,7 +352,7 @@ func (c *Conn) dropOrder(ctx context.Context, objs []Object) []Object {
 	for _, o := range objs {
 		var parents []string
 		var err error
-		if c.Config.Driver == model.DriverSQLite {
+		if c.Config.Driver.Family() == model.DriverSQLite {
 			parents, err = c.queryStrings(ctx, "SELECT DISTINCT \"table\" FROM pragma_foreign_key_list(?, ?)", o.Name, schemaOrMain(o.Schema))
 		} else {
 			parents, err = c.queryStrings(ctx, `SELECT DISTINCT REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE

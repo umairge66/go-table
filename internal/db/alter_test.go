@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 func runAlterSuite(t *testing.T, c *Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	kind := c.Config.Driver
+	kind := c.Config.Driver.Family()
 	schema := c.Schema()
 	parent := TableRef{Schema: schema, Name: "gt_alter"}
 	child := TableRef{Schema: schema, Name: "gt_alter_child"}
@@ -117,7 +118,11 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		if _, ok := findIndex(state(parent), "gt_alter_name_uq"); ok {
 			t.Error("index still there")
 		}
-		// Composite primary key and back.
+		// Composite primary key and back. TiDB can't replace the primary
+		// key of a table it clusters by that key (Error 8200).
+		if c.Config.Driver == model.DriverTiDB {
+			return
+		}
 		apply(parent, AlterOp{Kind: AlterSetPrimaryKey, Columns: []string{"id", "name"}})
 		if pk, _ := primaryIndex(state(parent)); !slices.Equal(pk.Columns, []string{"id", "name"}) {
 			t.Errorf("primary key %v", pk.Columns)
@@ -149,6 +154,15 @@ func runAlterSuite(t *testing.T, c *Conn) {
 
 	if kind != model.DriverSQLite {
 		t.Run("checks and comment", func(t *testing.T) {
+			if c.Config.Driver == model.DriverTiDB {
+				// Off by default: refused with an explanation, then switched on.
+				ck := []AlterOp{{Kind: AlterAddCheck, Check: &CheckDef{Name: "gt_alter_quantity_ck", Expression: "quantity >= 0"}}}
+				if _, err := c.Alter(ctx, parent, ck, false); !errors.Is(err, errTiDBChecksOff) {
+					t.Fatalf("CHECK on TiDB without enforcement: %v", err)
+				}
+				exec("SET GLOBAL tidb_enable_check_constraint = ON")
+				defer exec("SET GLOBAL tidb_enable_check_constraint = OFF")
+			}
 			apply(parent, AlterOp{Kind: AlterAddCheck, Check: &CheckDef{Name: "gt_alter_quantity_ck", Expression: "quantity >= 0"}})
 			if ck := state(parent).Info.Checks; len(ck) != 1 || ck[0].Name != "gt_alter_quantity_ck" {
 				t.Fatalf("checks %+v", ck)

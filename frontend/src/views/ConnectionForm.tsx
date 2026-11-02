@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, 
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { DRIVERS, SSL_MODES, TAGS, driverInfo, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { driverInfo, DRIVERS, family, forDriver, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
@@ -15,7 +15,7 @@ export const newConnection = (driver: Driver = 'postgres'): Connection => ({
   port: driverInfo(driver).port,
   user: '',
   database: '',
-  ssl_mode: SSL_MODES[driver][0],
+  ssl_mode: forDriver(SSL_MODES, driver)[0],
   ssh_port: 22,
   rows_per_page: 300,
   tag: '',
@@ -51,7 +51,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
   }, [initial, initialPassword])
 
   const set = <K extends keyof Connection>(k: K, v: Connection[K]) => setC((x) => ({ ...x, [k]: v }))
-  const file = c.driver === 'sqlite'
+  const file = family(c.driver) === 'sqlite'
   const dirty = useMemo(() => JSON.stringify(c) !== JSON.stringify(initial) || Object.keys(secrets).length > 0, [c, initial, secrets])
 
   const setDriver = (d: Driver) => setC((x) => {
@@ -59,7 +59,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
     return {
       ...x, driver: d,
       port: !x.port || x.port === prevDefault ? driverInfo(d).port : x.port,
-      ssl_mode: SSL_MODES[d].includes(x.ssl_mode ?? '') ? x.ssl_mode : SSL_MODES[d][0],
+      ssl_mode: forDriver(SSL_MODES, d).includes(x.ssl_mode ?? '') ? x.ssl_mode : forDriver(SSL_MODES, d)[0],
     }
   })
 
@@ -187,7 +187,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
               <Field label="Port"><Input inputMode="numeric" value={c.port || ''} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="User"><Input value={c.user ?? ''} placeholder={c.driver === 'postgres' ? 'postgres' : 'root'} onChange={(e) => set('user', e.target.value)} /></Field>
+              <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
               <Field label="Password">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
             </div>
             <Field label="Database"><Input value={c.database ?? ''} placeholder="optional" onChange={(e) => set('database', e.target.value)} /></Field>
@@ -205,7 +205,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
           <div className="space-y-3 px-4 pb-4">
             <Field label="SSL mode">
               <Select value={c.ssl_mode} onChange={(e) => set('ssl_mode', e.target.value)}>
-                {SSL_MODES[c.driver].map((m) => <option key={m}>{m}</option>)}
+                {forDriver(SSL_MODES, c.driver).map((m) => <option key={m}>{m}</option>)}
               </Select>
             </Field>
             <div className="grid grid-cols-3 gap-3">
@@ -285,7 +285,7 @@ export function UrlDialog({ onClose, onParsed }: { onClose: () => void; onParsed
     }
   }
   return (
-    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, mariadb:// or sqlite:///path — the password goes to your keyring." onClose={onClose}
+    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, mariadb://, cockroachdb://, yugabytedb://, tidb:// or sqlite:///path — the password goes to your keyring." onClose={onClose}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={go} disabled={!url.trim()}>Fill in</Button></>}>
       <Input autoFocus mono value={url} placeholder="postgres://user:password@localhost:5432/shop" onChange={(e) => { setUrl(e.target.value); setErr('') }}
         onKeyDown={(e) => e.key === 'Enter' && go()} />

@@ -628,7 +628,7 @@ func (s *Server) importSQLJob(se *session, in jobRequest) (*Job, error) {
 	}
 	j := s.startJob(se, in.Schema, "import-sql", "Import "+name, "bytes", func(ctx context.Context, c *db.Conn, j *Job) error {
 		defer f.Close()
-		if c.Config.Driver == model.DriverSQLite && !in.Transaction {
+		if c.Config.Driver.Family() == model.DriverSQLite && !in.Transaction {
 			// Without a transaction every statement would wait for a disk sync.
 			c.Exec(ctx, "PRAGMA synchronous = OFF")
 		}

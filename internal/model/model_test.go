@@ -154,3 +154,48 @@ func TestParseURL(t *testing.T) {
 		}
 	}
 }
+
+func TestCompatibleDrivers(t *testing.T) {
+	for _, c := range []struct {
+		d      Driver
+		family Driver
+		port   int
+		label  string
+	}{
+		{DriverCockroachDB, DriverPostgres, 26257, "CockroachDB"},
+		{DriverYugabyteDB, DriverPostgres, 5433, "YugabyteDB"},
+		{DriverTiDB, DriverMySQL, 4000, "TiDB"},
+		{DriverMariaDB, DriverMySQL, 3306, "MariaDB"},
+		{DriverPostgres, DriverPostgres, 5432, "PostgreSQL"},
+	} {
+		if c.d.Family() != c.family || c.d.DefaultPort() != c.port || c.d.Label() != c.label {
+			t.Errorf("%s: family %s port %d label %q", c.d, c.d.Family(), c.d.DefaultPort(), c.d.Label())
+		}
+		if got, want := c.d.SSLModes()[0], c.family.SSLModes()[0]; got != want {
+			t.Errorf("%s: SSL mode %q, want %q", c.d, got, want)
+		}
+		conn := NewConnection(c.d)
+		conn.Name, conn.User = "x", "root"
+		if err := conn.Validate(); err != nil {
+			t.Errorf("%s: %v", c.d, err)
+		}
+	}
+	for raw, want := range map[string]Driver{
+		"cockroachdb://root@localhost:26257/defaultdb?sslmode=disable":  DriverCockroachDB,
+		"yugabytedb://yugabyte@db:5433/yugabyte":                        DriverYugabyteDB,
+		"tidb://root@gateway.tidbcloud.com:4000/test?ssl-mode=REQUIRED": DriverTiDB,
+	} {
+		c, _, err := ParseURL(raw)
+		if err != nil || c.Driver != want {
+			t.Fatalf("%s: %v %v", raw, c, err)
+		}
+		if want == DriverTiDB && c.SSLMode != "required" || want == DriverCockroachDB && c.SSLMode != "disable" {
+			t.Errorf("%s: SSL mode %q", raw, c.SSLMode)
+		}
+	}
+	bad := NewConnection("oracle")
+	bad.Name, bad.User = "x", "u"
+	if bad.Validate() == nil {
+		t.Error("unknown driver accepted")
+	}
+}

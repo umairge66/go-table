@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gotable/internal/model"
 )
 
 // ChangeKind is the kind of a pending row edit.
@@ -154,9 +156,9 @@ func Preview(d Dialect, s Statement) string {
 		case ch == '\'' || ch == '"' || ch == '`':
 			inQuote = ch
 			b.WriteByte(ch)
-		case ch == '?' && d.Kind() != "postgres":
+		case ch == '?' && d.family != model.DriverPostgres:
 			b.WriteString(next())
-		case ch == '$' && d.Kind() == "postgres" && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9':
+		case ch == '$' && d.family == model.DriverPostgres && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9':
 			j := i + 1
 			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
 				j++

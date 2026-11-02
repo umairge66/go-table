@@ -100,14 +100,14 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 				return nil, fmt.Errorf("column %s: an auto-increment column can't have a default", n)
 			}
 		}
-		if t.Strict && d.kind == model.DriverSQLite && !sqliteStrict.MatchString(strings.TrimSpace(c.Type)) {
+		if t.Strict && d.family == model.DriverSQLite && !sqliteStrict.MatchString(strings.TrimSpace(c.Type)) {
 			return nil, fmt.Errorf("column %s: a STRICT table only allows INT, INTEGER, REAL, TEXT, BLOB or ANY", n)
 		}
 	}
 	if autos > 1 {
 		return nil, errors.New("only one column can auto-increment")
 	}
-	if t.Strict && d.kind != model.DriverSQLite {
+	if t.Strict && d.family != model.DriverSQLite {
 		return nil, errors.New("STRICT tables are a SQLite feature")
 	}
 	for _, o := range []struct{ label, v string }{{"storage engine", t.Engine}, {"character set", t.Charset}, {"collation", t.Collation}} {
@@ -131,7 +131,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 		extra := ""
 		if c.AutoIncrement {
 			switch {
-			case d.kind == model.DriverPostgres:
+			case d.family == model.DriverPostgres:
 				if !pgIdentityType.MatchString(typ) {
 					return nil, fmt.Errorf("column %s: auto-increment needs an integer type (integer or bigint)", n)
 				}
@@ -144,7 +144,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 					return nil, fmt.Errorf("column %s: on MySQL and MariaDB an auto-increment column must be the primary key or indexed", n)
 				}
 				extra = " AUTO_INCREMENT"
-			case d.kind == model.DriverSQLite:
+			case d.family == model.DriverSQLite:
 				// SQLite only numbers rows for a single INTEGER PRIMARY KEY.
 				if !strings.EqualFold(typ, "integer") || !c.PrimaryKey || len(pk) != 1 {
 					return nil, fmt.Errorf("column %s: on SQLite only a single INTEGER primary key can auto-increment", n)
@@ -153,7 +153,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 				inlinePK = true
 			}
 		}
-		if extra != "" && d.kind != model.DriverSQLite {
+		if extra != "" && d.family != model.DriverSQLite {
 			// AUTO_INCREMENT / identity sit after NOT NULL; SQLite's goes first.
 			lines = append(lines, columnSQL(d, c.ColumnDef, !c.Nullable || c.PrimaryKey, extra))
 		} else if extra != "" {
@@ -163,7 +163,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 		} else {
 			lines = append(lines, columnSQL(d, c.ColumnDef, !c.Nullable || c.PrimaryKey, ""))
 		}
-		if strings.TrimSpace(c.Comment) != "" && d.kind == model.DriverSQLite {
+		if strings.TrimSpace(c.Comment) != "" && d.family == model.DriverSQLite {
 			return nil, errors.New("SQLite doesn't support column comments")
 		}
 	}
@@ -190,7 +190,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 			lines = append(lines, "KEY "+d.QuoteIdent(indexName(name, n, "idx"))+" ("+qn+")")
 		case c.Index == "index":
 			idx := TableRef{Schema: schema, Name: indexName(name, n, "idx")}
-			if d.kind == model.DriverPostgres {
+			if d.family == model.DriverPostgres {
 				// PostgreSQL index names belong to the table's schema implicitly.
 				after = append(after, fmt.Sprintf("CREATE INDEX %s ON %s (%s);", d.QuoteIdent(idx.Name), d.QualifiedName(ref), qn))
 			} else {
@@ -217,14 +217,14 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 		if len(opts) > 0 {
 			stmt += " " + strings.Join(opts, " ")
 		}
-	} else if comment != "" && d.kind == model.DriverSQLite {
+	} else if comment != "" && d.family == model.DriverSQLite {
 		return nil, errors.New("SQLite doesn't support table comments")
 	}
 	if t.Strict {
 		stmt += " STRICT"
 	}
 	out := append([]string{stmt + ";"}, after...)
-	if d.kind == model.DriverPostgres {
+	if d.family == model.DriverPostgres {
 		if comment != "" {
 			out = append(out, fmt.Sprintf("COMMENT ON TABLE %s IS %s;", d.QualifiedName(ref), d.QuoteLiteral(Text(comment))))
 		}
@@ -263,7 +263,7 @@ func BuildCreateDatabase(d Dialect, nd NewDatabase) (string, error) {
 	if name == "" {
 		return "", errors.New("database name is required")
 	}
-	switch d.kind {
+	switch d.family {
 	case model.DriverSQLite:
 		return "", errors.New("SQLite keeps one database per file; create a new database file instead")
 	case model.DriverPostgres:
@@ -328,7 +328,7 @@ func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
 	info := &TypeInfo{CustomTypes: []string{}, Collations: []string{}, Charsets: []string{}, Engines: []string{}}
 	var err error
 	switch {
-	case c.Dialect.kind == model.DriverPostgres:
+	case c.Dialect.family == model.DriverPostgres:
 		// Types in this schema or public (found without qualifying them);
 		// skip array types (_name) and table row types.
 		info.CustomTypes, err = c.queryStrings(ctx, `SELECT DISTINCT t.typname FROM pg_type t
@@ -338,6 +338,9 @@ func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
 		if err == nil {
 			info.Collations, err = c.queryStrings(ctx, `SELECT collname FROM pg_collation
 				WHERE collencoding IN (-1, pg_char_to_encoding(current_setting('server_encoding'))) ORDER BY collname <> 'C', collname <> 'POSIX', collname`)
+			if err != nil { // CockroachDB: no pg_char_to_encoding, and it lists C and POSIX but rejects them
+				info.Collations, err = c.queryStrings(ctx, `SELECT DISTINCT collname FROM pg_collation WHERE collname NOT IN ('C', 'POSIX') ORDER BY 1`)
+			}
 		}
 	case c.Dialect.mysqlLike():
 		if info.Charsets, err = c.queryStrings(ctx, "SELECT CHARACTER_SET_NAME FROM information_schema.CHARACTER_SETS ORDER BY 1"); err != nil {
@@ -371,7 +374,7 @@ func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 		}
-	case c.Dialect.kind == model.DriverSQLite:
+	case c.Dialect.family == model.DriverSQLite:
 		info.Collations = []string{"BINARY", "NOCASE", "RTRIM"}
 		var v string
 		if c.conn.QueryRowContext(ctx, "SELECT sqlite_version()").Scan(&v) == nil {

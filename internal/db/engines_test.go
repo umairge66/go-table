@@ -44,7 +44,7 @@ func serverConfig(t *testing.T, name string, d model.Driver) (*model.Connection,
 	cfg.Port, _ = strconv.Atoi(env("PORT"))
 	cfg.User = env("USER")
 	cfg.DBName = env("DB")
-	if d == model.DriverPostgres {
+	if d.Family() == model.DriverPostgres {
 		cfg.SSLMode = "disable"
 	} else {
 		cfg.SSLMode = "disabled"
@@ -133,4 +133,21 @@ func TestMariaDB(t *testing.T) {
 			t.Fatalf("call result %+v", res[2].Set)
 		}
 	})
+}
+
+// PostgreSQL- and MySQL-compatible servers run the same suite.
+
+func TestCockroachDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "CRDB", model.DriverCockroachDB)
+	runSuite(t, openTest(t, cfg, pw))
+}
+
+func TestYugabyteDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "YB", model.DriverYugabyteDB)
+	runSuite(t, openTest(t, cfg, pw))
+}
+
+func TestTiDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "TIDB", model.DriverTiDB)
+	runSuite(t, openTest(t, cfg, pw))
 }

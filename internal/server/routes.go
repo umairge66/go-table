@@ -411,7 +411,7 @@ func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := se.c()
-	if base.Config.Driver == model.DriverSQLite {
+	if base.Config.Driver.Family() == model.DriverSQLite {
 		writeErr(w, 400, errors.New("a SQLite connection is one file; open another file as a new connection"))
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -18,10 +19,29 @@ const (
 	DriverMySQL    Driver = "mysql"
 	DriverMariaDB  Driver = "mariadb"
 	DriverSQLite   Driver = "sqlite"
+
+	// Servers that speak the PostgreSQL protocol and SQL dialect.
+	DriverCockroachDB Driver = "cockroachdb"
+	DriverYugabyteDB  Driver = "yugabytedb"
+	// A server that speaks the MySQL protocol and SQL dialect.
+	DriverTiDB Driver = "tidb"
 )
 
 // Drivers lists every supported driver in display order.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite}
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverCockroachDB, DriverYugabyteDB, DriverTiDB}
+
+// Family returns the engine whose protocol and SQL dialect the driver uses:
+// DriverPostgres, DriverMySQL or DriverSQLite. Code that only cares about
+// syntax compares families; code for one product's quirks compares drivers.
+func (d Driver) Family() Driver {
+	switch d {
+	case DriverMariaDB, DriverTiDB:
+		return DriverMySQL
+	case DriverCockroachDB, DriverYugabyteDB:
+		return DriverPostgres
+	}
+	return d
+}
 
 // Label returns the human readable driver name.
 func (d Driver) Label() string {
@@ -34,6 +54,12 @@ func (d Driver) Label() string {
 		return "MariaDB"
 	case DriverSQLite:
 		return "SQLite"
+	case DriverCockroachDB:
+		return "CockroachDB"
+	case DriverYugabyteDB:
+		return "YugabyteDB"
+	case DriverTiDB:
+		return "TiDB"
 	}
 	return string(d)
 }
@@ -42,9 +68,17 @@ func (d Driver) Label() string {
 // file based engines.
 func (d Driver) DefaultPort() int {
 	switch d {
+	case DriverCockroachDB:
+		return 26257
+	case DriverYugabyteDB:
+		return 5433
+	case DriverTiDB:
+		return 4000
+	}
+	switch d.Family() {
 	case DriverPostgres:
 		return 5432
-	case DriverMySQL, DriverMariaDB:
+	case DriverMySQL:
 		return 3306
 	}
 	return 0
@@ -56,10 +90,10 @@ func (d Driver) IsFileBased() bool { return d == DriverSQLite }
 
 // SSLModes returns the SSL modes the driver accepts, first entry is default.
 func (d Driver) SSLModes() []string {
-	switch d {
+	switch d.Family() {
 	case DriverPostgres:
 		return []string{"prefer", "disable", "allow", "require", "verify-ca", "verify-full"}
-	case DriverMySQL, DriverMariaDB:
+	case DriverMySQL:
 		return []string{"preferred", "disabled", "required", "verify_ca", "verify_identity"}
 	}
 	return nil
@@ -187,12 +221,15 @@ func (c *Connection) Address() string {
 
 // Validate checks the fields required to connect.
 func (c *Connection) Validate() error {
-	switch c.Driver {
+	if !slices.Contains(Drivers, c.Driver) {
+		return fmt.Errorf("unsupported driver %q", c.Driver)
+	}
+	switch c.Driver.Family() {
 	case DriverSQLite:
 		if c.Path == "" {
 			return fmt.Errorf("database file is required")
 		}
-	case DriverPostgres, DriverMySQL, DriverMariaDB:
+	case DriverPostgres, DriverMySQL:
 		if c.User == "" {
 			return fmt.Errorf("user is required")
 		}

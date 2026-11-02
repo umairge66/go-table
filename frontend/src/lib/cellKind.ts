@@ -1,4 +1,4 @@
-import type { Driver } from '../types'
+import { family, type Driver } from '../types'
 
 // Which editor a cell gets, from its column's type: a calendar for dates,
 // time fields for times, a list for enums and booleans, checkboxes for sets.
@@ -17,7 +17,7 @@ export function cellKind(type = '', values: string[] | undefined, driver: Driver
     return t.startsWith('set(') ? { kind: 'set', options: values } : { kind: 'choice', options: values.map((v) => ({ value: v, label: v === '' ? '(empty)' : v })) }
   }
   // PostgreSQL reads booleans as true/false; MySQL's BOOLEAN is TINYINT(1) and SQLite stores 1/0.
-  if (driver === 'postgres' && (t === 'boolean' || t === 'bool')) return { kind: 'choice', options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
+  if (family(driver) === 'postgres' && (t === 'boolean' || t === 'bool')) return { kind: 'choice', options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
   if (/^(tinyint\(1\)|bool|boolean)(\s+unsigned)?$/.test(t)) return { kind: 'choice', options: [{ value: '1', label: '1 (true)' }, { value: '0', label: '0 (false)' }] }
   if (t === 'date') return { kind: 'date' }
   if (/^(datetime|timestamptz|timestamp|smalldatetime)\b/.test(t)) return { kind: 'datetime' }

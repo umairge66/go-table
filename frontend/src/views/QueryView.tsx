@@ -13,7 +13,7 @@ import { formatSQL } from '../lib/format'
 import { cellAt, emptyEdits, pendingCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
-import type { Cell, Column, QueryResult, SessionInfo } from '../types'
+import { family, type Cell, type Column, type QueryResult, type SessionInfo } from '../types'
 import { fmt } from './DataView'
 
 const LIMITS = [100, 1000, 10000, 0]
@@ -156,7 +156,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     api.structure(session.id, table).then(({ columns }) => {
       if (stale) return
       // Result columns by table column (names may differ in case outside PostgreSQL).
-      const find = (n: string) => columns.find((c) => c.name === n) ?? (session.connection.driver === 'postgres' ? undefined : columns.find((c) => c.name.toLowerCase() === n.toLowerCase()))
+      const find = (n: string) => columns.find((c) => c.name === n) ?? (family(session.connection.driver) === 'postgres' ? undefined : columns.find((c) => c.name.toLowerCase() === n.toLowerCase()))
       const names = cols.map((n) => find(n)?.name ?? '')
       const keys = columns.filter((c) => c.primaryKey)
       if (names.some((n, i) => !n || names.indexOf(n) !== i)) setEditable({ reason: 'Some columns are computed or renamed, so they can’t be written back.' })

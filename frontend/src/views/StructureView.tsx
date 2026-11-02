@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, KeyRound, Link2, ListOrdered
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import type { Column, ForeignRef, Index, SessionInfo, TableInfo } from '../types'
+import { family, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
 
@@ -40,8 +40,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   onRenamed: (name: string) => void
 }) {
   const driver = session.connection.driver
-  const mysql = driver === 'mysql' || driver === 'mariadb'
-  const sqlite = driver === 'sqlite'
+  const mysql = family(driver) === 'mysql'
+  const sqlite = family(driver) === 'sqlite'
   const menu = useMenu()
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [checked, setChecked] = useState<string[]>([])
@@ -303,7 +303,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
   onRenamed: (name: string) => void
 }) {
   const driver = session.connection.driver
-  const mysql = driver === 'mysql' || driver === 'mariadb'
+  const mysql = family(driver) === 'mysql'
   const [name, setName] = useState(table.name)
   const [comment, setComment] = useState(info?.comment ?? '')
   const [engine, setEngine] = useState(info?.engine ?? '')
@@ -329,7 +329,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>
         </div>
-        {driver !== 'sqlite' && (
+        {family(driver) !== 'sqlite' && (
           <div className="flex items-end gap-2">
             <Field label="Table comment" className="flex-1"><Input value={comment} placeholder="optional" aria-label="Table comment" onChange={(e) => setComment(e.target.value)} /></Field>
             <Button disabled={comment === (info?.comment ?? '')} onClick={() => run([{ kind: 'table_comment', comment }], 'Change the table comment', { done: 'Comment saved' })}>Save</Button>

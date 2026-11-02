@@ -13,17 +13,22 @@ import (
 // suiteDDL returns engine specific DDL for the conformance suite tables.
 func suiteDDL(d model.Driver) []string {
 	id := "id INTEGER PRIMARY KEY"
-	switch d {
+	switch d.Family() {
 	case model.DriverPostgres:
 		id = "id SERIAL PRIMARY KEY"
 	case model.DriverMySQL, model.DriverMariaDB:
 		id = "id INT AUTO_INCREMENT PRIMARY KEY"
 	}
-	return []string{
+	var pre []string
+	if d == model.DriverCockroachDB {
+		// SERIAL numbers rows 1, 2, … (not unique_rowid()) as the checks expect.
+		pre = append(pre, "SET serial_normalization = 'sql_sequence'")
+	}
+	return append(pre,
 		"DROP VIEW IF EXISTS gt_people_view",
 		"DROP TABLE IF EXISTS gt_people",
 		"DROP TABLE IF EXISTS gt_nopk",
-		"CREATE TABLE gt_people (" + id + ", name VARCHAR(100) NOT NULL, city VARCHAR(100), score INT DEFAULT 0)",
+		"CREATE TABLE gt_people ("+id+", name VARCHAR(100) NOT NULL, city VARCHAR(100), score INT DEFAULT 0)",
 		"CREATE INDEX gt_people_city_idx ON gt_people (city)",
 		"CREATE TABLE gt_nopk (a INT, b VARCHAR(10))",
 		"CREATE VIEW gt_people_view AS SELECT name, score FROM gt_people",
@@ -31,7 +36,7 @@ func suiteDDL(d model.Driver) []string {
 			('Alice', 'Berlin', 90), ('Bob', 'Paris', 70), ('Carol', NULL, 85),
 			('Dave', 'Berlin', 60), ('Eve_x', 'Rome', 99)`,
 		"INSERT INTO gt_nopk (a, b) VALUES (1, 'x'), (1, 'x'), (2, 'y')",
-	}
+	)
 }
 
 func names(rs *ResultSet, col int) []string {
@@ -44,10 +49,10 @@ func names(rs *ResultSet, col int) []string {
 
 // runSuite exercises every Conn operation against a live database.
 func runSuite(t *testing.T, c *Conn) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute) // distributed servers run DDL slowly
 	defer cancel()
-	kind := c.Config.Driver
-	for _, s := range suiteDDL(kind) {
+	kind := c.Config.Driver.Family()
+	for _, s := range suiteDDL(c.Config.Driver) {
 		res, err := c.Execute(ctx, s, 0)
 		if err != nil || res[len(res)-1].Err != nil {
 			t.Fatalf("setup %q: %v %v", s, err, res)
@@ -200,7 +205,7 @@ func runSuite(t *testing.T, c *Conn) {
 				NewColumn{ColumnDef: ColumnDef{Name: "bio", Type: "text", Nullable: true}, Index: "fulltext"},
 				NewColumn{ColumnDef: ColumnDef{Name: "updated", Type: "timestamp", Nullable: true, DefaultKind: DefaultExpression, Default: "CURRENT_TIMESTAMP", OnUpdateNow: true}},
 				NewColumn{ColumnDef: ColumnDef{Name: "qty", Type: "int unsigned", Nullable: true}})
-		case kind == model.DriverPostgres:
+		case kind == model.DriverPostgres && c.Config.Driver != model.DriverCockroachDB: // CockroachDB rejects "C"
 			cols[1].Collation = "C"
 		case kind == model.DriverSQLite:
 			cols[1].Collation = "NOCASE"

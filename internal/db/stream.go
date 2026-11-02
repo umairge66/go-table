@@ -34,7 +34,7 @@ type Scanner struct {
 
 // NewScanner returns a Scanner for the dialect of kind.
 func NewScanner(r io.Reader, kind model.Driver) *Scanner {
-	return &Scanner{r: bufio.NewReaderSize(r, 1<<20), kind: kind, mysql: kind == model.DriverMySQL || kind == model.DriverMariaDB, delim: ";", line: 1}
+	return &Scanner{r: bufio.NewReaderSize(r, 1<<20), kind: kind.Family(), mysql: kind.Family() == model.DriverMySQL, delim: ";", line: 1}
 }
 
 var copyFromStdin = regexp.MustCompile(`(?is)^COPY\s.+\sFROM\s+stdin\b`)

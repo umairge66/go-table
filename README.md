@@ -1,6 +1,7 @@
 # GoTable
 
-A modern database client for PostgreSQL, MySQL, MariaDB and SQLite: a Go
+A modern database client for PostgreSQL, MySQL, MariaDB and SQLite, and the
+servers compatible with them: CockroachDB, YugabyteDB and TiDB. A Go
 backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
@@ -218,8 +219,10 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
+ENGINES="crdb yb tidb" scripts/test-dbs.sh   # CockroachDB, YugabyteDB, TiDB
 make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
+GOTABLE_E2E_COMPAT="cockroachdb://… tidb://…" make e2e  # and one per compatible server
 ```
 
 

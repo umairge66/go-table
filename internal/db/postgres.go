@@ -39,6 +39,10 @@ func postgresDSN(cfg *model.Connection, addr, password string) string {
 	if cfg.SSLKeyPath != "" {
 		q.Set("sslkey", cfg.SSLKeyPath)
 	}
+	if cfg.Driver == model.DriverCockroachDB {
+		// The Structure tab changes column types; CockroachDB gates that.
+		q.Set("enable_experimental_alter_column_type_general", "true")
+	}
 	q.Set("default_query_exec_mode", "simple_protocol")
 	q.Set("application_name", "GoTable")
 	q.Set("connect_timeout", "15")
@@ -53,8 +57,22 @@ func openPostgres(cfg *model.Connection, addr, password string) (*sql.DB, error)
 var _ = stdlib.GetDefaultDriver // register the "pgx" driver
 
 func (postgresEngine) serverVersion(ctx context.Context, c *Conn) (string, error) {
+	// CockroachDB reports a PostgreSQL version there; version() names it.
+	var full string
+	if c.conn.QueryRowContext(ctx, "SELECT version()").Scan(&full) == nil && strings.HasPrefix(full, "CockroachDB") {
+		f := strings.Fields(full) // CockroachDB CCL v24.3.5 (x86_64-…)
+		for _, w := range f {
+			if strings.HasPrefix(w, "v") {
+				return "CockroachDB " + w, nil
+			}
+		}
+		return full, nil
+	}
 	var v string
 	err := c.conn.QueryRowContext(ctx, "SHOW server_version").Scan(&v)
+	if _, yb, ok := strings.Cut(v, "-YB-"); ok { // 15.2-YB-2024.2.2.1-b0
+		return "YugabyteDB " + yb, err
+	}
 	return "PostgreSQL " + v, err
 }
 
@@ -139,6 +157,8 @@ func (postgresEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Colum
 			col.DefaultKind, col.DefaultText = DefaultExpression, def.String
 			if m := pgLiteral.FindStringSubmatch(def.String); m != nil {
 				col.DefaultKind, col.DefaultText = DefaultValue, strings.ReplaceAll(m[1], "''", "'")
+			} else if m := pgEscapeLiteral.FindStringSubmatch(def.String); m != nil {
+				col.DefaultKind, col.DefaultText = DefaultValue, pgUnescape(m[1])
 			}
 		}
 		col.AutoIncrement = identity || strings.HasPrefix(def.String, "nextval(")
@@ -266,6 +286,33 @@ func (postgresEngine) foreignKeys(ctx context.Context, c *Conn, t TableRef) ([]F
 
 // pgLiteral matches a default that is a plain literal: 'text'::type.
 var pgLiteral = regexp.MustCompile(`^'((?:[^']|'')*)'::[\w\s".\[\]()]+$`)
+
+// pgEscapeLiteral matches an escape-string default, as CockroachDB shows
+// them: e'it\'s'::STRING.
+var pgEscapeLiteral = regexp.MustCompile(`^[eE]'((?:[^'\\]|\\.|'')*)':::?[\w\s".\[\]()]+$`)
+
+// pgUnescape decodes the backslash escapes of an e'…' string.
+func pgUnescape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+			i++
+		} else if ch == '\\' && i+1 < len(s) {
+			i++
+			switch ch = s[i]; ch {
+			case 'n':
+				ch = '\n'
+			case 't':
+				ch = '\t'
+			case 'r':
+				ch = '\r'
+			}
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
 
 // pgAction spells a pg_constraint referential action code.
 func pgAction(col string) string {

@@ -6,7 +6,7 @@ import { FilePicker, pickedName, type PickedFile } from '../components/FilePicke
 import { JobProgress, UploadProgress, useJob } from '../components/Progress'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, timestamp, type SaveTarget } from '../lib/saveFile'
-import type { DbObject, FileSource, SessionInfo } from '../types'
+import { family, type DbObject, type FileSource, type SessionInfo } from '../types'
 import { saveJobAs } from './ExportDialog'
 
 type Tab = 'export' | 'import'
@@ -163,7 +163,7 @@ export async function toSource(p: PickedFile, onProgress: (f: number, loaded: nu
 
 function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionInfo; schema: string; onBusy: (b: boolean) => void; onImported: () => void }) {
   const toast = useToast()
-  const mysql = session.connection.driver === 'mysql' || session.connection.driver === 'mariadb'
+  const mysql = family(session.connection.driver) === 'mysql'
   const [file, setFile] = useState<PickedFile | null>(null)
   const [mode, setMode] = useState<'transaction' | 'continue'>(mysql ? 'continue' : 'transaction')
   const [upload, setUpload] = useState<{ fraction: number; loaded: number } | null>(null)

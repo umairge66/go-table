@@ -1,6 +1,6 @@
 // Column types offered by the table designer, grouped like phpMyAdmin's
 // type list, with what each one takes after its name.
-import type { Driver } from '../types'
+import { forDriver, type Driver, type PerDriver } from '../types'
 
 /** Param says what goes in brackets after the type name. */
 export type Param =
@@ -59,7 +59,7 @@ const MYSQL_STRING: SqlType[] = [
 const MYSQL_SPATIAL: SqlType[] = ['GEOMETRY', 'POINT', 'LINESTRING', 'POLYGON', 'MULTIPOINT', 'MULTILINESTRING', 'MULTIPOLYGON', 'GEOMETRYCOLLECTION']
   .map((name) => ({ name, hint: 'spatial' }))
 
-const CATALOG: Record<Driver, TypeGroup[]> = {
+const CATALOG: PerDriver<TypeGroup[]> = {
   mysql: [
     { label: 'Numeric', types: MYSQL_NUMERIC },
     { label: 'Date and time', types: MYSQL_TIME },
@@ -130,7 +130,7 @@ const CATALOG: Record<Driver, TypeGroup[]> = {
 
 /** typeGroups lists the built-in types plus the database's own types. */
 export function typeGroups(driver: Driver, custom: string[] = []): TypeGroup[] {
-  const groups = CATALOG[driver]
+  const groups = forDriver(CATALOG, driver)
   return custom.length ? [...groups, { label: 'Defined in this database', types: custom.map((name) => ({ name, hint: 'custom type', traits: ['text'] })) }] : groups
 }
 

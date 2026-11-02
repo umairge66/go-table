@@ -16,7 +16,8 @@ type Span struct {
 // comments, PostgreSQL dollar quoting, SQLite trigger bodies and the MySQL
 // client DELIMITER command. Empty statements are dropped.
 func SplitStatements(kind model.Driver, script string) []Span {
-	mysql := kind == model.DriverMySQL || kind == model.DriverMariaDB
+	kind = kind.Family()
+	mysql := kind == model.DriverMySQL
 	var out []Span
 	delim := ";"
 	start := 0

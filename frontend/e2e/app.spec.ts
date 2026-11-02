@@ -68,6 +68,13 @@ async function runSQL(sql: string) {
 test('welcome screen and creating a SQLite connection', async () => {
   await expect(page.getByText('Welcome to GoTable')).toBeVisible()
   await page.keyboard.press('Control+n')
+  // Compatible servers: their own default port and user hint.
+  const port = form().getByRole('textbox', { name: 'Port' })
+  for (const [name, p, user] of [['CockroachDB', '26257', 'root'], ['YugabyteDB', '5433', 'yugabyte'], ['TiDB', '4000', 'root']]) {
+    await form().getByRole('radio', { name }).click()
+    await expect(port).toHaveValue(p)
+    await expect(form().getByRole('textbox', { name: 'User' })).toHaveAttribute('placeholder', user)
+  }
   await form().getByRole('radio', { name: 'SQLite' }).click()
   await expect(form().getByText('Database file')).toBeVisible()
   // Validation is explained inline.

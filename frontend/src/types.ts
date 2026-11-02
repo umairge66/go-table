@@ -1,4 +1,14 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'cockroachdb' | 'yugabytedb' | 'tidb'
+/** Family: the engine whose protocol and SQL dialect a driver uses. */
+export type Family = 'postgres' | 'mysql' | 'sqlite'
+
+/** family maps PostgreSQL- and MySQL-compatible servers to the engine they follow. */
+export const family = (d: Driver): Family =>
+  d === 'mariadb' || d === 'tidb' ? 'mysql' : d === 'cockroachdb' || d === 'yugabytedb' ? 'postgres' : d
+
+/** PerDriver: a value for each family, optionally overridden for one driver. */
+export type PerDriver<T> = Record<Family, T> & Partial<Record<Driver, T>>
+export const forDriver = <T,>(m: PerDriver<T>, d: Driver): T => m[d] ?? m[family(d)]
 export type Tag = '' | 'local' | 'development' | 'testing' | 'staging' | 'production'
 
 export interface Connection {
@@ -108,11 +118,15 @@ export interface QueryResult {
 }
 
 /** color is the badge background for engines without a logo (see lib/driverLogos). */
-export const DRIVERS: { id: Driver; label: string; port: number; color: string }[] = [
-  { id: 'postgres', label: 'PostgreSQL', port: 5432, color: '#336791' },
-  { id: 'mysql', label: 'MySQL', port: 3306, color: '#00758f' },
-  { id: 'mariadb', label: 'MariaDB', port: 3306, color: '#b4644a' },
-  { id: 'sqlite', label: 'SQLite', port: 0, color: '#3b82c4' },
+/** user is the usual administrator account (the User field's placeholder). */
+export const DRIVERS: { id: Driver; label: string; port: number; color: string; user: string }[] = [
+  { id: 'postgres', label: 'PostgreSQL', port: 5432, color: '#336791', user: 'postgres' },
+  { id: 'mysql', label: 'MySQL', port: 3306, color: '#00758f', user: 'root' },
+  { id: 'mariadb', label: 'MariaDB', port: 3306, color: '#b4644a', user: 'root' },
+  { id: 'sqlite', label: 'SQLite', port: 0, color: '#3b82c4', user: '' },
+  { id: 'cockroachdb', label: 'CockroachDB', port: 26257, color: '#6933ff', user: 'root' },
+  { id: 'yugabytedb', label: 'YugabyteDB', port: 5433, color: '#ff6e42', user: 'yugabyte' },
+  { id: 'tidb', label: 'TiDB', port: 4000, color: '#dc150b', user: 'root' },
 ]
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
@@ -128,10 +142,9 @@ export const TAGS: { id: Tag; label: string; color: string }[] = [
 
 export const tagInfo = (t?: Tag) => TAGS.find((x) => x.id === (t ?? '')) ?? TAGS[0]
 
-export const SSL_MODES: Record<Driver, string[]> = {
+export const SSL_MODES: PerDriver<string[]> = {
   postgres: ['prefer', 'disable', 'allow', 'require', 'verify-ca', 'verify-full'],
   mysql: ['preferred', 'disabled', 'required', 'verify_ca', 'verify_identity'],
-  mariadb: ['preferred', 'disabled', 'required', 'verify_ca', 'verify_identity'],
   sqlite: [],
 }
 

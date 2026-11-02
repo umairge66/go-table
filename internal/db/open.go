@@ -59,11 +59,11 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 		eng   engine
 		err   error
 	)
-	switch cfg.Driver {
+	switch cfg.Driver.Family() {
 	case model.DriverPostgres:
 		sqlDB, err = openPostgres(cfg, addr, cred.Password)
 		eng = postgresEngine{}
-	case model.DriverMySQL, model.DriverMariaDB:
+	case model.DriverMySQL:
 		sqlDB, err = openMySQL(cfg, addr, cred.Password)
 		eng = mysqlEngine{}
 	case model.DriverSQLite:

@@ -4,12 +4,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Field, IconButton, Input, Modal, Select, errorParts, useToast } from '../components/ui'
-import type { Column, DbObject, Driver, SessionInfo } from '../types'
+import { family, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
 // SQL, then the same request runs it.
 
-const isMySQL = (d: Driver) => d === 'mysql' || d === 'mariadb'
+const isMySQL = (d: Driver) => family(d) === 'mysql'
 
 /** useAlter reviews and runs one-click changes (drop, set primary key…). */
 export function useAlter(session: SessionInfo, table: TableRef, onDone: () => void) {
@@ -180,11 +180,11 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
             {isMySQL(driver) && <option value="spatial">Spatial</option>}
           </Select>
         </Field>
-        {driver !== 'sqlite' && (
+        {family(driver) !== 'sqlite' && (
           <Field label="Method">
             <Select value={method} aria-label="Index method" disabled={special} onChange={(e) => setMethod(e.target.value)}>
               <option value="">default</option>
-              {(driver === 'postgres' ? PG_METHODS : ['btree', 'hash']).map((m) => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              {(family(driver) === 'postgres' ? PG_METHODS : ['btree', 'hash']).map((m) => <option key={m} value={m}>{m.toUpperCase()}</option>)}
             </Select>
           </Field>
         )}

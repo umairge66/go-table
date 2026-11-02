@@ -31,7 +31,7 @@ func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
 
 // CopyFrom runs a PostgreSQL "COPY … FROM stdin" statement with data from r.
 func (c *Conn) CopyFrom(ctx context.Context, stmt string, r io.Reader) (int64, error) {
-	if c.Config.Driver != model.DriverPostgres {
+	if c.Config.Driver.Family() != model.DriverPostgres {
 		return 0, errors.New("COPY … FROM stdin is only supported on PostgreSQL")
 	}
 	if err := c.lock(ctx); err != nil {
@@ -155,7 +155,7 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	// be refused before the table they point at exists. Turn them off
 	// around the transaction and check every key before committing.
 	sqliteKeys := false
-	if o.Transaction && c.Config.Driver == model.DriverSQLite {
+	if o.Transaction && c.Config.Driver.Family() == model.DriverSQLite {
 		on, err := c.sqliteForeignKeys(ctx)
 		if err != nil {
 			return res, err
@@ -290,7 +290,7 @@ type CSVImportOptions struct {
 
 // maxParams is a safe number of bind parameters per statement.
 func (d Dialect) maxParams() int {
-	if d.kind == model.DriverSQLite {
+	if d.family == model.DriverSQLite {
 		return 30000
 	}
 	return 60000
@@ -454,10 +454,10 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	sw.printf("-- GoTable dump of %s (%s)\n-- Tables: %d, views: %d\n\n", c.Config.Name, ver, len(tables), len(views))
 
 	var post []string
-	switch c.Config.Driver {
+	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		sw.printf("SET client_encoding = 'UTF8';\nSET standard_conforming_strings = on;\n\n")
-	case model.DriverMySQL, model.DriverMariaDB:
+	case model.DriverMySQL:
 		sw.printf("SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n\n")
 	case model.DriverSQLite:
 		sw.printf("PRAGMA foreign_keys = OFF;\nBEGIN TRANSACTION;\n\n")
@@ -468,7 +468,7 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 		}
 		for i := len(tables) - 1; i >= 0; i-- {
 			cascade := ""
-			if c.Config.Driver == model.DriverPostgres {
+			if c.Config.Driver.Family() == model.DriverPostgres {
 				cascade = " CASCADE"
 			}
 			sw.printf("DROP TABLE IF EXISTS %s%s;\n", d.QuoteIdent(tables[i].Name), cascade)
@@ -476,7 +476,7 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 		sw.printf("\n")
 	}
 	var seqs []pgSequence
-	if o.Structure && c.Config.Driver == model.DriverPostgres && len(tables) > 0 {
+	if o.Structure && c.Config.Driver.Family() == model.DriverPostgres && len(tables) > 0 {
 		var err error
 		if seqs, err = c.pgSequences(ctx, tables[0].Schema); err != nil {
 			return err
@@ -572,8 +572,8 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			}
 		}
 	}
-	switch c.Config.Driver {
-	case model.DriverMySQL, model.DriverMariaDB:
+	switch c.Config.Driver.Family() {
+	case model.DriverMySQL:
 		sw.printf("SET FOREIGN_KEY_CHECKS = 1;\n")
 	case model.DriverSQLite:
 		sw.printf("COMMIT;\nPRAGMA foreign_keys = ON;\n")
@@ -630,7 +630,7 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 	defer c.mu.Unlock()
 	d := c.Dialect
 	name := d.QuoteIdent(o.Name)
-	switch c.Config.Driver {
+	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		rows, err := c.conn.QueryContext(ctx, `SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
 				pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text
@@ -702,7 +702,7 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 			post[len(post)-1] = strings.Replace(post[len(post)-1], " ON "+o.Schema+".", " ON ", 1)
 		}
 		return "CREATE TABLE " + name + " (\n" + strings.Join(lines, ",\n") + "\n)", post, nil
-	case model.DriverMySQL, model.DriverMariaDB:
+	case model.DriverMySQL:
 		var tn, ddl string
 		if err := c.conn.QueryRowContext(ctx, "SHOW CREATE TABLE "+d.QualifiedName(TableRef{Schema: o.Schema, Name: o.Name})).Scan(&tn, &ddl); err != nil {
 			return "", nil, err
@@ -720,7 +720,7 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 
 // dumpView returns a CREATE VIEW statement without a schema.
 func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
-	switch c.Config.Driver {
+	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		if err := c.lock(ctx); err != nil {
 			return "", err
@@ -736,7 +736,7 @@ func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
 			return "CREATE MATERIALIZED VIEW " + c.Dialect.QuoteIdent(o.Name) + " AS\n" + def, nil
 		}
 		return "CREATE OR REPLACE VIEW " + c.Dialect.QuoteIdent(o.Name) + " AS\n" + def, nil
-	case model.DriverMySQL, model.DriverMariaDB:
+	case model.DriverMySQL:
 		def, err := c.Definition(ctx, o)
 		if err != nil {
 			return "", err

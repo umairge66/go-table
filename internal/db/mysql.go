@@ -118,6 +118,9 @@ func (mysqlEngine) serverVersion(ctx context.Context, c *Conn) (string, error) {
 	if strings.Contains(strings.ToLower(v), "mariadb") {
 		return "MariaDB " + v, err
 	}
+	if _, tidb, ok := strings.Cut(v, "-TiDB-"); ok { // 8.0.11-TiDB-v8.5.1
+		return "TiDB " + tidb, err
+	}
 	return "MySQL " + v, err
 }
 
@@ -353,11 +356,17 @@ func (mysqlEngine) tableInfo(ctx context.Context, c *Conn, t TableRef) (TableInf
 	if c.Config.Driver == model.DriverMariaDB {
 		match = " AND cc.TABLE_NAME = tc.TABLE_NAME"
 	}
-	rows, err := c.conn.QueryContext(ctx, `SELECT cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+	q := `SELECT cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
 		FROM information_schema.TABLE_CONSTRAINTS tc
-		JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME`+match+`
+		JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME` + match + `
 		WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'CHECK'
-		ORDER BY cc.CONSTRAINT_NAME`, t.Schema, t.Name)
+		ORDER BY cc.CONSTRAINT_NAME`
+	if c.Config.Driver == model.DriverTiDB {
+		// TiDB leaves CHECKs out of TABLE_CONSTRAINTS; its own table names the table.
+		q = `SELECT CONSTRAINT_NAME, CHECK_CLAUSE FROM information_schema.TIDB_CHECK_CONSTRAINTS
+			WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ? ORDER BY CONSTRAINT_NAME`
+	}
+	rows, err := c.conn.QueryContext(ctx, q, t.Schema, t.Name)
 	if err != nil {
 		return ti, nil // older servers have no CHECK constraints
 	}

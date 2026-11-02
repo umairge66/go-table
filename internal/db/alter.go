@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
@@ -132,7 +133,7 @@ func BuildAlter(d Dialect, t TableRef, st TableState, ops []AlterOp) (AlterPlan,
 	if len(ops) == 0 {
 		return AlterPlan{}, errors.New("nothing to change")
 	}
-	if d.kind == model.DriverSQLite {
+	if d.family == model.DriverSQLite {
 		for _, op := range ops {
 			if sqliteNeedsRebuild(st, op) {
 				return buildSQLiteRebuild(d, t, st, ops)
@@ -248,6 +249,13 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		switch {
 		case d.mysqlLike():
 			return []string{alter + "DROP INDEX " + d.QuoteIdent(x.Name) + ";"}, nil
+		case d.kind == model.DriverCockroachDB:
+			// CockroachDB drops UNIQUE constraints only as indexes: table@index.
+			drop := "DROP INDEX " + d.QualifiedName(t) + "@" + d.QuoteIdent(x.Name)
+			if x.Constraint {
+				drop += " CASCADE"
+			}
+			return []string{drop + ";"}, nil
 		case x.Constraint:
 			return []string{alter + "DROP CONSTRAINT " + d.QuoteIdent(x.Name) + ";"}, nil
 		}
@@ -265,7 +273,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if x.Primary && d.mysqlLike() {
 			return nil, errors.New("the primary key is always called PRIMARY")
 		}
-		switch d.kind {
+		switch d.family {
 		case model.DriverPostgres:
 			return []string{"ALTER INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name}) + " RENAME TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverSQLite:
@@ -339,7 +347,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if strings.Contains(ck.Expression, ";") {
 			return nil, errors.New("the condition can't contain ';'")
 		}
-		if d.kind == model.DriverSQLite {
+		if d.family == model.DriverSQLite {
 			return nil, errors.New("SQLite can't add a CHECK constraint to an existing table")
 		}
 		s := alter + "ADD "
@@ -369,7 +377,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		return []string{alter + "RENAME TO " + target + ";"}, nil
 
 	case AlterTableComment:
-		switch d.kind {
+		switch d.family {
 		case model.DriverSQLite:
 			return nil, errors.New("SQLite tables have no comments")
 		case model.DriverPostgres:
@@ -421,7 +429,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		return []string{alter + strings.Join(parts, ", ") + ";"}, nil
 
 	case AlterTruncate:
-		if d.kind == model.DriverSQLite {
+		if d.family == model.DriverSQLite {
 			return []string{"DELETE FROM " + tbl + ";"}, nil
 		}
 		return []string{"TRUNCATE TABLE " + tbl + ";"}, nil
@@ -451,7 +459,7 @@ func foreignKeyClause(d Dialect, t TableRef, fk ForeignKeyDef) (string, error) {
 		ref.Schema = t.Schema
 	}
 	refName := d.QualifiedName(ref)
-	if d.kind == model.DriverSQLite {
+	if d.family == model.DriverSQLite {
 		if ref.Schema != t.Schema {
 			return "", errors.New("SQLite foreign keys can only refer to tables in the same database")
 		}
@@ -485,11 +493,11 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 		return nil, fmt.Errorf("a %s index can't be unique", strings.ToUpper(kind))
 	case kind != "" && method != "":
 		return nil, fmt.Errorf("a %s index has no method", strings.ToUpper(kind))
-	case d.kind == model.DriverPostgres && !slices.Contains(pgMethods, method):
+	case d.family == model.DriverPostgres && !slices.Contains(pgMethods, method):
 		return nil, fmt.Errorf("unknown index method %q", x.Method)
 	case d.mysqlLike() && !slices.Contains(myMethods, method):
 		return nil, fmt.Errorf("unknown index method %q", x.Method)
-	case d.kind == model.DriverSQLite && method != "" && method != "btree":
+	case d.family == model.DriverSQLite && method != "" && method != "btree":
 		return nil, errors.New("SQLite indexes are always B-trees")
 	}
 	name := strings.TrimSpace(x.Name)
@@ -522,13 +530,13 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 	if x.Unique {
 		s += "UNIQUE "
 	}
-	if d.kind == model.DriverSQLite {
+	if d.family == model.DriverSQLite {
 		// The index goes in the table's database; the table name stays bare.
 		s += "INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: name}) + " ON " + d.QuoteIdent(t.Name)
 	} else {
 		s += "INDEX " + d.QuoteIdent(name) + " ON " + d.QualifiedName(t)
 	}
-	if method != "" && d.kind == model.DriverPostgres {
+	if method != "" && d.family == model.DriverPostgres {
 		s += " USING " + method
 	}
 	return []string{s + " " + cols + ";"}, nil
@@ -558,8 +566,8 @@ func buildModifyColumn(d Dialect, t TableRef, st TableState, op AlterOp) ([]stri
 		}
 	}
 	alter := "ALTER TABLE " + d.QualifiedName(t) + " "
-	switch d.kind {
-	case model.DriverMySQL, model.DriverMariaDB:
+	switch d.family {
+	case model.DriverMySQL:
 		extra := ""
 		if op.AutoIncrement {
 			extra = " AUTO_INCREMENT"
@@ -655,7 +663,7 @@ func (c *Conn) loadTableState(ctx context.Context, t TableRef) (TableState, erro
 	if st.Info, err = c.eng.tableInfo(ctx, c, t); err != nil {
 		return st, err
 	}
-	if c.Config.Driver == model.DriverSQLite {
+	if c.Config.Driver.Family() == model.DriverSQLite {
 		sq, err := loadSQLiteTable(ctx, c, t)
 		if err != nil {
 			return st, err
@@ -683,8 +691,30 @@ func (c *Conn) Alter(ctx context.Context, t TableRef, ops []AlterOp, dryRun bool
 	if dryRun {
 		return preview, nil
 	}
+	if err := c.checksEnforced(ctx, ops); err != nil {
+		return preview, err
+	}
 	if plan.Rebuild {
 		return preview, c.runRebuild(ctx, t, plan)
 	}
 	return preview, c.runDDLLocked(ctx, plan.Statements)
+}
+
+// errTiDBChecksOff: TiDB accepts ADD CHECK but drops the constraint unless
+// the server enforces them; say so instead of losing it silently.
+var errTiDBChecksOff = errors.New("this TiDB server ignores CHECK constraints: an administrator can turn them on with SET GLOBAL tidb_enable_check_constraint = ON")
+
+// checksEnforced fails when ops add a CHECK constraint the server would ignore.
+func (c *Conn) checksEnforced(ctx context.Context, ops []AlterOp) error {
+	if c.Config.Driver != model.DriverTiDB || !slices.ContainsFunc(ops, func(op AlterOp) bool { return op.Kind == AlterAddCheck }) {
+		return nil
+	}
+	var on sql.NullString
+	if err := c.conn.QueryRowContext(ctx, "SELECT @@global.tidb_enable_check_constraint").Scan(&on); err != nil {
+		return nil // older TiDB without the setting: let the server decide
+	}
+	if on.String == "0" || strings.EqualFold(on.String, "OFF") {
+		return errTiDBChecksOff
+	}
+	return nil
 }

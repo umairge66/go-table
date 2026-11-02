@@ -7,7 +7,7 @@ import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import type { Driver } from '../types'
+import { forDriver, type Driver, type PerDriver } from '../types'
 
 const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--accent)', fontWeight: '600' },
@@ -20,7 +20,7 @@ const highlight = HighlightStyle.define([
   { tag: t.special(t.name), color: 'var(--err)' },
 ])
 
-const dialects: Record<Driver, SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite }
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */
@@ -86,7 +86,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
           lineNumbers(), highlightActiveLineGutter(), history(), drawSelection(), indentOnInput(), bracketMatching(),
           closeBrackets(), autocompletion({ icons: false }), highlightActiveLine(), highlightSelectionMatches(),
           syntaxHighlighting(highlight),
-          lang.current.of(sql({ dialect: dialects[p.driver], schema: p.tables, upperCaseKeywords: true })),
+          lang.current.of(sql({ dialect: forDriver(dialects, p.driver), schema: p.tables, upperCaseKeywords: true })),
           placeholder('Write SQL…   Ctrl+↵ runs the statement under the cursor · Ctrl+Shift+↵ runs everything · Ctrl+I formats'),
           EditorState.readOnly.of(!!p.readOnly),
           EditorView.editable.of(!p.readOnly),
@@ -108,7 +108,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
   }, [])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: lang.current.reconfigure(sql({ dialect: dialects[p.driver], schema: p.tables, upperCaseKeywords: true })) })
+    view.current?.dispatch({ effects: lang.current.reconfigure(sql({ dialect: forDriver(dialects, p.driver), schema: p.tables, upperCaseKeywords: true })) })
   }, [p.driver, p.tables])
 
   useEffect(() => {

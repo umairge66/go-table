@@ -6,7 +6,7 @@ import { Button, Field, Input, Modal, errorParts, useToast } from '../components
 import { nativeDialogs } from '../lib/native'
 import { examplePath } from '../lib/platform'
 import { chooseSaveLocation } from '../lib/saveFile'
-import type { Connection, SessionInfo } from '../types'
+import { family, type Connection, type SessionInfo } from '../types'
 
 /**
  * CreateDatabaseDialog creates a database (or PostgreSQL schema). SQLite has
@@ -22,9 +22,9 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
   const toast = useToast()
   const conn = session.connection
   const driver = conn.driver
-  const pg = driver === 'postgres'
-  const sqlite = driver === 'sqlite'
-  const [db, setDb] = useState<NewDatabase>({ name: '', kind: 'database', charset: driver === 'mysql' || driver === 'mariadb' ? 'utf8mb4' : '' })
+  const pg = family(driver) === 'postgres'
+  const sqlite = family(driver) === 'sqlite'
+  const [db, setDb] = useState<NewDatabase>({ name: '', kind: 'database', charset: family(driver) === 'mysql' ? 'utf8mb4' : '' })
   const [preview, setPreview] = useState('')
   const [problem, setProblem] = useState('')
   const [saving, setSaving] = useState(false)
@@ -106,7 +106,7 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
           <Input autoFocus value={db.name} placeholder={sqlite ? 'e.g. inventory' : 'e.g. analytics'} aria-label="Database name"
             onChange={(e) => { setDb({ ...db, name: e.target.value }); setPicked(null) }} />
         </Field>
-        {(driver === 'mysql' || driver === 'mariadb') && (
+        {(family(driver) === 'mysql') && (
           <Field label="Character set" hint="utf8mb4 stores any text, including emoji.">
             <Input mono value={db.charset} onChange={(e) => setDb({ ...db, charset: e.target.value })} aria-label="Character set" />
           </Field>

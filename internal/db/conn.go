@@ -550,7 +550,7 @@ func (c *Conn) queryStrings(ctx context.Context, q string, args ...any) ([]strin
 // CurrentDatabase returns the database the session is connected to: the
 // PostgreSQL database, the MySQL default database, or the SQLite file name.
 func (c *Conn) CurrentDatabase(ctx context.Context) string {
-	switch c.Config.Driver {
+	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		if err := c.lock(ctx); err != nil {
 			return c.Config.DBName

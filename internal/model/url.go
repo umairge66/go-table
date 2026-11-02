@@ -10,6 +10,7 @@ import (
 
 // ParseURL builds a connection from a connection string such as
 // postgres://user:pass@host:5432/db?sslmode=require, mysql://…, mariadb://…,
+// cockroachdb://…, yugabytedb://…, tidb://…,
 // sqlite:///path/to/file.db or a plain path to a .db/.sqlite file. The
 // password, if present, is returned separately so it can go to the keyring.
 func ParseURL(raw string) (*Connection, string, error) {
@@ -39,6 +40,12 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverMySQL
 	case "mariadb":
 		d = DriverMariaDB
+	case "cockroachdb", "cockroach", "crdb":
+		d = DriverCockroachDB
+	case "yugabytedb", "yugabyte", "ysql":
+		d = DriverYugabyteDB
+	case "tidb":
+		d = DriverTiDB
 	case "sqlite", "sqlite3", "file":
 		c := NewConnection(DriverSQLite)
 		c.Path = u.Path
@@ -72,10 +79,10 @@ func ParseURL(raw string) (*Connection, string, error) {
 	}
 	c.DBName = strings.TrimPrefix(u.Path, "/")
 	q := u.Query()
-	if m := q.Get("sslmode"); m != "" && d == DriverPostgres {
+	if m := q.Get("sslmode"); m != "" && d.Family() == DriverPostgres {
 		c.SSLMode = m
 	}
-	if m := q.Get("ssl-mode"); m != "" && d != DriverPostgres {
+	if m := q.Get("ssl-mode"); m != "" && d.Family() == DriverMySQL {
 		c.SSLMode = strings.ToLower(m)
 	}
 	c.Name = c.Host
