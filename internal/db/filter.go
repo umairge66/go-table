@@ -93,6 +93,10 @@ func (w *whereBuilder) condition(f Filter, columns []string) (string, error) {
 		if not {
 			op = "NOT " + op
 		}
+		if w.d.kind == model.DriverSingleStore {
+			// Its default collation (utf8mb4_bin) compares case-sensitively.
+			return "LOWER(" + w.d.TextExpr(f.Column) + ") " + op + " LOWER(" + w.bind(pattern) + ")" + w.d.likeEscape()
+		}
 		return w.d.TextExpr(f.Column) + " " + op + " " + w.bind(pattern) + w.d.likeEscape()
 	}
 	switch f.Op {

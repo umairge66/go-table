@@ -5,7 +5,7 @@ import { api, ApiError, type NewColumn, type TypeInfo } from '../api'
 import { Button, IconButton, Select, Switch, errorParts, useToast } from '../components/ui'
 import { TypeSelect } from '../components/TypeSelect'
 import { category, findType, groupOf, has, paramProblem, typeString, type TypeSpec } from '../lib/sqlTypes'
-import { family, features, forDriver, type PerDriver, type SessionInfo } from '../types'
+import { family, features, forDriver, tableOptions, type PerDriver, type SessionInfo } from '../types'
 import { EXPRESSIONS } from './ColumnDialog'
 
 type IndexKind = '' | 'primary' | 'unique' | 'index' | 'fulltext'
@@ -360,7 +360,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
             <Stat label="Indexes" value={String(indexes)} />
           </div>
 
-          {(mysql || clickhouse || (family(driver) === 'sqlite' && info?.strict)) && (
+          {(tableOptions(driver) || clickhouse || (family(driver) === 'sqlite' && info?.strict)) && (
             <section className="rounded-xl border border-line bg-panel p-3.5" aria-label="Table options">
               <div className="mb-3 flex items-center gap-2 text-[12.5px] font-semibold"><Settings2 className="size-3.5 text-muted" /> Table options</div>
               {clickhouse ? (
@@ -370,7 +370,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
                   </Select>
                   <div className="mt-1 text-[11.5px] text-muted">MergeTree engines sort the rows by the primary key.</div>
                 </Labeled>
-              ) : mysql ? (
+              ) : tableOptions(driver) ? (
                 <div className="space-y-2.5">
                   <Labeled label="Storage engine">
                     <Select value={engine} onChange={(e) => setEngine(e.target.value)} aria-label="Storage engine">

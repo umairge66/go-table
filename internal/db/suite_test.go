@@ -224,6 +224,9 @@ func runSuite(t *testing.T, c *Conn) {
 		}
 		nt2 := NewTable{Name: "gt_designed", Columns: cols}
 		switch {
+		case c.Config.Driver == model.DriverSingleStore: // no storage engines; tables are rowstore or columnstore
+			cols[1].Collation = "utf8mb4_bin"
+			cols[1].Index = "index" // a unique key must contain the shard key (id)
 		case kind == model.DriverMySQL || kind == model.DriverMariaDB:
 			if len(info.Engines) == 0 || info.DefaultEngine == "" || len(info.Charsets) == 0 {
 				t.Fatalf("mysql type info %+v", info)
@@ -254,6 +257,7 @@ func runSuite(t *testing.T, c *Conn) {
 			t.Fatal(err)
 		}
 		var unique, plain bool
+		unique = c.Config.Driver == model.DriverSingleStore
 		for _, ix := range idx {
 			if len(ix.Columns) == 1 && ix.Columns[0] == "email" && ix.Unique {
 				unique = true
@@ -304,6 +308,9 @@ func runSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("foreign keys", func(t *testing.T) {
+		if c.Config.Driver == model.DriverSingleStore {
+			t.Skip("SingleStore has no foreign keys")
+		}
 		setup := []string{
 			"DROP TABLE IF EXISTS gt_fk_child",
 			"DROP TABLE IF EXISTS gt_fk_pair",
@@ -498,7 +505,8 @@ func runSuite(t *testing.T, c *Conn) {
 	t.Run("no primary key edits one row", func(t *testing.T) {
 		key := map[string]Value{"a": Text("1"), "b": Text("x")}
 		changes := []Change{{Kind: ChangeUpdate, Key: key, Values: map[string]Value{"b": Text("z")}}}
-		if kind == model.DriverMySQL || kind == model.DriverMSSQL {
+		// SingleStore can't limit an UPDATE to one row across its partitions.
+		if (kind == model.DriverMySQL || kind == model.DriverMSSQL) && c.Config.Driver != model.DriverSingleStore {
 			if err := c.ApplyChanges(ctx, nopk, changes, false); err != nil {
 				t.Fatal(err)
 			}

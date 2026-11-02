@@ -47,7 +47,15 @@ export const FEATURES: Record<Family, Features> = {
   clickhouse: { ...BASE, transactions: false, foreignKeys: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
     autoIncrement: false, collations: false, indexMethods: ['minmax', 'set(100)', 'bloom_filter', 'ngrambf_v1(3, 256, 2, 0)', 'tokenbf_v1(256, 2, 0)'] },
 }
-export const features = (d: Driver): Features => FEATURES[family(d)]
+/** DRIVER_FEATURES: where a server differs from its family's engine. */
+const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions?: boolean }>> = {
+  // A distributed database: no foreign keys or CHECKs; the primary key is
+  // the shard key, and table options are fixed at creation.
+  singlestore: { foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, tableOptions: false },
+}
+export const features = (d: Driver): Features => ({ ...FEATURES[family(d)], ...DRIVER_FEATURES[d] })
+/** tableOptions: storage engine, collation and AUTO_INCREMENT can change (MySQL family). */
+export const tableOptions = (d: Driver) => family(d) === 'mysql' && DRIVER_FEATURES[d]?.tableOptions !== false
 
 export type Tag = '' | 'local' | 'development' | 'testing' | 'staging' | 'production'
 

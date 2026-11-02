@@ -90,10 +90,11 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		if v := value("SELECT quantity FROM gt_alter WHERE id = 1"); v != "5" {
 			t.Errorf("data after rename: %q", v)
 		}
-		// Wider type, NOT NULL.
-		apply(parent, AlterOp{Kind: AlterModifyColumn, Column: "name", Def: &ColumnDef{Name: "name", Type: "VARCHAR(100)", Nullable: false}})
+		// Wider type, NOT NULL (SingleStore's columnstore tables can't add NOT NULL).
+		s2 := c.Config.Driver == model.DriverSingleStore
+		apply(parent, AlterOp{Kind: AlterModifyColumn, Column: "name", Def: &ColumnDef{Name: "name", Type: "VARCHAR(100)", Nullable: s2}})
 		// DuckDB keeps no VARCHAR length.
-		if n := col(parent, "name"); n.Nullable || kind != model.DriverDuckDB && !strings.Contains(strings.ToLower(n.Type), "100") {
+		if n := col(parent, "name"); n.Nullable != s2 || kind != model.DriverDuckDB && !strings.Contains(strings.ToLower(n.Type), "100") {
 			t.Errorf("name after modify: %+v", n)
 		}
 		if v := value("SELECT name FROM gt_alter WHERE id = 2"); v != "b" {
@@ -113,19 +114,22 @@ func runAlterSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("indexes", func(t *testing.T) {
-		if kind == model.DriverDuckDB {
+		if kind == model.DriverDuckDB || c.Config.Driver == model.DriverSingleStore {
 			// No index renames or primary key changes: add and drop only.
-			apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name_uq", Columns: []string{"name"}, Unique: true}})
+			// (A SingleStore unique key must contain the shard key.)
+			apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name_uq", Columns: []string{"name"}, Unique: kind == model.DriverDuckDB}})
 			if _, err := c.Alter(ctx, parent, []AlterOp{{Kind: AlterRenameIndex, Name: "gt_alter_name_uq", NewName: "x"}}, false); err == nil {
-				t.Error("DuckDB renamed an index")
+				t.Errorf("%s renamed an index", c.Config.Driver.Label())
 			}
 			apply(parent, AlterOp{Kind: AlterDropIndex, Name: "gt_alter_name_uq"})
 			return
 		}
-		apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name", Columns: []string{"name"}, Unique: true}})
+		// SingleStore: a unique key must contain the shard key (id).
+		uq := c.Config.Driver != model.DriverSingleStore
+		apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name", Columns: []string{"name"}, Unique: uq}})
 		apply(parent, AlterOp{Kind: AlterRenameIndex, Name: "gt_alter_name", NewName: "gt_alter_name_uq"})
 		x, ok := findIndex(state(parent), "gt_alter_name_uq")
-		if !ok || !x.Unique || !slices.Equal(x.Columns, []string{"name"}) {
+		if !ok || x.Unique != uq || !slices.Equal(x.Columns, []string{"name"}) {
 			t.Fatalf("renamed index %+v %v", x, ok)
 		}
 		apply(parent, AlterOp{Kind: AlterDropIndex, Name: "gt_alter_name_uq"})
@@ -134,7 +138,7 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		}
 		// Composite primary key and back. TiDB can't replace the primary
 		// key of a table it clusters by that key (Error 8200).
-		if c.Config.Driver == model.DriverTiDB {
+		if c.Config.Driver == model.DriverTiDB || c.Config.Driver == model.DriverSingleStore { // SingleStore: it's the shard key
 			return
 		}
 		apply(parent, AlterOp{Kind: AlterSetPrimaryKey, Columns: []string{"id", "name"}})
@@ -148,8 +152,15 @@ func runAlterSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("foreign keys", func(t *testing.T) {
-		if kind == model.DriverDuckDB {
+		switch {
+		case kind == model.DriverDuckDB:
 			t.Skip("DuckDB only takes foreign keys in CREATE TABLE")
+		case c.Config.Driver == model.DriverSingleStore:
+			if _, err := c.Alter(ctx, child, []AlterOp{{Kind: AlterAddForeignKey, ForeignKey: &ForeignKeyDef{Columns: []string{"parent_id"},
+				RefTable: "gt_alter", RefColumns: []string{"id"}}}}, false); err == nil {
+				t.Error("SingleStore took a foreign key")
+			}
+			t.Skip("SingleStore has no foreign keys")
 		}
 		apply(child, AlterOp{Kind: AlterAddForeignKey, ForeignKey: &ForeignKeyDef{Name: "gt_alter_child_parent", Columns: []string{"parent_id"},
 			RefTable: "gt_alter", RefColumns: []string{"id"}, OnDelete: "CASCADE"}})
@@ -171,7 +182,10 @@ func runAlterSuite(t *testing.T, c *Conn) {
 
 	if kind != model.DriverSQLite {
 		t.Run("checks and comment", func(t *testing.T) {
-			if kind == model.DriverDuckDB { // comments only
+			if kind == model.DriverDuckDB || c.Config.Driver == model.DriverSingleStore { // comments only
+				if _, err := c.Alter(ctx, parent, []AlterOp{{Kind: AlterAddCheck, Check: &CheckDef{Expression: "quantity >= 0"}}}, false); err == nil {
+					t.Error("CHECK constraint accepted")
+				}
 				apply(parent, AlterOp{Kind: AlterTableComment, Comment: "Parents"})
 				if cm := state(parent).Info.Comment; cm != "Parents" {
 					t.Errorf("comment %q", cm)
@@ -202,7 +216,7 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		})
 	}
 
-	if kind == model.DriverMySQL || kind == model.DriverMariaDB {
+	if kind == model.DriverMySQL && c.Config.Driver != model.DriverSingleStore {
 		t.Run("table options", func(t *testing.T) {
 			apply(parent, AlterOp{Kind: AlterTableOptions, Options: &TableOptions{Collation: "utf8mb4_bin", Convert: true}})
 			st := state(parent)
@@ -232,7 +246,7 @@ func runAlterSuite(t *testing.T, c *Conn) {
 	t.Run("rename, drop and empty", func(t *testing.T) {
 		apply(parent, AlterOp{Kind: AlterRenameTable, NewName: "gt_alter2"})
 		want := "1" // one row left after the cascading delete
-		if kind == model.DriverDuckDB {
+		if kind == model.DriverDuckDB || c.Config.Driver == model.DriverSingleStore {
 			want = "2" // no foreign key was added
 		}
 		if v := value("SELECT COUNT(*) FROM gt_alter2"); v != want {

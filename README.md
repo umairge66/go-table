@@ -35,7 +35,8 @@ inspector and a Data / Structure / Definition switch.
 | DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
-| TiDB, Percona Server, SingleStore, PlanetScale | MySQL protocol and SQL |
+| TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
+| SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
 
 Neon, Supabase and PlanetScale default to TLS; pasting a `postgres://` or
 `mysql://` URL with their host name picks them.

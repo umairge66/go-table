@@ -135,7 +135,8 @@ func singleRowTop(d Dialect, hasPK bool) string {
 }
 
 func singleRowSuffix(d Dialect, hasPK bool) string {
-	if !hasPK && d.mysqlLike() {
+	// SingleStore can't limit an UPDATE/DELETE that spans its partitions.
+	if !hasPK && d.mysqlLike() && d.kind != model.DriverSingleStore {
 		return " LIMIT 1"
 	}
 	return ""

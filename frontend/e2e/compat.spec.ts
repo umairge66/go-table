@@ -11,12 +11,13 @@ import { expect, test } from '@playwright/test'
 // scripts/test-dbs.sh with KEEP=1 prints the ports of its containers.
 const urls = (process.env.GOTABLE_E2E_COMPAT ?? '').split(/\s+/).filter(Boolean)
 const LABELS: Record<string, string> = { cockroachdb: 'CockroachDB', yugabytedb: 'YugabyteDB', tidb: 'TiDB', timescaledb: 'TimescaleDB',
-  percona: 'Percona Server', sqlserver: 'SQL Server', clickhouse: 'ClickHouse', duckdb: 'DuckDB' }
+  percona: 'Percona Server', singlestore: 'SingleStore', sqlserver: 'SQL Server', clickhouse: 'ClickHouse', duckdb: 'DuckDB' }
 
 /** The test table in each database's own SQL. */
 const DDL: Record<string, string> = {
   tidb: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen DATETIME)',
   percona: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen DATETIME)',
+  singlestore: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen DATETIME)',
   sqlserver: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name NVARCHAR(40) NOT NULL, seen DATETIME2)',
   clickhouse: 'CREATE TABLE gt_compat (id UInt32, name String, seen Nullable(DateTime)) ENGINE = MergeTree ORDER BY id',
 }

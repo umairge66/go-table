@@ -357,11 +357,12 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if x.Primary && d.mysqlLike() {
 			return nil, errors.New("the primary key is always called PRIMARY")
 		}
+		if d.kind == model.DriverSingleStore || d.family == model.DriverDuckDB || d.family == model.DriverClickHouse {
+			return nil, fmt.Errorf("%s can't rename an index; drop it and add it again", familyLabel(d))
+		}
 		switch d.family {
 		case model.DriverMSSQL:
 			return []string{mssqlRename(d, t, x.Name, n, "INDEX")}, nil
-		case model.DriverDuckDB, model.DriverClickHouse:
-			return nil, fmt.Errorf("%s can't rename an index; drop it and add it again", familyLabel(d))
 		case model.DriverPostgres:
 			return []string{"ALTER INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name}) + " RENAME TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverSQLite:
@@ -423,7 +424,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if fk == nil {
 			return nil, errors.New("missing foreign key")
 		}
-		if d.family == model.DriverDuckDB || d.family == model.DriverClickHouse {
+		if d.family == model.DriverDuckDB || d.family == model.DriverClickHouse || d.kind == model.DriverSingleStore {
 			return nil, fmt.Errorf("%s can't add a foreign key to an existing table", familyLabel(d))
 		}
 		if err := checkColumns(st, fk.Columns, "foreign key"); err != nil {
@@ -458,6 +459,9 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		}
 		if d.family == model.DriverSQLite || d.family == model.DriverDuckDB {
 			return nil, fmt.Errorf("%s can't add a CHECK constraint to an existing table", familyLabel(d))
+		}
+		if d.kind == model.DriverSingleStore {
+			return nil, errors.New("SingleStore has no CHECK constraints")
 		}
 		s := alter + "ADD "
 		n := strings.TrimSpace(ck.Name)
@@ -519,6 +523,9 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		o := op.Options
 		if !d.mysqlLike() {
 			return nil, errors.New("storage engine, collation and AUTO_INCREMENT are MySQL/MariaDB table options")
+		}
+		if d.kind == model.DriverSingleStore {
+			return nil, errors.New("SingleStore can't change these table options after the table is created")
 		}
 		if o == nil {
 			return nil, errors.New("missing table options")
@@ -724,6 +731,18 @@ func buildModifyColumn(d Dialect, t TableRef, st TableState, op AlterOp) ([]stri
 			extra = " AUTO_INCREMENT"
 		}
 		s := alter + "CHANGE COLUMN " + d.QuoteIdent(old.Name) + " " + columnSQL(d, def, !def.Nullable, extra)
+		if d.kind == model.DriverSingleStore {
+			// CHANGE only renames there; MODIFY restates the column.
+			var out []string
+			if def.Name != old.Name {
+				out = append(out, alter+"CHANGE "+d.QuoteIdent(old.Name)+" "+d.QuoteIdent(def.Name)+";")
+			}
+			s = alter + "MODIFY COLUMN " + columnSQL(d, def, !def.Nullable, extra)
+			if def.Position != "" {
+				return nil, errors.New("SingleStore can't move a column")
+			}
+			return append(out, s+";"), nil
+		}
 		switch {
 		case def.Position == "first":
 			s += " FIRST"

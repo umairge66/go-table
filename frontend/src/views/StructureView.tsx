@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, KeyRound, Link2, ListOrdered
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
 
@@ -341,7 +341,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
             <Button disabled={comment === (info?.comment ?? '')} onClick={() => run([{ kind: 'table_comment', comment }], 'Change the table comment', { done: 'Comment saved' })}>Save</Button>
           </div>
         )}
-        {mysql && (
+        {tableOptions(driver) && (
           <div className="space-y-2">
             <div className="grid grid-cols-[1fr_1.4fr_1fr] gap-3">
               <Field label="Storage engine">
