@@ -68,7 +68,10 @@ function measure(columns: GridColumn[], rowCount: number, cell: GridProps['cell'
 export const Grid = memo(function Grid(p: GridProps) {
   const { columns, rowCount, cell } = p
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [widths, setWidths] = useState<number[]>(() => measure(columns, rowCount, cell))
+  // base: each column's width from its contents, or as the user dragged it.
+  const [base, setBase] = useState<number[]>(() => measure(columns, rowCount, cell))
+  // userSized: a column was resized by hand; then widths stay exactly so.
+  const [userSized, setUserSized] = useState(false)
   const [sel, setSel] = useState<{ r: number; c: number } | null>(null)
   const [rows, setRows] = useState<Set<number>>(new Set())
   const [anchor, setAnchor] = useState<number | null>(null)
@@ -76,9 +79,61 @@ export const Grid = memo(function Grid(p: GridProps) {
 
   const colKey = columns.map((c) => c.name).join('\u0000')
   useEffect(() => {
-    setWidths(measure(columns, rowCount, cell))
+    setBase(measure(columns, rowCount, cell))
+    setUserSized(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colKey])
+
+  // The viewport: horizontal scroll position and width (for the visible
+  // columns and for stretching narrow tables).
+  const [view, setView] = useState({ left: 0, width: 1600 })
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let frame = 0
+    let lastWidth = el.clientWidth
+    const update = () => {
+      frame = 0
+      setView((v) => (v.left === el.scrollLeft && v.width === el.clientWidth ? v : { left: el.scrollLeft, width: el.clientWidth }))
+    }
+    const later = () => { if (!frame) frame = requestAnimationFrame(update) }
+    let rebuilding = false
+    const resized = () => {
+      // WebKitGTK keeps painting a styled scrollbar where it was before the
+      // grid changed width (e.g. after closing the row inspector): rebuild
+      // the scrollbars by turning overflow off for a frame. That changes the
+      // width too, so resizes during the rebuild are its own and ignored.
+      if (!rebuilding && el.clientWidth !== lastWidth) {
+        rebuilding = true
+        const { scrollTop, scrollLeft } = el
+        el.style.overflow = 'hidden'
+        requestAnimationFrame(() => {
+          el.style.overflow = ''
+          el.scrollTop = scrollTop
+          el.scrollLeft = scrollLeft
+          requestAnimationFrame(() => { lastWidth = el.clientWidth; rebuilding = false; later() })
+        })
+      }
+      later()
+    }
+    update()
+    el.addEventListener('scroll', later, { passive: true })
+    const ro = new ResizeObserver(resized)
+    ro.observe(el)
+    return () => { el.removeEventListener('scroll', later); ro.disconnect(); cancelAnimationFrame(frame) }
+  }, [])
+
+  // A table narrower than the view is stretched to fill it, the extra
+  // space shared in proportion to the columns' widths, until a column is
+  // resized by hand.
+  const widths = useMemo(() => {
+    const avail = view.width - GUTTER
+    const sum = base.reduce((a, b) => a + b, 0)
+    if (userSized || sum === 0 || sum >= avail) return base
+    const out = base.map((w) => Math.floor((w * avail) / sum))
+    out[out.length - 1] += avail - out.reduce((a, b) => a + b, 0)
+    return out
+  }, [base, view.width, userSized])
   useEffect(() => {
     setSel(null)
     setRows(new Set())
@@ -86,6 +141,9 @@ export const Grid = memo(function Grid(p: GridProps) {
   }, [p.dataKey, colKey])
 
   const total = useMemo(() => GUTTER + widths.reduce((a, b) => a + b, 0), [widths])
+  // Rows and the header span at least the view, so stripes and lines reach
+  // the edge even when the columns don't.
+  const span = Math.max(total, view.width)
   const numeric = useMemo(() => columns.map((c) => isNumeric(c.type)), [columns])
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 12 })
 
@@ -190,7 +248,10 @@ export const Grid = memo(function Grid(p: GridProps) {
     e.stopPropagation()
     const start = e.clientX
     const w0 = widths[c]
-    const move = (ev: MouseEvent) => setWidths((w) => w.map((x, i) => (i === c ? Math.max(48, w0 + ev.clientX - start) : x)))
+    // From now on the columns keep the widths shown (no more stretching).
+    setBase(widths)
+    setUserSized(true)
+    const move = (ev: MouseEvent) => setBase((w) => w.map((x, i) => (i === c ? Math.max(48, w0 + ev.clientX - start) : x)))
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
@@ -206,22 +267,6 @@ export const Grid = memo(function Grid(p: GridProps) {
     for (let i = 0; i < widths.length; i++) out[i + 1] = out[i] + widths[i]
     return out
   }, [widths])
-  const [view, setView] = useState({ left: 0, width: 1600 })
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    let frame = 0
-    const update = () => {
-      frame = 0
-      setView((v) => (v.left === el.scrollLeft && v.width === el.clientWidth ? v : { left: el.scrollLeft, width: el.clientWidth }))
-    }
-    const later = () => { if (!frame) frame = requestAnimationFrame(update) }
-    update()
-    el.addEventListener('scroll', later, { passive: true })
-    const ro = new ResizeObserver(later)
-    ro.observe(el)
-    return () => { el.removeEventListener('scroll', later); ro.disconnect(); cancelAnimationFrame(frame) }
-  }, [])
   // The visible range, with a few columns either side so Tab and quick
   // horizontal scrolls don't show gaps; it only changes as columns enter.
   const [first, last] = useMemo(() => {
@@ -265,9 +310,9 @@ export const Grid = memo(function Grid(p: GridProps) {
       data-testid="grid"
       className="relative h-full overflow-auto bg-panel font-mono text-[12.5px] outline-none"
     >
-      <div style={{ width: total, height: virt.getTotalSize() + ROW_H, position: 'relative' }}>
+      <div style={{ width: span, height: virt.getTotalSize() + ROW_H, position: 'relative' }}>
         {/* header */}
-        <div className="sticky top-0 z-20 flex h-[30px] border-b border-line bg-panel-2 font-sans text-[12px] font-semibold text-fg-2" style={{ width: total }}>
+        <div className="sticky top-0 z-20 flex h-[30px] border-b border-line bg-panel-2 font-sans text-[12px] font-semibold text-fg-2" style={{ width: span }}>
           <div className="sticky left-0 z-10 shrink-0 border-r border-line bg-panel-2" style={{ width: GUTTER }} />
           {pad > 0 && <div className="shrink-0" style={{ width: pad }} />}
           {cols.map((col, i) => {
@@ -289,7 +334,9 @@ export const Grid = memo(function Grid(p: GridProps) {
                   {sortOf(col.name) === 'asc' && <ArrowUp className="size-3.5" />}
                   {sortOf(col.name) === 'desc' && <ArrowDown className="size-3.5" />}
                 </span>
-                <div onMouseDown={resize(c)} onClick={(e) => e.stopPropagation()} className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-accent/40" />
+                {/* The last column's handle stays inside, or it would widen the table. */}
+                <div onMouseDown={resize(c)} onClick={(e) => e.stopPropagation()}
+                  className={clsx('absolute top-0 z-10 h-full w-2 cursor-col-resize hover:bg-accent/40', c === columns.length - 1 ? 'right-0' : '-right-1')} />
               </div>
             )
           })}
@@ -298,7 +345,7 @@ export const Grid = memo(function Grid(p: GridProps) {
         {virt.getVirtualItems().map((vr) => {
           const r = vr.index
           return (
-            <GridRow key={r} r={r} top={vr.start + ROW_H} total={total} label={(p.rowOffset ?? 0) + r + 1}
+            <GridRow key={r} r={r} top={vr.start + ROW_H} total={span} label={(p.rowOffset ?? 0) + r + 1}
               columns={columns} widths={widths} first={first} last={last} pad={pad} numeric={numeric} cell={cell}
               rowSel={rows.has(r)} selCol={sel?.r === r ? sel.c : -1}
               editor={editing?.r === r ? editor : null} editCol={editing?.r === r ? editing.c : -1}
