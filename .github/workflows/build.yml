@@ -57,6 +57,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the notes read the commits since the previous tag
+      - name: Write the release notes
+        run: scripts/release-notes.sh "${{ github.ref_name }}" > "$RUNNER_TEMP/notes.md"
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -64,4 +69,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/notes.md
