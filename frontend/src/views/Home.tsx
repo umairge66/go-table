@@ -200,7 +200,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
             </>}>
             {connections.length
               ? 'Select a connection on the left to edit it, or double-click it to connect.'
-              : 'Connect to PostgreSQL, MySQL, MariaDB or SQLite. Passwords are kept in your system keyring, never in plain files.'}
+              : 'Connect to PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, DuckDB, ClickHouse and the servers compatible with them. Passwords are kept in your system keyring, never in plain files.'}
           </EmptyState>
         )}
       </main>

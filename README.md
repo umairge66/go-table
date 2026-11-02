@@ -244,6 +244,15 @@ GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
 GOTABLE_E2E_COMPAT="sqlserver://… clickhouse://… duckdb:///tmp/x.duckdb" make e2e  # one UI scenario per URL
 ```
 
+The screenshots in `docs/screenshots/` are taken by
+`frontend/e2e/screenshots.spec.ts` from a PostgreSQL database loaded with
+`scripts/screenshot-demo.sql`:
+
+```sh
+cd frontend && GOTABLE_SCREENSHOTS=../docs/screenshots \
+  GOTABLE_SCREENSHOT_PG=postgres://postgres:pw@127.0.0.1:5432/shop npx playwright test e2e/screenshots.spec.ts
+```
+
 
 ## Continuous integration and releases
 
