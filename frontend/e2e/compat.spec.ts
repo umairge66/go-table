@@ -26,7 +26,8 @@ test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_CO
   test.setTimeout(urls.length * 90_000)
   for (const url of urls) {
     const scheme = url.slice(0, url.indexOf(':'))
-    const label = LABELS[scheme]
+    // Plain postgres:// and mysql:// URLs of cloud services are told apart by host.
+    const label = /\.neon\.tech[:/]/.test(url) ? 'Neon' : /\.supabase\.(co|com)[:/]/.test(url) ? 'Supabase' : /\.psdb\.cloud[:/]/.test(url) ? 'PlanetScale' : LABELS[scheme]
     await test.step(label ?? url, async () => {
       const page = await browser.newPage()
       const errors: string[] = []

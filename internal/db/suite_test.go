@@ -111,6 +111,12 @@ func runSuite(t *testing.T, c *Conn) {
 				t.Fatalf("%q: %v %v", s, err, res)
 			}
 		}
+		defer func() { // leave nothing behind (the suite may run on a real database)
+			c.Execute(ctx, "DROP TABLE IF EXISTS gt_moods", 0)
+			if kind != model.DriverMySQL {
+				c.Execute(ctx, "DROP TYPE IF EXISTS gt_mood", 0)
+			}
+		}()
 		cols, err := c.Columns(ctx, TableRef{Schema: schema, Name: "gt_moods"})
 		if err != nil {
 			t.Fatal(err)
