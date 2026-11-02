@@ -5,15 +5,28 @@ import { expect, test } from '@playwright/test'
 //   cockroachdb://root@127.0.0.1:26257/defaultdb?sslmode=disable
 //   yugabytedb://yugabyte:yugabyte@127.0.0.1:5433/yugabyte?sslmode=disable
 //   tidb://root@127.0.0.1:4000/test
+//   sqlserver://sa:pw@127.0.0.1:1433?database=gotable
+//   clickhouse://gotable:pw@127.0.0.1:9000/gotable
+//   duckdb:///tmp/compat.duckdb
 // scripts/test-dbs.sh with KEEP=1 prints the ports of its containers.
 const urls = (process.env.GOTABLE_E2E_COMPAT ?? '').split(/\s+/).filter(Boolean)
-const LABELS: Record<string, string> = { cockroachdb: 'CockroachDB', yugabytedb: 'YugabyteDB', tidb: 'TiDB' }
+const LABELS: Record<string, string> = { cockroachdb: 'CockroachDB', yugabytedb: 'YugabyteDB', tidb: 'TiDB', timescaledb: 'TimescaleDB',
+  percona: 'Percona Server', sqlserver: 'SQL Server', clickhouse: 'ClickHouse', duckdb: 'DuckDB' }
+
+/** The test table in each database's own SQL. */
+const DDL: Record<string, string> = {
+  tidb: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen DATETIME)',
+  percona: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen DATETIME)',
+  sqlserver: 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name NVARCHAR(40) NOT NULL, seen DATETIME2)',
+  clickhouse: 'CREATE TABLE gt_compat (id UInt32, name String, seen Nullable(DateTime)) ENGINE = MergeTree ORDER BY id',
+}
 
 test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_COMPAT)', async ({ browser }) => {
   test.skip(!urls.length, 'set GOTABLE_E2E_COMPAT to cockroachdb://, yugabytedb:// or tidb:// URLs')
   test.setTimeout(urls.length * 90_000)
   for (const url of urls) {
-    const label = LABELS[url.slice(0, url.indexOf(':'))]
+    const scheme = url.slice(0, url.indexOf(':'))
+    const label = LABELS[scheme]
     await test.step(label ?? url, async () => {
       const page = await browser.newPage()
       const errors: string[] = []
@@ -35,11 +48,11 @@ test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_CO
         await editor.fill(sql)
         await page.keyboard.press('Control+Shift+Enter')
       }
-      const mysql = label === 'TiDB'
       await runSQL(`DROP TABLE IF EXISTS gt_compat;
-CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen ${mysql ? 'DATETIME' : 'TIMESTAMP'});
+${DDL[scheme] ?? 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen TIMESTAMP)'};
 INSERT INTO gt_compat VALUES (1, 'one', '2024-03-15 10:20:30'), (2, 'two', NULL);`)
-      await expect(page.getByText('2 row(s) affected').last()).toBeVisible()
+      // Three statements ran (ClickHouse reports no row count for the INSERT).
+      await expect.poll(() => page.getByText(/OK — \d+ row\(s\) affected/).count()).toBe(3)
       await page.keyboard.press('Control+w')
       await page.getByRole('button', { name: 'Refresh tables' }).click()
       await page.getByRole('navigation', { name: 'Tables' }).getByRole('button', { name: 'gt_compat', exact: true }).click()
@@ -57,7 +70,8 @@ INSERT INTO gt_compat VALUES (1, 'one', '2024-03-15 10:20:30'), (2, 'two', NULL)
       await page.keyboard.press('Control+s')
       await page.getByRole('dialog', { name: 'Review changes' }).getByRole('button', { name: 'Commit' }).click()
       await expect(page.getByRole('status').filter({ hasText: 'Saved 1 change' })).toBeVisible()
-      await expect(cells.nth(1)).toHaveText('one!')
+      // Without an ORDER BY the edited row may come back in another place.
+      await expect(view.getByRole('gridcell', { name: 'one!', exact: true })).toBeVisible()
 
       await view.getByRole('tab', { name: 'Structure' }).click()
       await expect(view.getByText('seen', { exact: true })).toBeVisible()

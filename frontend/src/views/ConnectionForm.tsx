@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, 
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, DRIVERS, family, forDriver, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
@@ -51,7 +51,10 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
   }, [initial, initialPassword])
 
   const set = <K extends keyof Connection>(k: K, v: Connection[K]) => setC((x) => ({ ...x, [k]: v }))
-  const file = family(c.driver) === 'sqlite'
+  const file = features(c.driver).file
+  const [supported, setSupported] = useState<string[] | null>(null)
+  useEffect(() => { api.drivers().then((r) => setSupported(r.supported)).catch(() => setSupported(null)) }, [])
+  const unsupported = (d: Driver) => !!supported && !supported.includes(d)
   const dirty = useMemo(() => JSON.stringify(c) !== JSON.stringify(initial) || Object.keys(secrets).length > 0, [c, initial, secrets])
 
   const setDriver = (d: Driver) => setC((x) => {
@@ -132,21 +135,43 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
         <Button type="button" variant="ghost" size="sm" icon={<ClipboardPaste className="size-3.5" />} onClick={() => setUrlOpen(true)}>Paste URL</Button>
       </div>
 
-      <div className="mb-4 grid grid-cols-4 gap-2" role="radiogroup" aria-label="Database type">
-        {DRIVERS.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            role="radio"
-            aria-checked={c.driver === d.id}
-            onClick={() => setDriver(d.id)}
-            className={clsx('flex flex-col items-center gap-1.5 rounded-xl border bg-panel py-3 text-[12.5px] font-medium transition-all',
-              c.driver === d.id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}
-          >
-            <DriverBadge driver={d.id} size={28} decorative />
-            {d.label}
-          </button>
-        ))}
+      <div className="mb-4" role="radiogroup" aria-label="Database type">
+        <div className="grid grid-cols-4 gap-2">
+          {DRIVERS.filter((d) => ENGINES.includes(d.id)).map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              role="radio"
+              aria-checked={c.driver === d.id}
+              disabled={unsupported(d.id)}
+              title={unsupported(d.id) ? `${d.label} isn't available in this build of GoTable` : undefined}
+              onClick={() => setDriver(d.id)}
+              className={clsx('flex flex-col items-center gap-1.5 rounded-xl border bg-panel py-3 text-[12.5px] font-medium transition-all disabled:opacity-40',
+                c.driver === d.id ? 'border-accent ring-3 ring-accent/15' : 'border-line enabled:hover:border-faint')}
+            >
+              <DriverBadge driver={d.id} size={28} decorative />
+              {d.label}
+            </button>
+          ))}
+        </div>
+        <div className="mb-1.5 mt-3 text-[11.5px] font-medium text-muted">Compatible servers and cloud services</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {DRIVERS.filter((d) => !ENGINES.includes(d.id)).map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              role="radio"
+              aria-checked={c.driver === d.id}
+              title={`${d.label}: works like ${driverInfo(ENGINES.find((e) => family(e) === d.family)!).label}${d.hosted ? ', over TLS' : ''}`}
+              onClick={() => setDriver(d.id)}
+              className={clsx('flex h-9 items-center gap-2 rounded-lg border bg-panel px-2 text-left text-[12px] font-medium transition-all',
+                c.driver === d.id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}
+            >
+              <DriverBadge driver={d.id} size={20} decorative />
+              <span className="truncate">{d.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <section className="space-y-3 rounded-xl border border-line bg-panel p-4">
@@ -178,12 +203,12 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
       <section className="mt-3 space-y-3 rounded-xl border border-line bg-panel p-4">
         {file ? (
           <Field label="Database file" hint="Absolute path. A new file is created if it doesn't exist.">
-            <Input mono value={c.path ?? ''} placeholder={examplePath('data/app.sqlite')} onChange={(e) => set('path', e.target.value)} />
+            <Input mono value={c.path ?? ''} placeholder={examplePath(family(c.driver) === 'duckdb' ? 'data/warehouse.duckdb' : 'data/app.sqlite')} onChange={(e) => set('path', e.target.value)} />
           </Field>
         ) : (
           <>
             <div className="grid grid-cols-[1fr_110px] gap-3">
-              <Field label="Host"><Input value={c.host ?? ''} placeholder="127.0.0.1" onChange={(e) => set('host', e.target.value)} /></Field>
+              <Field label="Host"><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
               <Field label="Port"><Input inputMode="numeric" value={c.port || ''} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -285,7 +310,7 @@ export function UrlDialog({ onClose, onParsed }: { onClose: () => void; onParsed
     }
   }
   return (
-    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, mariadb://, cockroachdb://, yugabytedb://, tidb:// or sqlite:///path — the password goes to your keyring." onClose={onClose}
+    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, sqlserver://, clickhouse://, sqlite:///path, duckdb:///path… (Neon, Supabase and PlanetScale are recognised by their host) — the password goes to your keyring." onClose={onClose}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={go} disabled={!url.trim()}>Fill in</Button></>}>
       <Input autoFocus mono value={url} placeholder="postgres://user:password@localhost:5432/shop" onChange={(e) => { setUrl(e.target.value); setErr('') }}
         onKeyDown={(e) => e.key === 'Enter' && go()} />

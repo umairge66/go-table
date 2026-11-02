@@ -43,6 +43,8 @@ var (
 	sqliteLiteral  = regexp.MustCompile(`(?i)^([+-]?\d+(\.\d+)?|'([^']|'')*'|null|true|false|current_(timestamp|date|time))$`)
 	sqliteStrict   = regexp.MustCompile(`(?i)^(int|integer|real|text|blob|any)$`)
 	optionName     = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+	mssqlIntType   = regexp.MustCompile(`(?i)^(tinyint|smallint|int|bigint|decimal\(\s*\d+\s*(,\s*0\s*)?\)|numeric\(\s*\d+\s*(,\s*0\s*)?\))$`)
+	chEngine       = regexp.MustCompile(`^[A-Za-z]+(\([^;]*\))?$`)
 )
 
 // indexName builds a readable index name within PostgreSQL's 63 bytes.
@@ -91,6 +93,12 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 			if !d.mysqlLike() {
 				return nil, fmt.Errorf("column %s: FULLTEXT indexes are a MySQL/MariaDB feature", n)
 			}
+		}
+		if c.Index == "unique" && d.family == model.DriverClickHouse {
+			return nil, fmt.Errorf("column %s: ClickHouse has no unique indexes", n)
+		}
+		switch c.Index {
+		case "", "unique", "index", "fulltext":
 		default:
 			return nil, fmt.Errorf("column %s: unknown index %q", n, c.Index)
 		}
@@ -114,6 +122,12 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 		if o.v == "" {
 			continue
 		}
+		if o.label == "storage engine" && d.family == model.DriverClickHouse {
+			if !chEngine.MatchString(o.v) {
+				return nil, fmt.Errorf("%q isn't a table engine", o.v)
+			}
+			continue
+		}
 		if !d.mysqlLike() {
 			return nil, fmt.Errorf("the %s is a MySQL/MariaDB table option", o.label)
 		}
@@ -123,7 +137,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 	}
 
 	ref := TableRef{Schema: schema, Name: name}
-	var lines, after []string
+	var before, lines, after []string
 	inlinePK := false
 	for _, c := range t.Columns {
 		n := strings.TrimSpace(c.Name)
@@ -144,6 +158,18 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 					return nil, fmt.Errorf("column %s: on MySQL and MariaDB an auto-increment column must be the primary key or indexed", n)
 				}
 				extra = " AUTO_INCREMENT"
+			case d.family == model.DriverMSSQL:
+				if !mssqlIntType.MatchString(typ) {
+					return nil, fmt.Errorf("column %s: auto-increment needs an integer type (int or bigint)", n)
+				}
+				extra = " IDENTITY(1,1)"
+			case d.family == model.DriverDuckDB:
+				// A sequence numbers the rows; it must exist before the table.
+				seq := TableRef{Schema: schema, Name: indexName(name, n, "seq")}
+				before = append(before, "CREATE SEQUENCE "+d.QualifiedName(seq)+";")
+				extra = " DEFAULT nextval(" + d.QuoteLiteral(Text(d.QualifiedName(seq))) + ")"
+			case d.family == model.DriverClickHouse:
+				return nil, fmt.Errorf("column %s: ClickHouse has no auto-increment columns; use a UUID (generateUUIDv4()) or a sequence from your application", n)
 			case d.family == model.DriverSQLite:
 				// SQLite only numbers rows for a single INTEGER PRIMARY KEY.
 				if !strings.EqualFold(typ, "integer") || !c.PrimaryKey || len(pk) != 1 {
@@ -167,7 +193,7 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 			return nil, errors.New("SQLite doesn't support column comments")
 		}
 	}
-	if len(pk) > 0 && !inlinePK {
+	if len(pk) > 0 && !inlinePK && d.family != model.DriverClickHouse {
 		q := make([]string, len(pk))
 		for i, p := range pk {
 			q[i] = d.QuoteIdent(p)
@@ -188,9 +214,11 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 			lines = append(lines, "FULLTEXT KEY "+d.QuoteIdent(indexName(name, n, "ft"))+" ("+qn+")")
 		case c.Index == "index" && d.mysqlLike():
 			lines = append(lines, "KEY "+d.QuoteIdent(indexName(name, n, "idx"))+" ("+qn+")")
+		case c.Index == "index" && d.family == model.DriverClickHouse:
+			lines = append(lines, "INDEX "+d.QuoteIdent(indexName(name, n, "idx"))+" "+qn+" TYPE minmax GRANULARITY 1")
 		case c.Index == "index":
 			idx := TableRef{Schema: schema, Name: indexName(name, n, "idx")}
-			if d.family == model.DriverPostgres {
+			if d.family == model.DriverPostgres || d.family == model.DriverMSSQL || d.family == model.DriverDuckDB {
 				// PostgreSQL index names belong to the table's schema implicitly.
 				after = append(after, fmt.Sprintf("CREATE INDEX %s ON %s (%s);", d.QuoteIdent(idx.Name), d.QualifiedName(ref), qn))
 			} else {
@@ -220,11 +248,39 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 	} else if comment != "" && d.family == model.DriverSQLite {
 		return nil, errors.New("SQLite doesn't support table comments")
 	}
+	if d.family == model.DriverClickHouse {
+		// The engine decides storage; MergeTree sorts (and indexes) by the key.
+		engine := t.Engine
+		if engine == "" {
+			engine = "MergeTree"
+		}
+		stmt += " ENGINE = " + engine
+		if strings.HasSuffix(engine, "MergeTree") {
+			order := "tuple()"
+			if len(pk) > 0 {
+				order = "(" + quoteList(d, pk) + ")"
+			}
+			stmt += " ORDER BY " + order
+		}
+		if comment != "" {
+			stmt += " COMMENT " + d.QuoteLiteral(Text(comment))
+		}
+	}
 	if t.Strict {
 		stmt += " STRICT"
 	}
-	out := append([]string{stmt + ";"}, after...)
-	if d.family == model.DriverPostgres {
+	out := append(append(before, stmt+";"), after...)
+	if d.family == model.DriverMSSQL {
+		if s := mssqlComment(d, ref, "", "", comment); s != "" {
+			out = append(out, s)
+		}
+		for _, c := range t.Columns {
+			if s := mssqlComment(d, ref, strings.TrimSpace(c.Name), "", c.Comment); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	if d.family == model.DriverPostgres || d.family == model.DriverDuckDB {
 		if comment != "" {
 			out = append(out, fmt.Sprintf("COMMENT ON TABLE %s IS %s;", d.QualifiedName(ref), d.QuoteLiteral(Text(comment))))
 		}
@@ -266,7 +322,17 @@ func BuildCreateDatabase(d Dialect, nd NewDatabase) (string, error) {
 	switch d.family {
 	case model.DriverSQLite:
 		return "", errors.New("SQLite keeps one database per file; create a new database file instead")
-	case model.DriverPostgres:
+	case model.DriverDuckDB:
+		if nd.Kind == "database" {
+			return "", errors.New("DuckDB keeps one database per file; create a schema, or a new database file")
+		}
+		return "CREATE SCHEMA " + d.QuoteIdent(name) + ";", nil
+	case model.DriverClickHouse:
+		if nd.Kind == "schema" {
+			return "", errors.New("on ClickHouse a schema is a database")
+		}
+		return "CREATE DATABASE " + d.QuoteIdent(name) + ";", nil
+	case model.DriverPostgres, model.DriverMSSQL:
 		switch nd.Kind {
 		case "", "database":
 			return "CREATE DATABASE " + d.QuoteIdent(name) + ";", nil
@@ -374,6 +440,25 @@ func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
 		}
+	case c.Dialect.family == model.DriverMSSQL:
+		info.CustomTypes, err = c.queryStrings(ctx, "SELECT name FROM sys.types WHERE is_user_defined = 1 ORDER BY name")
+		if err == nil {
+			// The database's own collation first, then the common case- and
+			// accent-sensitivity variants and binary ones (of ~5000).
+			info.Collations, err = c.queryStrings(ctx, `SELECT name FROM sys.fn_helpcollations()
+				WHERE name = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS sysname)
+				   OR name LIKE 'Latin1_General_100_C[IS]_A[IS]%' OR name LIKE '%[_]BIN2'
+				ORDER BY CASE WHEN name = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS sysname) THEN 0 ELSE 1 END, name`)
+		}
+	case c.Dialect.family == model.DriverDuckDB:
+		info.CustomTypes, err = c.queryStrings(ctx, "SELECT DISTINCT type_name FROM duckdb_types() WHERE NOT internal AND schema_name = ? ORDER BY 1", schema)
+		if err == nil {
+			info.Collations, err = c.queryStrings(ctx, "SELECT collname FROM pragma_collations() ORDER BY collname <> 'nocase', collname")
+		}
+	case c.Dialect.family == model.DriverClickHouse:
+		info.Engines, err = c.queryStrings(ctx, `SELECT name FROM system.table_engines
+			WHERE name LIKE '%MergeTree' OR name IN ('Memory', 'Log', 'TinyLog', 'StripeLog') ORDER BY name LIKE '%MergeTree' DESC, name`)
+		info.DefaultEngine = "MergeTree"
 	case c.Dialect.family == model.DriverSQLite:
 		info.Collations = []string{"BINARY", "NOCASE", "RTRIM"}
 		var v string

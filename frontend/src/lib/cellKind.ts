@@ -16,11 +16,15 @@ export function cellKind(type = '', values: string[] | undefined, driver: Driver
   if (values?.length) {
     return t.startsWith('set(') ? { kind: 'set', options: values } : { kind: 'choice', options: values.map((v) => ({ value: v, label: v === '' ? '(empty)' : v })) }
   }
-  // PostgreSQL reads booleans as true/false; MySQL's BOOLEAN is TINYINT(1) and SQLite stores 1/0.
-  if (family(driver) === 'postgres' && (t === 'boolean' || t === 'bool')) return { kind: 'choice', options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
+  // PostgreSQL, DuckDB, ClickHouse (Bool) and SQL Server (bit) read booleans as
+  // true/false; MySQL's BOOLEAN is TINYINT(1) and SQLite stores 1/0.
+  const f = family(driver)
+  const trueFalse = { kind: 'choice' as const, options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
+  if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse') && (t === 'boolean' || t === 'bool')) return trueFalse
+  if (f === 'sqlserver' && t === 'bit') return trueFalse
   if (/^(tinyint\(1\)|bool|boolean)(\s+unsigned)?$/.test(t)) return { kind: 'choice', options: [{ value: '1', label: '1 (true)' }, { value: '0', label: '0 (false)' }] }
-  if (t === 'date') return { kind: 'date' }
-  if (/^(datetime|timestamptz|timestamp|smalldatetime)\b/.test(t)) return { kind: 'datetime' }
+  if (t === 'date' || t === 'date32') return { kind: 'date' }
+  if (/^(datetime2|datetimeoffset|datetime64|datetime|timestamptz|timestamp|smalldatetime)\b/.test(t)) return { kind: 'datetime' }
   if (/^(timetz|time)\b/.test(t)) return { kind: 'time' }
   return { kind: 'text' }
 }

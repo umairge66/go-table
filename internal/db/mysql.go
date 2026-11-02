@@ -121,7 +121,17 @@ func (mysqlEngine) serverVersion(ctx context.Context, c *Conn) (string, error) {
 	if _, tidb, ok := strings.Cut(v, "-TiDB-"); ok { // 8.0.11-TiDB-v8.5.1
 		return "TiDB " + tidb, err
 	}
-	return "MySQL " + v, err
+	if err != nil {
+		return "", err
+	}
+	var s2 string
+	if c.conn.QueryRowContext(ctx, "SELECT @@memsql_version").Scan(&s2) == nil {
+		return "SingleStore " + s2, nil
+	}
+	if c.conn.QueryRowContext(ctx, "SELECT @@version_comment").Scan(&s2) == nil && strings.HasPrefix(s2, "Percona Server") {
+		return "Percona Server " + v, nil // 8.4.3-3
+	}
+	return hostedPrefix(c, "MySQL "+v), nil
 }
 
 func (mysqlEngine) databases(ctx context.Context, c *Conn) ([]string, error) {

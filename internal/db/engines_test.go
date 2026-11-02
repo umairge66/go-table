@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,10 +45,13 @@ func serverConfig(t *testing.T, name string, d model.Driver) (*model.Connection,
 	cfg.Port, _ = strconv.Atoi(env("PORT"))
 	cfg.User = env("USER")
 	cfg.DBName = env("DB")
-	if d.Family() == model.DriverPostgres {
+	switch d.Family() {
+	case model.DriverPostgres:
 		cfg.SSLMode = "disable"
-	} else {
+	case model.DriverMySQL:
 		cfg.SSLMode = "disabled"
+	default:
+		cfg.SSLMode = model.NewConnection(d).SSLMode
 	}
 	return cfg, env("PASSWORD")
 }
@@ -149,5 +153,55 @@ func TestYugabyteDB(t *testing.T) {
 
 func TestTiDB(t *testing.T) {
 	cfg, pw := serverConfig(t, "TIDB", model.DriverTiDB)
+	runSuite(t, openTest(t, cfg, pw))
+}
+
+func TestMSSQL(t *testing.T) {
+	cfg, pw := serverConfig(t, "MSSQL", model.DriverMSSQL)
+	c := openTest(t, cfg, pw)
+	runSuite(t, c)
+
+	t.Run("types render as text", func(t *testing.T) {
+		res, _ := c.Execute(context.Background(), `SELECT CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier) AS g,
+			CAST(1.50 AS decimal(5,2)) AS d, CAST(1 AS bit) AS b, CAST('2024-01-02 03:04:05.5' AS datetime2) AS ts, N'ünï' AS n`, 0)
+		if res[0].Err != nil {
+			t.Fatal(res[0].Err)
+		}
+		want := []string{"6F9619FF-8B86-D011-B42D-00C04FC964FF", "1.50", "true", "2024-01-02 03:04:05.5", "ünï"}
+		for i, w := range want {
+			if got := res[0].Set.Rows[0][i].Text; got != w {
+				t.Errorf("%s = %q, want %q", res[0].Set.Columns[i], got, w)
+			}
+		}
+	})
+
+	t.Run("GO batches", func(t *testing.T) {
+		res, err := c.Execute(context.Background(), "SELECT 1 AS a\nGO\nSELECT [x]]y] = 2\ngo 1\nSELECT 3", 0)
+		if err != nil || len(res) != 3 || res[1].Err != nil || res[1].Set.Columns[0] != "x]y" {
+			t.Fatalf("%v %+v", err, res)
+		}
+	})
+}
+
+func TestTimescaleDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "TIMESCALE", model.DriverTimescaleDB)
+	c := openTest(t, cfg, pw)
+	if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "TimescaleDB ") {
+		t.Errorf("version %q", v)
+	}
+	runSuite(t, c)
+}
+
+func TestPercona(t *testing.T) {
+	cfg, pw := serverConfig(t, "PERCONA", model.DriverPercona)
+	c := openTest(t, cfg, pw)
+	if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "Percona Server ") {
+		t.Errorf("version %q", v)
+	}
+	runSuite(t, c)
+}
+
+func TestSingleStore(t *testing.T) {
+	cfg, pw := serverConfig(t, "SINGLESTORE", model.DriverSingleStore)
 	runSuite(t, openTest(t, cfg, pw))
 }

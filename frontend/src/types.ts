@@ -1,14 +1,54 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'cockroachdb' | 'yugabytedb' | 'tidb'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'duckdb' | 'clickhouse'
+  | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
+  | 'tidb' | 'percona' | 'singlestore' | 'planetscale'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'duckdb' | 'clickhouse'
 
-/** family maps PostgreSQL- and MySQL-compatible servers to the engine they follow. */
-export const family = (d: Driver): Family =>
-  d === 'mariadb' || d === 'tidb' ? 'mysql' : d === 'cockroachdb' || d === 'yugabytedb' ? 'postgres' : d
+/** family maps compatible servers and services to the engine they follow. */
+export const family = (d: Driver): Family => driverInfo(d).family
 
 /** PerDriver: a value for each family, optionally overridden for one driver. */
 export type PerDriver<T> = Record<Family, T> & Partial<Record<Driver, T>>
 export const forDriver = <T,>(m: PerDriver<T>, d: Driver): T => m[d] ?? m[family(d)]
+
+/** Features: what a family's database can do, so the UI offers only that. */
+export interface Features {
+  /** Row edits and imports commit (or roll back) as one transaction. */
+  transactions: boolean
+  foreignKeys: boolean
+  /** CHECK constraints can be added to an existing table. */
+  checks: boolean
+  renameIndex: boolean
+  /** The primary key can be changed after the table is created. */
+  primaryKey: boolean
+  uniqueIndexes: boolean
+  autoIncrement: boolean
+  /** DROP … CASCADE drops dependent views and keys too. */
+  cascade: boolean
+  /** Databases hold schemas (else a database is the schema level). */
+  schemas: boolean
+  /** Files instead of a server. */
+  file: boolean
+  comments: boolean
+  collations: boolean
+  /** Index methods/types offered when adding an index. */
+  indexMethods: string[]
+}
+
+const BASE: Features = { transactions: true, foreignKeys: true, checks: true, renameIndex: true, primaryKey: true, uniqueIndexes: true,
+  autoIncrement: true, cascade: false, schemas: false, file: false, comments: true, collations: true, indexMethods: [] }
+
+export const FEATURES: Record<Family, Features> = {
+  postgres: { ...BASE, cascade: true, schemas: true, indexMethods: ['btree', 'hash', 'gin', 'gist', 'brin', 'spgist'] },
+  mysql: { ...BASE, transactions: true, indexMethods: ['btree', 'hash'] },
+  sqlite: { ...BASE, checks: false, primaryKey: true, file: true, comments: false },
+  sqlserver: { ...BASE, schemas: true },
+  duckdb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, schemas: true, file: true },
+  clickhouse: { ...BASE, transactions: false, foreignKeys: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
+    autoIncrement: false, collations: false, indexMethods: ['minmax', 'set(100)', 'bloom_filter', 'ngrambf_v1(3, 256, 2, 0)', 'tokenbf_v1(256, 2, 0)'] },
+}
+export const features = (d: Driver): Features => FEATURES[family(d)]
+
 export type Tag = '' | 'local' | 'development' | 'testing' | 'staging' | 'production'
 
 export interface Connection {
@@ -117,17 +157,33 @@ export interface QueryResult {
   error?: ApiErrorBody
 }
 
-/** color is the badge background for engines without a logo (see lib/driverLogos). */
-/** user is the usual administrator account (the User field's placeholder). */
-export const DRIVERS: { id: Driver; label: string; port: number; color: string; user: string }[] = [
-  { id: 'postgres', label: 'PostgreSQL', port: 5432, color: '#336791', user: 'postgres' },
-  { id: 'mysql', label: 'MySQL', port: 3306, color: '#00758f', user: 'root' },
-  { id: 'mariadb', label: 'MariaDB', port: 3306, color: '#b4644a', user: 'root' },
-  { id: 'sqlite', label: 'SQLite', port: 0, color: '#3b82c4', user: '' },
-  { id: 'cockroachdb', label: 'CockroachDB', port: 26257, color: '#6933ff', user: 'root' },
-  { id: 'yugabytedb', label: 'YugabyteDB', port: 5433, color: '#ff6e42', user: 'yugabyte' },
-  { id: 'tidb', label: 'TiDB', port: 4000, color: '#dc150b', user: 'root' },
+/**
+ * DRIVERS in display order: the engines, then the servers and cloud services
+ * compatible with one of them. color is the badge background for engines
+ * without a logo (see lib/driverLogos); user is the usual administrator
+ * account (the User field's placeholder); hosted services require TLS.
+ */
+export const DRIVERS: { id: Driver; label: string; family: Family; port: number; color: string; user: string; hosted?: boolean; host?: string }[] = [
+  { id: 'postgres', label: 'PostgreSQL', family: 'postgres', port: 5432, color: '#336791', user: 'postgres' },
+  { id: 'mysql', label: 'MySQL', family: 'mysql', port: 3306, color: '#00758f', user: 'root' },
+  { id: 'mariadb', label: 'MariaDB', family: 'mysql', port: 3306, color: '#b4644a', user: 'root' },
+  { id: 'sqlite', label: 'SQLite', family: 'sqlite', port: 0, color: '#3b82c4', user: '' },
+  { id: 'sqlserver', label: 'SQL Server', family: 'sqlserver', port: 1433, color: '#a91d22', user: 'sa' },
+  { id: 'duckdb', label: 'DuckDB', family: 'duckdb', port: 0, color: '#8a6d00', user: '' },
+  { id: 'clickhouse', label: 'ClickHouse', family: 'clickhouse', port: 9000, color: '#9a8a00', user: 'default' },
+  { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
+  { id: 'yugabytedb', label: 'YugabyteDB', family: 'postgres', port: 5433, color: '#c4471f', user: 'yugabyte' },
+  { id: 'timescaledb', label: 'TimescaleDB', family: 'postgres', port: 5432, color: '#a3610b', user: 'postgres' },
+  { id: 'neon', label: 'Neon', family: 'postgres', port: 5432, color: '#047857', user: 'neondb_owner', hosted: true, host: 'ep-…-pooler.region.aws.neon.tech' },
+  { id: 'supabase', label: 'Supabase', family: 'postgres', port: 5432, color: '#1f7a4f', user: 'postgres', hosted: true, host: 'db.<project>.supabase.co' },
+  { id: 'tidb', label: 'TiDB', family: 'mysql', port: 4000, color: '#c0130a', user: 'root' },
+  { id: 'percona', label: 'Percona Server', family: 'mysql', port: 3306, color: '#b5341a', user: 'root' },
+  { id: 'singlestore', label: 'SingleStore', family: 'mysql', port: 3306, color: '#7a1fa2', user: 'root' },
+  { id: 'planetscale', label: 'PlanetScale', family: 'mysql', port: 3306, color: '#1f2328', user: '', hosted: true, host: 'aws.connect.psdb.cloud' },
 ]
+
+/** ENGINES come first in the picker; the rest are compatible with one of them. */
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'duckdb', 'clickhouse']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -142,10 +198,18 @@ export const TAGS: { id: Tag; label: string; color: string }[] = [
 
 export const tagInfo = (t?: Tag) => TAGS.find((x) => x.id === (t ?? '')) ?? TAGS[0]
 
+/** SSL_MODES: the first is the default. Hosted services only take TLS. */
 export const SSL_MODES: PerDriver<string[]> = {
   postgres: ['prefer', 'disable', 'allow', 'require', 'verify-ca', 'verify-full'],
   mysql: ['preferred', 'disabled', 'required', 'verify_ca', 'verify_identity'],
   sqlite: [],
+  duckdb: [],
+  /** optional: only the login is encrypted (and a self-signed certificate is accepted); trust: encrypted, any certificate. */
+  sqlserver: ['optional', 'disable', 'required', 'trust', 'strict'],
+  clickhouse: ['disable', 'require', 'skip-verify'],
+  neon: ['require', 'verify-full', 'verify-ca'],
+  supabase: ['require', 'verify-full', 'verify-ca'],
+  planetscale: ['required', 'verify_identity', 'verify_ca'],
 }
 
 export const FILTER_OPS: FilterOp[] = ['=', '<>', '<', '>', '<=', '>=', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL', 'BETWEEN',

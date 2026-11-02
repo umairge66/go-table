@@ -22,9 +22,12 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
   const toast = useToast()
   const conn = session.connection
   const driver = conn.driver
-  const pg = family(driver) === 'postgres'
+  // pg: a database or a schema in this one (PostgreSQL, SQL Server); DuckDB
+  // files only hold schemas.
+  const pg = family(driver) === 'postgres' || family(driver) === 'sqlserver'
+  const schemaOnly = family(driver) === 'duckdb'
   const sqlite = family(driver) === 'sqlite'
-  const [db, setDb] = useState<NewDatabase>({ name: '', kind: 'database', charset: family(driver) === 'mysql' ? 'utf8mb4' : '' })
+  const [db, setDb] = useState<NewDatabase>({ name: '', kind: schemaOnly ? 'schema' : 'database', charset: family(driver) === 'mysql' ? 'utf8mb4' : '' })
   const [preview, setPreview] = useState('')
   const [problem, setProblem] = useState('')
   const [saving, setSaving] = useState(false)
@@ -61,7 +64,7 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
         onCreatedFile(c)
       } else {
         await api.createDatabase(session.id, db, false)
-        toast('ok', `${pg && db.kind === 'schema' ? 'Schema' : 'Database'} “${db.name.trim()}” created`)
+        toast('ok', `${what === 'schema' ? 'Schema' : 'Database'} “${db.name.trim()}” created`)
         onCreated(db)
       }
     } catch (e) {
@@ -77,12 +80,12 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
     if (t && 'native' in t) setPicked({ handle: t.native, name: t.name })
   }
 
-  const what = pg && db.kind === 'schema' ? 'schema' : 'database'
+  const what = (pg && db.kind === 'schema') || schemaOnly ? 'schema' : 'database'
   const canCreate = db.name.trim() && (sqlite ? !!(picked || path.trim() || suggested) : !problem && !!preview)
   const production = conn.tag === 'production'
 
   return (
-    <Modal width={560} title={sqlite ? 'New database file' : pg ? 'New database or schema' : 'New database'}
+    <Modal width={560} title={sqlite ? 'New database file' : pg ? 'New database or schema' : schemaOnly ? 'New schema' : 'New database'}
       subtitle={<>on <b className="font-medium text-fg-2">{conn.name}</b></>} onClose={onClose}
       footer={<>
         {production && !sqlite && <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-err"><AlertTriangle className="size-3.5" /> This is PRODUCTION.</span>}

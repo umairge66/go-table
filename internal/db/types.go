@@ -51,6 +51,9 @@ type Column struct {
 	// References is the foreign key the column belongs to (the
 	// single-column one when it is part of several).
 	References *ForeignRef
+	// defaultConstraint names SQL Server's DEFAULT constraint, which has to
+	// be dropped before the default or the column can change.
+	defaultConstraint string
 }
 
 // ForeignRef is a foreign key: From columns of this table match Columns

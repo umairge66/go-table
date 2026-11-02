@@ -19,84 +19,116 @@ const (
 	DriverMySQL    Driver = "mysql"
 	DriverMariaDB  Driver = "mariadb"
 	DriverSQLite   Driver = "sqlite"
+	DriverMSSQL    Driver = "sqlserver"
+	DriverDuckDB   Driver = "duckdb"
+	// DriverClickHouse connects over ClickHouse's native protocol.
+	DriverClickHouse Driver = "clickhouse"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
 	DriverYugabyteDB  Driver = "yugabytedb"
-	// A server that speaks the MySQL protocol and SQL dialect.
-	DriverTiDB Driver = "tidb"
+	DriverTimescaleDB Driver = "timescaledb"
+	DriverNeon        Driver = "neon"
+	DriverSupabase    Driver = "supabase"
+	// Servers that speak the MySQL protocol and SQL dialect.
+	DriverTiDB        Driver = "tidb"
+	DriverPercona     Driver = "percona"
+	DriverSingleStore Driver = "singlestore"
+	DriverPlanetScale Driver = "planetscale"
 )
 
-// Drivers lists every supported driver in display order.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverCockroachDB, DriverYugabyteDB, DriverTiDB}
+// driverSpec describes a driver. family is the engine whose protocol and SQL
+// dialect it uses; hosted services require TLS, so it is their default.
+type driverSpec struct {
+	label  string
+	family Driver
+	port   int
+	hosted bool
+}
+
+var specs = map[Driver]driverSpec{
+	DriverPostgres:    {"PostgreSQL", DriverPostgres, 5432, false},
+	DriverMySQL:       {"MySQL", DriverMySQL, 3306, false},
+	DriverMariaDB:     {"MariaDB", DriverMySQL, 3306, false},
+	DriverSQLite:      {"SQLite", DriverSQLite, 0, false},
+	DriverMSSQL:       {"SQL Server", DriverMSSQL, 1433, false},
+	DriverDuckDB:      {"DuckDB", DriverDuckDB, 0, false},
+	DriverClickHouse:  {"ClickHouse", DriverClickHouse, 9000, false},
+	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
+	DriverYugabyteDB:  {"YugabyteDB", DriverPostgres, 5433, false},
+	DriverTimescaleDB: {"TimescaleDB", DriverPostgres, 5432, false},
+	DriverNeon:        {"Neon", DriverPostgres, 5432, true},
+	DriverSupabase:    {"Supabase", DriverPostgres, 5432, true},
+	DriverTiDB:        {"TiDB", DriverMySQL, 4000, false},
+	DriverPercona:     {"Percona Server", DriverMySQL, 3306, false},
+	DriverSingleStore: {"SingleStore", DriverMySQL, 3306, false},
+	DriverPlanetScale: {"PlanetScale", DriverMySQL, 3306, true},
+}
+
+// Drivers lists every driver in display order: the engines, then the
+// servers and services compatible with one of them.
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverDuckDB, DriverClickHouse,
+	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
+	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
-// DriverPostgres, DriverMySQL or DriverSQLite. Code that only cares about
-// syntax compares families; code for one product's quirks compares drivers.
+// DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverDuckDB or
+// DriverClickHouse. Code that only cares about syntax compares families;
+// code for one product's quirks compares drivers.
 func (d Driver) Family() Driver {
-	switch d {
-	case DriverMariaDB, DriverTiDB:
-		return DriverMySQL
-	case DriverCockroachDB, DriverYugabyteDB:
-		return DriverPostgres
+	if s, ok := specs[d]; ok {
+		return s.family
 	}
 	return d
 }
 
 // Label returns the human readable driver name.
 func (d Driver) Label() string {
-	switch d {
-	case DriverPostgres:
-		return "PostgreSQL"
-	case DriverMySQL:
-		return "MySQL"
-	case DriverMariaDB:
-		return "MariaDB"
-	case DriverSQLite:
-		return "SQLite"
-	case DriverCockroachDB:
-		return "CockroachDB"
-	case DriverYugabyteDB:
-		return "YugabyteDB"
-	case DriverTiDB:
-		return "TiDB"
+	if s, ok := specs[d]; ok {
+		return s.label
 	}
 	return string(d)
 }
 
 // DefaultPort returns the conventional TCP port for the driver, or 0 for
 // file based engines.
-func (d Driver) DefaultPort() int {
-	switch d {
-	case DriverCockroachDB:
-		return 26257
-	case DriverYugabyteDB:
-		return 5433
-	case DriverTiDB:
-		return 4000
-	}
-	switch d.Family() {
-	case DriverPostgres:
-		return 5432
-	case DriverMySQL:
-		return 3306
-	}
-	return 0
-}
+func (d Driver) DefaultPort() int { return specs[d].port }
 
 // IsFileBased reports whether the driver opens a local file instead of a
 // network server.
-func (d Driver) IsFileBased() bool { return d == DriverSQLite }
+func (d Driver) IsFileBased() bool {
+	f := d.Family()
+	return f == DriverSQLite || f == DriverDuckDB
+}
+
+// IsHosted reports a cloud service, which only accepts TLS connections.
+func (d Driver) IsHosted() bool { return specs[d].hosted }
 
 // SSLModes returns the SSL modes the driver accepts, first entry is default.
 func (d Driver) SSLModes() []string {
+	var modes []string
 	switch d.Family() {
 	case DriverPostgres:
-		return []string{"prefer", "disable", "allow", "require", "verify-ca", "verify-full"}
+		modes = []string{"prefer", "disable", "allow", "require", "verify-ca", "verify-full"}
 	case DriverMySQL:
-		return []string{"preferred", "disabled", "required", "verify_ca", "verify_identity"}
+		modes = []string{"preferred", "disabled", "required", "verify_ca", "verify_identity"}
+	case DriverMSSQL:
+		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
+		modes = []string{"optional", "disable", "required", "trust", "strict"}
+	case DriverClickHouse:
+		modes = []string{"disable", "require", "skip-verify"}
+	default:
+		return nil
 	}
-	return nil
+	if d.IsHosted() { // TLS first: the service refuses anything else
+		switch d.Family() {
+		case DriverPostgres:
+			return []string{"require", "verify-full", "verify-ca"}
+		case DriverMySQL:
+			return []string{"required", "verify_identity", "verify_ca"}
+		}
+	}
+	return modes
 }
 
 // Tag is the environment label shown next to a connection.
@@ -224,20 +256,18 @@ func (c *Connection) Validate() error {
 	if !slices.Contains(Drivers, c.Driver) {
 		return fmt.Errorf("unsupported driver %q", c.Driver)
 	}
-	switch c.Driver.Family() {
-	case DriverSQLite:
+	switch {
+	case c.Driver.IsFileBased():
 		if c.Path == "" {
 			return fmt.Errorf("database file is required")
 		}
-	case DriverPostgres, DriverMySQL:
+	default:
 		if c.User == "" {
 			return fmt.Errorf("user is required")
 		}
 		if c.Port < 0 || c.Port > 65535 {
 			return fmt.Errorf("port %d out of range", c.Port)
 		}
-	default:
-		return fmt.Errorf("unsupported driver %q", c.Driver)
 	}
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("name is required")

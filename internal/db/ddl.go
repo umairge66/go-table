@@ -79,11 +79,14 @@ func (c ColumnDef) check(d Dialect, inCreate bool) error {
 			return errors.New("SQLite only allows a constant default when adding a column, such as 0 or 'x' (not CURRENT_TIMESTAMP or a (bracketed) expression)")
 		}
 	}
-	if c.Position != "" && !d.mysqlLike() {
-		return errors.New("column position can only be chosen on MySQL and MariaDB")
+	if c.Position != "" && !d.mysqlLike() && d.family != model.DriverClickHouse {
+		return errors.New("column position can only be chosen on MySQL, MariaDB and ClickHouse")
 	}
 	if c.Collation != "" && !collationPattern.MatchString(c.Collation) {
 		return fmt.Errorf("%q isn't a collation name", c.Collation)
+	}
+	if c.Collation != "" && d.family == model.DriverClickHouse {
+		return errors.New("ClickHouse columns have no collation; sort with ORDER BY … COLLATE instead")
 	}
 	if c.OnUpdateNow {
 		if !d.mysqlLike() {
@@ -105,14 +108,18 @@ var (
 // plus extra (e.g. AUTO_INCREMENT) and, on MySQL, the comment.
 func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 	var b strings.Builder
-	b.WriteString(d.QuoteIdent(strings.TrimSpace(c.Name)) + " " + strings.TrimSpace(c.Type))
+	typ := strings.TrimSpace(c.Type)
+	if d.family == model.DriverClickHouse && !notNull {
+		typ = chNullableType(typ) // ClickHouse's way to allow NULL
+	}
+	b.WriteString(d.QuoteIdent(strings.TrimSpace(c.Name)) + " " + typ)
 	if cl := strings.TrimSpace(c.Collation); cl != "" {
 		if d.family == model.DriverPostgres {
 			cl = d.QuoteIdent(cl)
 		}
 		b.WriteString(" COLLATE " + cl)
 	}
-	if notNull {
+	if notNull && d.family != model.DriverClickHouse { // ClickHouse columns are NOT NULL unless Nullable(…)
 		b.WriteString(" NOT NULL")
 	}
 	switch c.DefaultKind {
@@ -131,7 +138,7 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 		b.WriteString(" ON UPDATE CURRENT_TIMESTAMP")
 	}
 	b.WriteString(extra)
-	if cm := strings.TrimSpace(c.Comment); cm != "" && d.mysqlLike() {
+	if cm := strings.TrimSpace(c.Comment); cm != "" && (d.mysqlLike() || d.family == model.DriverClickHouse) {
 		b.WriteString(" COMMENT " + d.QuoteLiteral(Text(cm)))
 	}
 	return b.String()
@@ -154,7 +161,13 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 		return nil, err
 	}
 	var b strings.Builder
-	b.WriteString("ALTER TABLE " + d.QualifiedName(t) + " ADD COLUMN " + columnSQL(d, c, !c.Nullable, ""))
+	add := " ADD COLUMN "
+	if d.family == model.DriverMSSQL {
+		add = " ADD " // T-SQL has no COLUMN keyword here
+	}
+	// DuckDB can't add a column with NOT NULL: add it, then set NOT NULL.
+	notNullAfter := d.family == model.DriverDuckDB && !c.Nullable
+	b.WriteString("ALTER TABLE " + d.QualifiedName(t) + add + columnSQL(d, c, !c.Nullable && !notNullAfter, ""))
 	comment := strings.TrimSpace(c.Comment)
 	switch {
 	case c.Position == "first":
@@ -163,10 +176,15 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 		b.WriteString(" AFTER " + d.QuoteIdent(c.Position))
 	}
 	out := []string{b.String() + ";"}
+	if notNullAfter {
+		out = append(out, "ALTER TABLE "+d.QualifiedName(t)+" ALTER COLUMN "+d.QuoteIdent(strings.TrimSpace(c.Name))+" SET NOT NULL;")
+	}
 	if comment != "" {
 		switch d.family {
-		case model.DriverPostgres:
+		case model.DriverPostgres, model.DriverDuckDB:
 			out = append(out, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s;", d.QualifiedName(t), d.QuoteIdent(strings.TrimSpace(c.Name)), d.QuoteLiteral(Text(comment))))
+		case model.DriverMSSQL:
+			out = append(out, mssqlComment(d, t, strings.TrimSpace(c.Name), "", comment))
 		case model.DriverSQLite:
 			return nil, errors.New("SQLite doesn't support column comments")
 		}
@@ -177,6 +195,9 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 // AddColumn adds a column. On PostgreSQL and SQLite the statements run in a
 // transaction; MySQL commits DDL implicitly.
 func (c *Conn) AddColumn(ctx context.Context, t TableRef, def ColumnDef) ([]string, error) {
+	if c.Dialect.family == model.DriverDuckDB {
+		return c.Alter(ctx, t, []AlterOp{{Kind: AlterAddColumn, Def: &def}}, false) // index detour
+	}
 	stmts, err := BuildAddColumn(c.Dialect, t, def)
 	if err != nil {
 		return nil, err
@@ -196,10 +217,11 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 
 // runDDLLocked is runDDL for callers that hold c.mu.
 func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
-	if c.Config.Driver == model.DriverCockroachDB {
+	if c.Config.Driver == model.DriverCockroachDB || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverDuckDB {
 		// CockroachDB refuses some schema changes (ALTER COLUMN TYPE) inside
-		// a transaction, so each statement commits on its own there: a later
-		// failure leaves the earlier statements applied.
+		// a transaction, DuckDB still sees an index dropped earlier in the
+		// same transaction, and ClickHouse has none. So each statement
+		// commits on its own there: a later failure leaves earlier ones applied.
 		for _, s := range stmts {
 			if _, err := c.conn.ExecContext(ctx, s); err != nil {
 				return fmt.Errorf("%s %w", s, err)
@@ -267,6 +289,16 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 		if cascade {
 			out = append(out, "SET FOREIGN_KEY_CHECKS = 1;")
 		}
+	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse:
+		if cascade {
+			return nil, fmt.Errorf("%s can't drop with CASCADE: include the tables and views that depend on these", familyLabel(d))
+		}
+		for _, v := range views {
+			out = append(out, "DROP VIEW "+v+";")
+		}
+		for _, t := range tables {
+			out = append(out, "DROP TABLE "+t+";")
+		}
 	default:
 		if cascade {
 			out = append(out, "PRAGMA foreign_keys = OFF;")
@@ -316,7 +348,7 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 			c.conn.ExecContext(context.WithoutCancel(ctx), s)
 		}
 	}()
-	if c.Dialect.mysqlLike() {
+	if c.Dialect.mysqlLike() || c.Dialect.family == model.DriverClickHouse {
 		for _, s := range body {
 			if _, err := c.conn.ExecContext(ctx, s); err != nil {
 				if strings.HasPrefix(body[0], "SET FOREIGN_KEY_CHECKS = 0") {
@@ -327,7 +359,7 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 		}
 		return stmts, nil
 	}
-	tx, err := c.conn.BeginTx(ctx, nil)
+	tx, err := c.begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -352,9 +384,18 @@ func (c *Conn) dropOrder(ctx context.Context, objs []Object) []Object {
 	for _, o := range objs {
 		var parents []string
 		var err error
-		if c.Config.Driver.Family() == model.DriverSQLite {
+		switch c.Config.Driver.Family() {
+		case model.DriverSQLite:
 			parents, err = c.queryStrings(ctx, "SELECT DISTINCT \"table\" FROM pragma_foreign_key_list(?, ?)", o.Name, schemaOrMain(o.Schema))
-		} else {
+		case model.DriverMSSQL:
+			parents, err = c.queryStrings(ctx, `SELECT DISTINCT OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys
+				WHERE parent_object_id = `+mssqlObjectID, o.Schema, o.Name)
+		case model.DriverDuckDB:
+			parents, err = c.queryStrings(ctx, `SELECT DISTINCT referenced_table FROM duckdb_constraints()
+				WHERE constraint_type = 'FOREIGN KEY' AND schema_name = ? AND table_name = ?`, o.Schema, o.Name)
+		case model.DriverClickHouse:
+			// no foreign keys
+		default:
 			parents, err = c.queryStrings(ctx, `SELECT DISTINCT REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE
 				WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL`, o.Schema, o.Name)
 		}

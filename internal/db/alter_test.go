@@ -92,14 +92,19 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		}
 		// Wider type, NOT NULL.
 		apply(parent, AlterOp{Kind: AlterModifyColumn, Column: "name", Def: &ColumnDef{Name: "name", Type: "VARCHAR(100)", Nullable: false}})
-		if n := col(parent, "name"); n.Nullable || !strings.Contains(strings.ToLower(n.Type), "100") {
+		// DuckDB keeps no VARCHAR length.
+		if n := col(parent, "name"); n.Nullable || kind != model.DriverDuckDB && !strings.Contains(strings.ToLower(n.Type), "100") {
 			t.Errorf("name after modify: %+v", n)
 		}
 		if v := value("SELECT name FROM gt_alter WHERE id = 2"); v != "b" {
 			t.Errorf("data after modify: %q", v)
 		}
 		if kind != model.DriverSQLite {
-			apply(parent, AlterOp{Kind: AlterAddColumn, Def: &ColumnDef{Name: "made", Type: "TIMESTAMP", Nullable: true, DefaultKind: DefaultExpression, Default: "CURRENT_TIMESTAMP"}})
+			ts := "TIMESTAMP"
+			if kind == model.DriverMSSQL {
+				ts = "DATETIME2" // TIMESTAMP is rowversion there
+			}
+			apply(parent, AlterOp{Kind: AlterAddColumn, Def: &ColumnDef{Name: "made", Type: ts, Nullable: true, DefaultKind: DefaultExpression, Default: "CURRENT_TIMESTAMP"}})
 			if m := col(parent, "made"); m.DefaultKind != DefaultExpression {
 				t.Errorf("made default %q %q", m.DefaultKind, m.DefaultText)
 			}
@@ -108,6 +113,15 @@ func runAlterSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("indexes", func(t *testing.T) {
+		if kind == model.DriverDuckDB {
+			// No index renames or primary key changes: add and drop only.
+			apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name_uq", Columns: []string{"name"}, Unique: true}})
+			if _, err := c.Alter(ctx, parent, []AlterOp{{Kind: AlterRenameIndex, Name: "gt_alter_name_uq", NewName: "x"}}, false); err == nil {
+				t.Error("DuckDB renamed an index")
+			}
+			apply(parent, AlterOp{Kind: AlterDropIndex, Name: "gt_alter_name_uq"})
+			return
+		}
 		apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name", Columns: []string{"name"}, Unique: true}})
 		apply(parent, AlterOp{Kind: AlterRenameIndex, Name: "gt_alter_name", NewName: "gt_alter_name_uq"})
 		x, ok := findIndex(state(parent), "gt_alter_name_uq")
@@ -134,6 +148,9 @@ func runAlterSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("foreign keys", func(t *testing.T) {
+		if kind == model.DriverDuckDB {
+			t.Skip("DuckDB only takes foreign keys in CREATE TABLE")
+		}
 		apply(child, AlterOp{Kind: AlterAddForeignKey, ForeignKey: &ForeignKeyDef{Name: "gt_alter_child_parent", Columns: []string{"parent_id"},
 			RefTable: "gt_alter", RefColumns: []string{"id"}, OnDelete: "CASCADE"}})
 		fks := state(child).ForeignKeys
@@ -154,6 +171,13 @@ func runAlterSuite(t *testing.T, c *Conn) {
 
 	if kind != model.DriverSQLite {
 		t.Run("checks and comment", func(t *testing.T) {
+			if kind == model.DriverDuckDB { // comments only
+				apply(parent, AlterOp{Kind: AlterTableComment, Comment: "Parents"})
+				if cm := state(parent).Info.Comment; cm != "Parents" {
+					t.Errorf("comment %q", cm)
+				}
+				return
+			}
 			if c.Config.Driver == model.DriverTiDB {
 				// Off by default: refused with an explanation, then switched on.
 				ck := []AlterOp{{Kind: AlterAddCheck, Check: &CheckDef{Name: "gt_alter_quantity_ck", Expression: "quantity >= 0"}}}
@@ -207,7 +231,11 @@ func runAlterSuite(t *testing.T, c *Conn) {
 
 	t.Run("rename, drop and empty", func(t *testing.T) {
 		apply(parent, AlterOp{Kind: AlterRenameTable, NewName: "gt_alter2"})
-		if v := value("SELECT COUNT(*) FROM gt_alter2"); v != "1" {
+		want := "1" // one row left after the cascading delete
+		if kind == model.DriverDuckDB {
+			want = "2" // no foreign key was added
+		}
+		if v := value("SELECT COUNT(*) FROM gt_alter2"); v != want {
 			t.Errorf("renamed table has %s rows", v)
 		}
 		apply(TableRef{Schema: schema, Name: "gt_alter2"}, AlterOp{Kind: AlterRenameTable, NewName: "gt_alter"})

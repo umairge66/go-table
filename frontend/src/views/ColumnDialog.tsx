@@ -5,7 +5,7 @@ import { AlterDialog } from './StructureDialogs'
 import { TypeSelect } from '../components/TypeSelect'
 import { Field, Input, Select, Switch } from '../components/ui'
 import { findType, has, paramProblem, parseType, typeString, type TypeSpec } from '../lib/sqlTypes'
-import { family, forDriver, type Column, type PerDriver, type SessionInfo } from '../types'
+import { family, features, forDriver, type Column, type PerDriver, type SessionInfo } from '../types'
 
 export const TYPES: PerDriver<string[]> = {
   postgres: ['text', 'varchar(255)', 'integer', 'bigint', 'numeric(10,2)', 'boolean', 'date', 'timestamptz', 'jsonb', 'uuid',
@@ -15,6 +15,12 @@ export const TYPES: PerDriver<string[]> = {
   mariadb: ['varchar(255)', 'text', 'int', 'bigint', 'decimal(10,2)', 'tinyint(1)', 'date', 'datetime', 'json', 'timestamp',
     'double', 'uuid', 'blob', "enum('a','b')", 'smallint', 'longtext'],
   sqlite: ['TEXT', 'INTEGER', 'REAL', 'NUMERIC', 'BLOB', 'BOOLEAN', 'DATETIME'],
+  sqlserver: ['nvarchar(255)', 'int', 'bigint', 'decimal(18,2)', 'bit', 'date', 'datetime2', 'uniqueidentifier', 'nvarchar(max)',
+    'float', 'datetimeoffset', 'varbinary(max)', 'smallint', 'time', 'money'],
+  duckdb: ['VARCHAR', 'INTEGER', 'BIGINT', 'DECIMAL(18,3)', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'UUID', 'DOUBLE',
+    'JSON', 'BLOB', 'INTEGER[]', 'VARCHAR[]', 'TIME', 'INTERVAL'],
+  clickhouse: ['String', 'Int32', 'Int64', 'UInt64', 'Float64', 'Decimal(18,4)', 'Bool', 'Date', 'DateTime', 'DateTime64(3)',
+    'UUID', 'LowCardinality(String)', 'Array(String)', 'Map(String, String)', 'IPv4', "Enum8('a' = 1, 'b' = 2)"],
 }
 
 export const EXPRESSIONS: PerDriver<string[]> = {
@@ -22,6 +28,9 @@ export const EXPRESSIONS: PerDriver<string[]> = {
   mysql: ['CURRENT_TIMESTAMP', '(UUID())'],
   mariadb: ['CURRENT_TIMESTAMP', 'uuid()'],
   sqlite: [],
+  sqlserver: ['SYSUTCDATETIME()', 'GETDATE()', 'NEWID()', 'NEWSEQUENTIALID()'],
+  duckdb: ['current_timestamp', 'current_date', 'uuid()'],
+  clickhouse: ['now()', 'today()', 'generateUUIDv4()', 'now64(3)'],
 }
 
 const DEFAULT_KINDS: { id: ColumnDef['defaultKind']; label: string }[] = [
@@ -39,6 +48,8 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
 }) {
   const driver = session.connection.driver
   const mysql = family(driver) === 'mysql'
+  // Where a column goes: MySQL always; ClickHouse when adding one.
+  const positioned = mysql || (family(driver) === 'clickhouse' && !editing)
   const [def, setDef] = useState<ColumnDef>(() => editing
     ? { name: editing.name, type: editing.type, nullable: editing.nullable, defaultKind: editing.defaultKind ?? '', default: editing.defaultText ?? '',
         comment: editing.comment, position: '', collation: editing.collation ?? '', onUpdateNow: !!editing.onUpdateNow }
@@ -89,8 +100,8 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
           {mysql && has(t, 'unsigned') && <Switch checked={spec.unsigned} onChange={(v) => setSpec({ ...spec, unsigned: v })} label="UNSIGNED" />}
           {mysql && editing && (has(t, 'int') || spec.custom) && <Switch checked={autoIncrement} onChange={setAutoIncrement} label="AUTO_INCREMENT" />}
           {mysql && has(t, 'time') && <Switch checked={!!def.onUpdateNow} onChange={(v) => set('onUpdateNow', v)} label="On update: CURRENT_TIMESTAMP" />}
-          {family(driver) === 'postgres' && !spec.custom && <Switch checked={spec.array} onChange={(v) => setSpec({ ...spec, array: v })} label="Array ( [ ] )" />}
-          {(has(t, 'text') || spec.custom) && (
+          {(family(driver) === 'postgres' || family(driver) === 'duckdb') && !spec.custom && <Switch checked={spec.array} onChange={(v) => setSpec({ ...spec, array: v })} label="Array ( [ ] )" />}
+          {(has(t, 'text') || spec.custom) && features(driver).collations && (
             <label className="flex items-center gap-2 text-[12.5px] text-muted">Collation
               <input className="h-7 w-48 rounded-md border border-line bg-panel px-2 font-mono text-[12px] text-fg focus:border-accent focus:outline-none" list="add-column-collations"
                 aria-label="Collation" value={def.collation ?? ''} placeholder="default" onChange={(e) => set('collation', e.target.value)} />
@@ -128,11 +139,11 @@ export function ColumnDialog({ session, table, columns, editing, onClose, onDone
           </div>
         )}
 
-        <div className={clsx('grid gap-3', mysql ? 'grid-cols-2' : 'grid-cols-1')}>
-          {family(driver) !== 'sqlite' && (
+        <div className={clsx('grid gap-3', positioned ? 'grid-cols-2' : 'grid-cols-1')}>
+          {features(driver).comments && (
             <Field label="Comment"><Input value={def.comment} placeholder="optional" onChange={(e) => set('comment', e.target.value)} aria-label="Column comment" /></Field>
           )}
-          {mysql && (
+          {positioned && (
             <Field label="Position">
               <Select value={def.position} onChange={(e) => set('position', e.target.value)} aria-label="Column position">
                 <option value="">{editing ? 'Where it is' : 'At the end'}</option>

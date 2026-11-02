@@ -73,7 +73,24 @@ func (postgresEngine) serverVersion(ctx context.Context, c *Conn) (string, error
 	if _, yb, ok := strings.Cut(v, "-YB-"); ok { // 15.2-YB-2024.2.2.1-b0
 		return "YugabyteDB " + yb, err
 	}
-	return "PostgreSQL " + v, err
+	if err != nil {
+		return "", err
+	}
+	v = "PostgreSQL " + strings.Fields(v + " ")[0] // drop " (Debian 17.2-1.pgdg120+1)"
+	var ts string
+	if c.conn.QueryRowContext(ctx, "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'").Scan(&ts) == nil {
+		return "TimescaleDB " + ts + " · " + v, nil
+	}
+	return hostedPrefix(c, v), nil
+}
+
+// hostedPrefix names the cloud service in front of the engine's version:
+// "Neon · PostgreSQL 17.2".
+func hostedPrefix(c *Conn, v string) string {
+	if c.Config.Driver.IsHosted() {
+		return c.Config.Driver.Label() + " · " + v
+	}
+	return v
 }
 
 func (postgresEngine) databases(ctx context.Context, c *Conn) ([]string, error) {

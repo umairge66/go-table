@@ -23,6 +23,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/groups/{id}", s.deleteGroup)
 	mux.HandleFunc("POST /api/test", s.testConnection)
 	mux.HandleFunc("POST /api/parse-url", s.parseURL)
+	mux.HandleFunc("GET /api/drivers", s.drivers)
 
 	mux.HandleFunc("GET /api/native", s.nativeInfo)
 	mux.HandleFunc("POST /api/native/theme", s.nativeTheme)
@@ -411,8 +412,8 @@ func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := se.c()
-	if base.Config.Driver.Family() == model.DriverSQLite {
-		writeErr(w, 400, errors.New("a SQLite connection is one file; open another file as a new connection"))
+	if base.Config.Driver.IsFileBased() {
+		writeErr(w, 400, fmt.Errorf("a %s connection is one file; open another file as a new connection", base.Config.Driver.Label()))
 		return
 	}
 	cfg := *base.Config
@@ -1066,4 +1067,16 @@ func (s *Server) clearHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// drivers lists the database types this build can connect to (DuckDB
+// needs a cgo build, which the Windows one isn't).
+func (s *Server) drivers(w http.ResponseWriter, r *http.Request) {
+	out := []string{}
+	for _, d := range model.Drivers {
+		if db.Supported(d) {
+			out = append(out, string(d))
+		}
+	}
+	writeJSON(w, 200, map[string]any{"supported": out})
 }

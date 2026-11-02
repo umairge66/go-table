@@ -168,14 +168,21 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 			defer c.Exec(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
 		}
 	}
+	begin, rollback := "BEGIN", "ROLLBACK"
+	switch c.Dialect.family {
+	case model.DriverMSSQL:
+		begin, rollback = "BEGIN TRANSACTION", "ROLLBACK TRANSACTION"
+	case model.DriverClickHouse:
+		o.Transaction = false // no transactions: statements apply one by one
+	}
 	if o.Transaction {
-		if _, err := c.Exec(ctx, "BEGIN"); err != nil {
+		if _, err := c.Exec(ctx, begin); err != nil {
 			return res, err
 		}
 	}
 	fail := func(err error) (*ImportResult, error) {
 		if o.Transaction {
-			c.Exec(context.WithoutCancel(ctx), "ROLLBACK")
+			c.Exec(context.WithoutCancel(ctx), rollback)
 		}
 		return res, err
 	}
@@ -290,8 +297,11 @@ type CSVImportOptions struct {
 
 // maxParams is a safe number of bind parameters per statement.
 func (d Dialect) maxParams() int {
-	if d.family == model.DriverSQLite {
+	switch d.family {
+	case model.DriverSQLite:
 		return 30000
+	case model.DriverMSSQL:
+		return 2000 // SQL Server allows 2100 parameters per request
 	}
 	return 60000
 }
@@ -316,7 +326,7 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 		return 0, err
 	}
 	defer c.mu.Unlock()
-	tx, err := c.conn.BeginTx(ctx, nil)
+	tx, err := c.begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -461,6 +471,8 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 		sw.printf("SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n\n")
 	case model.DriverSQLite:
 		sw.printf("PRAGMA foreign_keys = OFF;\nBEGIN TRANSACTION;\n\n")
+	case model.DriverMSSQL:
+		sw.printf("SET NOCOUNT ON;\n\n")
 	}
 	if o.DropFirst {
 		for i := len(views) - 1; i >= 0; i-- {
@@ -708,6 +720,14 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 			return "", nil, err
 		}
 		return ddl, nil, nil
+	case model.DriverMSSQL:
+		return mssqlEngine{}.createTable(ctx, c, TableRef{Schema: o.Schema, Name: o.Name}, false)
+	case model.DriverDuckDB, model.DriverClickHouse:
+		def, err := c.eng.definition(ctx, c, o)
+		if err != nil {
+			return "", nil, err
+		}
+		return unqualify(d, o.Schema, def), nil, nil
 	default:
 		defs, err := c.queryStrings(ctx, "SELECT sql FROM "+sqliteEngine{}.master(c, o.Schema)+
 			" WHERE tbl_name = ? AND sql IS NOT NULL ORDER BY type = 'table' DESC, name", o.Name)
@@ -745,7 +765,17 @@ func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
 		def = regexp.MustCompile(`(?i)\s+DEFINER=\S+`).ReplaceAllString(def, "")
 		def = strings.ReplaceAll(def, c.Dialect.QuoteIdent(o.Schema)+".", "")
 		return def, nil
+	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse:
+		def, err := c.Definition(ctx, o)
+		return unqualify(c.Dialect, o.Schema, def), err
 	default:
 		return c.Definition(ctx, o)
 	}
+}
+
+// unqualify drops "schema." in front of names, so a dump loads into any
+// schema or database.
+func unqualify(d Dialect, schema, def string) string {
+	def = strings.ReplaceAll(def, d.QuoteIdent(schema)+".", "")
+	return strings.ReplaceAll(def, schema+".", "")
 }

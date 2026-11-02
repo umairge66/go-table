@@ -73,6 +73,9 @@ func BuildChange(d Dialect, t TableRef, c Change, hasPK bool) (Statement, error)
 	switch c.Kind {
 	case ChangeInsert:
 		if len(c.Values) == 0 {
+			if d.family == model.DriverClickHouse {
+				return Statement{}, fmt.Errorf("ClickHouse can't insert a row without values: fill in at least one column")
+			}
 			return Statement{SQL: insertDefaults(d, name)}, nil
 		}
 		cols := sortedKeys(c.Values)
@@ -98,14 +101,18 @@ func BuildChange(d Dialect, t TableRef, c Change, hasPK bool) (Statement, error)
 			sets = append(sets, d.QuoteIdent(k)+" = "+d.Placeholder(len(args)))
 		}
 		where := keyCondition(d, c.Key, &args)
-		q := fmt.Sprintf("UPDATE %s SET %s WHERE %s", name, strings.Join(sets, ", "), where)
+		q := fmt.Sprintf("UPDATE %s%s SET %s WHERE %s", singleRowTop(d, hasPK), name, strings.Join(sets, ", "), where)
+		if d.family == model.DriverClickHouse {
+			// A mutation; mutations_sync (see clickhouseDSN) waits for it.
+			q = fmt.Sprintf("ALTER TABLE %s UPDATE %s WHERE %s", name, strings.Join(sets, ", "), where)
+		}
 		return Statement{SQL: q + singleRowSuffix(d, hasPK), Args: args}, nil
 	case ChangeDelete:
 		if len(c.Key) == 0 {
 			return Statement{}, fmt.Errorf("delete without row key")
 		}
 		where := keyCondition(d, c.Key, &args)
-		q := fmt.Sprintf("DELETE FROM %s WHERE %s", name, where)
+		q := fmt.Sprintf("DELETE %sFROM %s WHERE %s", singleRowTop(d, hasPK), name, where)
 		return Statement{SQL: q + singleRowSuffix(d, hasPK), Args: args}, nil
 	}
 	return Statement{}, fmt.Errorf("unknown change kind %d", c.Kind)
@@ -116,6 +123,15 @@ func insertDefaults(d Dialect, name string) string {
 		return "INSERT INTO " + name + " () VALUES ()"
 	}
 	return "INSERT INTO " + name + " DEFAULT VALUES"
+}
+
+// singleRowTop limits an UPDATE or DELETE without a key to one row on SQL
+// Server: UPDATE TOP (1) t …, DELETE TOP (1) FROM t ….
+func singleRowTop(d Dialect, hasPK bool) string {
+	if !hasPK && d.family == model.DriverMSSQL {
+		return "TOP (1) "
+	}
+	return ""
 }
 
 func singleRowSuffix(d Dialect, hasPK bool) string {
@@ -156,8 +172,18 @@ func Preview(d Dialect, s Statement) string {
 		case ch == '\'' || ch == '"' || ch == '`':
 			inQuote = ch
 			b.WriteByte(ch)
-		case ch == '?' && d.family != model.DriverPostgres:
+		case ch == '?' && d.family != model.DriverPostgres && d.family != model.DriverMSSQL:
 			b.WriteString(next())
+		case ch == '@' && d.family == model.DriverMSSQL && strings.HasPrefix(sql[i:], "@p") && i+2 < len(sql) && sql[i+2] >= '0' && sql[i+2] <= '9':
+			j := i + 2
+			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
+				j++
+			}
+			b.WriteString(next())
+			i = j - 1
+		case ch == '[' && d.family == model.DriverMSSQL:
+			inQuote = ']'
+			b.WriteByte(ch)
 		case ch == '$' && d.family == model.DriverPostgres && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9':
 			j := i + 1
 			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {

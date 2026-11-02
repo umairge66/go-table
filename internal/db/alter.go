@@ -125,6 +125,7 @@ var (
 	pgMethods   = []string{"", "btree", "hash", "gin", "gist", "brin", "spgist"}
 	myMethods   = []string{"", "btree", "hash"}
 	charsetOf   = regexp.MustCompile(`^([A-Za-z0-9]+)_`)
+	chIndexType = regexp.MustCompile(`^[a-z_]+(\([0-9., ]*\))?$`)
 	sqliteIndex = regexp.MustCompile(`(?is)^(\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?)("(?:[^"]|"")+"|` + "`[^`]+`" + `|\[[^\]]+\]|[^\s(]+)`)
 )
 
@@ -148,7 +149,72 @@ func BuildAlter(d Dialect, t TableRef, st TableState, ops []AlterOp) (AlterPlan,
 		}
 		out = append(out, stmts...)
 	}
+	if d.family == model.DriverDuckDB {
+		return duckdbIndexDetour(d, t, st, ops, out)
+	}
 	return AlterPlan{Statements: out}, nil
+}
+
+// duckdbIndexDetour: DuckDB refuses most ALTER TABLEs while an index
+// depends on the table. Drop the table's indexes first and create them
+// again afterwards, following renamed columns and leaving out indexes on
+// dropped ones.
+func duckdbIndexDetour(d Dialect, t TableRef, st TableState, ops []AlterOp, stmts []string) (AlterPlan, error) {
+	needs := false
+	for _, op := range ops {
+		switch op.Kind {
+		case AlterAddIndex, AlterDropIndex, AlterTableComment, AlterTruncate:
+		case AlterAddColumn:
+			needs = needs || op.Def != nil && !op.Def.Nullable // the SET NOT NULL that follows
+		default:
+			needs = true
+		}
+	}
+	var keep []Index
+	for _, x := range st.Indexes {
+		if !x.Constraint && !slices.ContainsFunc(ops, func(op AlterOp) bool { return op.Kind == AlterDropIndex && op.Name == x.Name }) {
+			keep = append(keep, x)
+		}
+	}
+	if !needs || len(keep) == 0 {
+		return AlterPlan{Statements: stmts}, nil
+	}
+	table := t
+	renamed := map[string]string{}
+	dropped := map[string]bool{}
+	for _, op := range ops {
+		switch {
+		case op.Kind == AlterRenameTable:
+			table.Name = strings.TrimSpace(op.NewName)
+		case op.Kind == AlterDropColumn:
+			dropped[op.Column] = true
+		case op.Kind == AlterModifyColumn && op.Def != nil && strings.TrimSpace(op.Def.Name) != op.Column:
+			renamed[op.Column] = strings.TrimSpace(op.Def.Name)
+		}
+	}
+	var pre, post []string
+	for _, x := range keep {
+		pre = append(pre, "DROP INDEX "+d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name})+";")
+		cols := make([]string, 0, len(x.Columns))
+		for _, c := range x.Columns {
+			if _, ok := findColumn(st, c); !ok {
+				return AlterPlan{}, fmt.Errorf("index %q is on an expression; drop it before changing the table", x.Name)
+			}
+			if n, ok := renamed[c]; ok {
+				c = n
+			}
+			cols = append(cols, c)
+		}
+		if slices.ContainsFunc(x.Columns, func(c string) bool { return dropped[c] }) {
+			continue
+		}
+		u := ""
+		if x.Unique {
+			u = "UNIQUE "
+		}
+		post = append(post, "CREATE "+u+"INDEX "+d.QuoteIdent(x.Name)+" ON "+d.QualifiedName(table)+" ("+quoteList(d, cols)+");")
+	}
+	return AlterPlan{Statements: append(append(pre, stmts...), post...)}, nil
 }
 
 func findColumn(st TableState, name string) (Column, bool) {
@@ -233,7 +299,23 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if len(st.Columns) == 1 {
 			return nil, errors.New("a table needs at least one column; drop the table instead")
 		}
-		return []string{alter + "DROP COLUMN " + d.QuoteIdent(op.Column) + ";"}, nil
+		var out []string
+		if d.family == model.DriverMSSQL {
+			// SQL Server refuses to drop a column an index uses: drop those first.
+			for _, x := range st.Indexes {
+				if !x.Constraint && slices.Contains(x.Columns, op.Column) {
+					stmts, err := buildOp(d, t, st, AlterOp{Kind: AlterDropIndex, Name: x.Name})
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, stmts...)
+				}
+			}
+		}
+		if col, _ := findColumn(st, op.Column); col.defaultConstraint != "" {
+			out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(col.defaultConstraint)+";")
+		}
+		return append(out, alter+"DROP COLUMN "+d.QuoteIdent(op.Column)+";"), nil
 
 	case AlterAddIndex:
 		return buildAddIndex(d, t, st, op.Index)
@@ -247,8 +329,10 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			return buildOp(d, t, st, AlterOp{Kind: AlterSetPrimaryKey})
 		}
 		switch {
-		case d.mysqlLike():
+		case d.mysqlLike(), d.family == model.DriverClickHouse:
 			return []string{alter + "DROP INDEX " + d.QuoteIdent(x.Name) + ";"}, nil
+		case d.family == model.DriverMSSQL && !x.Constraint:
+			return []string{"DROP INDEX " + d.QuoteIdent(x.Name) + " ON " + tbl + ";"}, nil
 		case d.kind == model.DriverCockroachDB:
 			// CockroachDB drops UNIQUE constraints only as indexes: table@index.
 			drop := "DROP INDEX " + d.QualifiedName(t) + "@" + d.QuoteIdent(x.Name)
@@ -274,6 +358,10 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			return nil, errors.New("the primary key is always called PRIMARY")
 		}
 		switch d.family {
+		case model.DriverMSSQL:
+			return []string{mssqlRename(d, t, x.Name, n, "INDEX")}, nil
+		case model.DriverDuckDB, model.DriverClickHouse:
+			return nil, fmt.Errorf("%s can't rename an index; drop it and add it again", familyLabel(d))
 		case model.DriverPostgres:
 			return []string{"ALTER INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name}) + " RENAME TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverSQLite:
@@ -299,6 +387,24 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 				return nil, err
 			}
 		}
+		switch d.family {
+		case model.DriverClickHouse:
+			return nil, errors.New("a ClickHouse table's primary key (its sort order) is fixed when it is created")
+		case model.DriverDuckDB:
+			if has {
+				return nil, errors.New("DuckDB can't drop or replace a primary key; recreate the table instead")
+			}
+			return []string{alter + "ADD PRIMARY KEY (" + quoteList(d, op.Columns) + ");"}, nil
+		case model.DriverMSSQL: // separate statements; a new key needs NOT NULL columns
+			var out []string
+			if has {
+				out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(pk.Name)+";")
+			}
+			if len(op.Columns) > 0 {
+				out = append(out, alter+"ADD CONSTRAINT "+d.QuoteIdent("PK_"+t.Name)+" PRIMARY KEY ("+quoteList(d, op.Columns)+");")
+			}
+			return out, nil
+		}
 		var parts []string
 		if has {
 			if d.mysqlLike() {
@@ -316,6 +422,9 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		fk := op.ForeignKey
 		if fk == nil {
 			return nil, errors.New("missing foreign key")
+		}
+		if d.family == model.DriverDuckDB || d.family == model.DriverClickHouse {
+			return nil, fmt.Errorf("%s can't add a foreign key to an existing table", familyLabel(d))
 		}
 		if err := checkColumns(st, fk.Columns, "foreign key"); err != nil {
 			return nil, err
@@ -347,11 +456,15 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if strings.Contains(ck.Expression, ";") {
 			return nil, errors.New("the condition can't contain ';'")
 		}
-		if d.family == model.DriverSQLite {
-			return nil, errors.New("SQLite can't add a CHECK constraint to an existing table")
+		if d.family == model.DriverSQLite || d.family == model.DriverDuckDB {
+			return nil, fmt.Errorf("%s can't add a CHECK constraint to an existing table", familyLabel(d))
 		}
 		s := alter + "ADD "
-		if n := strings.TrimSpace(ck.Name); n != "" {
+		n := strings.TrimSpace(ck.Name)
+		if n == "" && d.family == model.DriverClickHouse { // needs a name
+			n = indexName(t.Name, fmt.Sprint(len(st.Info.Checks)+1), "check")
+		}
+		if n != "" {
 			s += "CONSTRAINT " + d.QuoteIdent(n) + " "
 		}
 		return []string{s + "CHECK (" + strings.TrimSpace(ck.Expression) + ");"}, nil
@@ -371,8 +484,13 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			return nil, err
 		}
 		target := d.QuoteIdent(n)
-		if d.mysqlLike() {
+		switch d.family {
+		case model.DriverMySQL:
 			target = d.QualifiedName(TableRef{Schema: t.Schema, Name: n}) // stay in the same database
+		case model.DriverMSSQL:
+			return []string{mssqlRename(d, t, "", n, "")}, nil
+		case model.DriverClickHouse:
+			return []string{"RENAME TABLE " + tbl + " TO " + d.QualifiedName(TableRef{Schema: t.Schema, Name: n}) + ";"}, nil
 		}
 		return []string{alter + "RENAME TO " + target + ";"}, nil
 
@@ -380,7 +498,15 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		switch d.family {
 		case model.DriverSQLite:
 			return nil, errors.New("SQLite tables have no comments")
-		case model.DriverPostgres:
+		case model.DriverMSSQL:
+			s := mssqlComment(d, t, "", st.Info.Comment, op.Comment)
+			if s == "" {
+				return nil, errors.New("nothing to change")
+			}
+			return []string{s}, nil
+		case model.DriverClickHouse:
+			return []string{alter + "MODIFY COMMENT " + d.QuoteLiteral(Text(op.Comment)) + ";"}, nil
+		case model.DriverPostgres, model.DriverDuckDB:
 			v := "NULL"
 			if strings.TrimSpace(op.Comment) != "" {
 				v = d.QuoteLiteral(Text(op.Comment))
@@ -454,6 +580,13 @@ func foreignKeyClause(d Dialect, t TableRef, fk ForeignKeyDef) (string, error) {
 			return "", fmt.Errorf("unknown referential action %q", a)
 		}
 	}
+	if d.family == model.DriverMSSQL { // no RESTRICT; NO ACTION refuses the change the same way
+		for _, a := range []*string{&fk.OnDelete, &fk.OnUpdate} {
+			if strings.EqualFold(*a, "RESTRICT") {
+				*a = ""
+			}
+		}
+	}
 	ref := TableRef{Schema: fk.RefSchema, Name: fk.RefTable}
 	if ref.Schema == "" {
 		ref.Schema = t.Schema
@@ -499,6 +632,12 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 		return nil, fmt.Errorf("unknown index method %q", x.Method)
 	case d.family == model.DriverSQLite && method != "" && method != "btree":
 		return nil, errors.New("SQLite indexes are always B-trees")
+	case (d.family == model.DriverMSSQL || d.family == model.DriverDuckDB) && method != "":
+		return nil, fmt.Errorf("%s doesn't take an index method here", familyLabel(d))
+	case d.family == model.DriverClickHouse && x.Unique:
+		return nil, errors.New("ClickHouse has no unique indexes")
+	case d.family == model.DriverClickHouse && method != "" && !chIndexType.MatchString(method):
+		return nil, fmt.Errorf("unknown ClickHouse index type %q (minmax, set(100), bloom_filter, …)", x.Method)
 	}
 	name := strings.TrimSpace(x.Name)
 	if name == "" {
@@ -512,6 +651,14 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 		return nil, fmt.Errorf("an index named %q already exists", name)
 	}
 	cols := "(" + quoteList(d, x.Columns) + ")"
+	if d.family == model.DriverClickHouse {
+		// A data-skipping index over granules of rows.
+		typ := x.Method
+		if typ == "" {
+			typ = "minmax"
+		}
+		return []string{"ALTER TABLE " + d.QualifiedName(t) + " ADD INDEX " + d.QuoteIdent(name) + " " + cols + " TYPE " + typ + " GRANULARITY 1;"}, nil
+	}
 	if d.mysqlLike() {
 		s := "ALTER TABLE " + d.QualifiedName(t) + " ADD "
 		switch {
@@ -567,6 +714,10 @@ func buildModifyColumn(d Dialect, t TableRef, st TableState, op AlterOp) ([]stri
 	}
 	alter := "ALTER TABLE " + d.QualifiedName(t) + " "
 	switch d.family {
+	case model.DriverMSSQL:
+		return mssqlModifyColumn(d, t, old, def, alter)
+	case model.DriverClickHouse:
+		return chModifyColumn(d, old, def, alter)
 	case model.DriverMySQL:
 		extra := ""
 		if op.AutoIncrement {
@@ -717,4 +868,98 @@ func (c *Conn) checksEnforced(ctx context.Context, ops []AlterOp) error {
 		return errTiDBChecksOff
 	}
 	return nil
+}
+
+// mssqlModifyColumn changes a column on SQL Server: sp_rename for the name,
+// ALTER COLUMN for type, collation and NULL (restated together), and the
+// default as a constraint that is dropped and added again.
+func mssqlModifyColumn(d Dialect, t TableRef, old Column, def ColumnDef, alter string) ([]string, error) {
+	var out []string
+	name := old.Name
+	if def.Name != old.Name {
+		out = append(out, mssqlRename(d, t, old.Name, def.Name, "COLUMN"))
+		name = def.Name
+	}
+	col := d.QuoteIdent(name)
+	newType := strings.TrimSpace(def.Type)
+	retype := !sameType(newType, old.Type) || def.Collation != old.Collation || def.Nullable != old.Nullable
+	redefault := def.DefaultKind != old.DefaultKind || (def.DefaultKind != DefaultNone && def.Default != old.DefaultText)
+	// A default constraint blocks ALTER COLUMN, so it goes first and comes back.
+	if old.defaultConstraint != "" && (retype || redefault) {
+		out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(old.defaultConstraint)+";")
+		redefault = def.DefaultKind != DefaultNone
+	}
+	if retype {
+		s := alter + "ALTER COLUMN " + col + " " + newType
+		if def.Collation != "" {
+			s += " COLLATE " + def.Collation
+		}
+		if def.Nullable {
+			s += " NULL"
+		} else {
+			s += " NOT NULL"
+		}
+		out = append(out, s+";")
+	}
+	if redefault && def.DefaultKind != DefaultNone {
+		v := strings.TrimSpace(def.Default)
+		switch def.DefaultKind {
+		case DefaultValue:
+			v = d.QuoteLiteral(Text(def.Default))
+		case DefaultNull:
+			v = "NULL"
+		}
+		out = append(out, alter+"ADD CONSTRAINT "+d.QuoteIdent("DF_"+t.Name+"_"+name)+" DEFAULT "+v+" FOR "+col+";")
+	}
+	if s := mssqlComment(d, t, name, old.Comment, def.Comment); s != "" {
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("nothing to change")
+	}
+	return out, nil
+}
+
+// chModifyColumn changes a ClickHouse column: RENAME COLUMN, MODIFY COLUMN
+// for the type (Nullable(…) when it allows NULL) and default, COMMENT COLUMN.
+func chModifyColumn(d Dialect, old Column, def ColumnDef, alter string) ([]string, error) {
+	var out []string
+	name := old.Name
+	if def.Name != old.Name {
+		out = append(out, alter+"RENAME COLUMN "+d.QuoteIdent(old.Name)+" TO "+d.QuoteIdent(def.Name)+";")
+		name = def.Name
+	}
+	col := d.QuoteIdent(name)
+	newType := strings.TrimSpace(def.Type)
+	oldType := old.Type
+	if def.Nullable {
+		newType = chNullableType(newType)
+	}
+	if old.Nullable {
+		oldType = chNullableType(oldType) // columns() shows Nullable(T) as T
+	}
+	retype := !sameType(newType, oldType)
+	redefault := def.DefaultKind != old.DefaultKind || (def.DefaultKind != DefaultNone && def.Default != old.DefaultText)
+	if retype || redefault && def.DefaultKind != DefaultNone {
+		s := alter + "MODIFY COLUMN " + col + " " + newType
+		switch def.DefaultKind {
+		case DefaultValue:
+			s += " DEFAULT " + d.QuoteLiteral(Text(def.Default))
+		case DefaultExpression:
+			s += " DEFAULT " + strings.TrimSpace(def.Default)
+		case DefaultNull:
+			s += " DEFAULT NULL"
+		}
+		out = append(out, s+";")
+	}
+	if redefault && def.DefaultKind == DefaultNone {
+		out = append(out, alter+"MODIFY COLUMN "+col+" REMOVE DEFAULT;")
+	}
+	if c := strings.TrimSpace(def.Comment); c != old.Comment {
+		out = append(out, alter+"COMMENT COLUMN "+col+" "+d.QuoteLiteral(Text(c))+";")
+	}
+	if len(out) == 0 {
+		return nil, errors.New("nothing to change")
+	}
+	return out, nil
 }

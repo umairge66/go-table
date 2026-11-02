@@ -9,7 +9,7 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo } from '../types'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo } from '../types'
 import { DataView } from './DataView'
 import { DeleteTablesDialog } from './DeleteTablesDialog'
 import { subtitle } from './Home'
@@ -77,7 +77,10 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const menu = useMenu()
   const ownTitleBar = useOwnTitleBar()
   const conn = session.connection
-  const pg = family(conn.driver) === 'postgres'
+  // pg: databases on the server hold schemas (PostgreSQL, SQL Server); another
+  // database opens as its own session.
+  const pg = features(conn.driver).schemas && !features(conn.driver).file
+  const fileDb = features(conn.driver).file
   const production = conn.tag === 'production'
 
   const mainSchema = session.schema || session.schemas[0] || ''
@@ -558,7 +561,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     ...dbs.filter((d) => d.key !== activeDb.key).flatMap((d) => objectCommands(d, true)),
     { id: 'new-query', label: 'New query', hint: 'Ctrl T', icon: <Code2 />, run: () => newQuery() },
     { id: 'new-table', label: 'New table…', icon: <Plus />, run: () => newTable(activeDb) },
-    { id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) },
+    { id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) },
     { id: 'saved-queries', label: 'Saved queries', icon: <FileCode2 />, run: () => { setSidebarHidden(false); setSideTab('queries') } },
     { id: 'history', label: 'Query history', icon: <History />, run: () => { setSidebarHidden(false); setSideTab('history') } },
     { id: 'toggle-sidebar', label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', hint: 'Ctrl B', icon: <PanelLeft />, run: toggleSidebar },
@@ -576,7 +579,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   ], [dbs, activeDb, activeTab, theme, inspector, sessions, session.id, refresh, sidebarHidden, railHidden]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isOpen = (database: string, schema: string) => dbs.some((d) => d.info.database === database && d.schema === schema)
-  const schemaGroup = pg ? `Schemas in ${activeDb.info.database}` : family(conn.driver) === 'sqlite' ? 'Attached databases' : 'Databases'
+  const schemaGroup = pg ? `Schemas in ${activeDb.info.database}` : family(conn.driver) === 'sqlite' ? 'Attached databases' : fileDb ? 'Schemas' : 'Databases'
   const databaseCommands: Command[] = [
     ...schemaList.map((s) => ({ id: 'schema:' + s, label: s, group: schemaGroup, icon: <Database />,
       active: s === activeDb.schema, hint: s !== activeDb.schema && isOpen(activeDb.info.database, s) ? 'open' : pg ? 'schema' : undefined,
@@ -584,7 +587,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     ...(pg ? (serverDbs ?? []).map((name) => ({ id: 'db:' + name, label: name, group: 'Databases on this server', icon: <Server />,
       active: name === activeDb.info.database, hint: name !== activeDb.info.database && dbs.some((d) => d.info.database === name) ? 'open' : undefined,
       run: () => openDb({ database: name }) })) : []),
-    { id: 'create-database', label: pg ? 'Create database or schema…' : family(conn.driver) === 'sqlite' ? 'Create database file…' : 'Create database…',
+    { id: 'create-database', label: pg ? 'Create database or schema…' : family(conn.driver) === 'sqlite' ? 'Create database file…' : fileDb ? 'Create schema…' : 'Create database…',
       group: 'Actions', icon: <Plus />, run: () => setCreatingDb(true) },
   ]
 
@@ -893,7 +896,13 @@ function DbRail({ dbs, activeKey, pg, mainSid, onSelect, onClose, onMenu, onOpen
 }
 
 export function quote(name: string, driver: Driver) {
-  return family(driver) === 'mysql' ? '`' + name.replace(/`/g, '``') + '`' : /^[a-z_][a-z0-9_]*$/.test(name) ? name : '"' + name.replace(/"/g, '""') + '"'
+  if (/^[a-z_][a-z0-9_]*$/.test(name)) return name
+  switch (family(driver)) {
+    case 'mysql': return '`' + name.replace(/`/g, '``') + '`'
+    case 'clickhouse': return '`' + name.replace(/[`\\]/g, '\\$&') + '`'
+    case 'sqlserver': return '[' + name.replace(/]/g, ']]') + ']'
+  }
+  return '"' + name.replace(/"/g, '""') + '"'
 }
 
 function Section({ title, items, db, activeId, selected, onClick, onMenu }: {

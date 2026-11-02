@@ -126,6 +126,86 @@ const CATALOG: PerDriver<TypeGroup[]> = {
       { name: 'DOUBLE', hint: 'stored as REAL' },
     ] },
   ],
+  sqlserver: [
+    { label: 'Numeric', types: [
+      { name: 'int', hint: '4 bytes, ±2.1 billion', traits: ['int'] },
+      { name: 'bigint', hint: '8 bytes', traits: ['int'] },
+      { name: 'smallint', hint: '2 bytes', traits: ['int'] },
+      { name: 'tinyint', hint: '0 to 255', traits: ['int'] },
+      { name: 'decimal', hint: 'exact number, e.g. money', param: { kind: 'precision', placeholder: '18,2', initial: '18,2' } },
+      { name: 'float', hint: 'approximate, 8 bytes' },
+      { name: 'real', hint: 'approximate, 4 bytes' },
+      { name: 'money', hint: 'currency amount' },
+      { name: 'bit', hint: '0 / 1 (true / false)' },
+    ] },
+    { label: 'Text', types: [
+      { name: 'nvarchar', hint: 'Unicode text up to the length (or max)', param: len('length or max', '255', true), traits: ['text'] },
+      { name: 'varchar', hint: 'text in the collation\'s code page', param: len('length or max', '255', true), traits: ['text'] },
+      { name: 'nchar', hint: 'fixed-length Unicode text', param: len('length', '1'), traits: ['text'] },
+      { name: 'char', hint: 'fixed-length text', param: len('length', '1'), traits: ['text'] },
+    ] },
+    { label: 'Date and time', types: [
+      { name: 'date', hint: 'calendar date' },
+      { name: 'datetime2', hint: 'date and time', param: { kind: 'fsp' } },
+      { name: 'datetimeoffset', hint: 'date and time with offset', param: { kind: 'fsp' } },
+      { name: 'time', hint: 'time of day', param: { kind: 'fsp' } },
+      { name: 'datetime', hint: 'older date and time (3 ms steps)' },
+    ] },
+    { label: 'Other', types: [
+      { name: 'uniqueidentifier', hint: 'GUID' }, { name: 'varbinary', hint: 'bytes', param: len('length or max', 'max', true) },
+      { name: 'xml', hint: 'XML document' }, { name: 'rowversion', hint: 'changes on every update' },
+    ] },
+  ],
+  duckdb: [
+    { label: 'Numeric', types: [
+      { name: 'INTEGER', hint: '4 bytes', traits: ['int'] },
+      { name: 'BIGINT', hint: '8 bytes', traits: ['int'] },
+      { name: 'SMALLINT', hint: '2 bytes', traits: ['int'] },
+      { name: 'HUGEINT', hint: '16 bytes', traits: ['int'] },
+      { name: 'UBIGINT', hint: 'unsigned, 8 bytes', traits: ['int'] },
+      { name: 'DECIMAL', hint: 'exact number', param: { kind: 'precision', placeholder: '18,3', initial: '18,3' } },
+      { name: 'DOUBLE', hint: 'approximate, 8 bytes' },
+      { name: 'FLOAT', hint: 'approximate, 4 bytes' },
+    ] },
+    { label: 'Text', types: [{ name: 'VARCHAR', hint: 'text of any length', traits: ['text'] }] },
+    { label: 'Date and time', types: [
+      { name: 'DATE', hint: 'calendar date' },
+      { name: 'TIMESTAMP', hint: 'date and time' },
+      { name: 'TIMESTAMPTZ', hint: 'date and time with time zone' },
+      { name: 'TIME', hint: 'time of day' },
+      { name: 'INTERVAL', hint: 'a duration' },
+    ] },
+    { label: 'Other', types: [
+      { name: 'BOOLEAN', hint: 'true / false' }, { name: 'UUID', hint: 'UUID' }, { name: 'BLOB', hint: 'bytes' },
+      { name: 'JSON', hint: 'JSON document' },
+      { name: 'ENUM', hint: 'one of a list', param: { kind: 'values', placeholder: "'a','b','c'", initial: "'a','b'" }, traits: ['text'] },
+    ] },
+  ],
+  clickhouse: [
+    { label: 'Numeric', types: [
+      { name: 'Int32', hint: '4 bytes', traits: ['int'] }, { name: 'Int64', hint: '8 bytes', traits: ['int'] },
+      { name: 'UInt32', hint: 'unsigned, 4 bytes', traits: ['int'] }, { name: 'UInt64', hint: 'unsigned, 8 bytes', traits: ['int'] },
+      { name: 'UInt8', hint: '0 to 255', traits: ['int'] }, { name: 'Int16', hint: '2 bytes', traits: ['int'] },
+      { name: 'Decimal', hint: 'exact number', param: { kind: 'precision', placeholder: '18,4', initial: '18,4' } },
+      { name: 'Float64', hint: 'approximate, 8 bytes' }, { name: 'Float32', hint: 'approximate, 4 bytes' },
+    ] },
+    { label: 'Text', types: [
+      { name: 'String', hint: 'bytes of any length' },
+      { name: 'LowCardinality(String)', hint: 'text with few distinct values (dictionary-encoded)' },
+      { name: 'FixedString', hint: 'exactly N bytes', param: len('bytes', '16', true) },
+    ] },
+    { label: 'Date and time', types: [
+      { name: 'Date', hint: 'calendar date (1970–2149)' },
+      { name: 'Date32', hint: 'calendar date (1900–2299)' },
+      { name: 'DateTime', hint: 'date and time, seconds' },
+      { name: 'DateTime64', hint: 'date and time with sub-seconds', param: len('precision', '3', true) },
+    ] },
+    { label: 'Other', types: [
+      { name: 'Bool', hint: 'true / false' }, { name: 'UUID', hint: 'UUID' }, { name: 'IPv4', hint: 'IPv4 address' }, { name: 'IPv6', hint: 'IPv6 address' },
+      { name: 'Enum8', hint: 'one of a list', param: { kind: 'values', placeholder: "'a' = 1, 'b' = 2", initial: "'a' = 1, 'b' = 2" } },
+      { name: 'Array(String)', hint: 'list of text' }, { name: 'Map(String, String)', hint: 'key/value pairs' },
+    ] },
+  ],
 }
 
 /** typeGroups lists the built-in types plus the database's own types. */

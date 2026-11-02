@@ -104,6 +104,7 @@ var fileKinds = map[string]FileFilter{
 	"zip":    {"ZIP archive", "*.zip"},
 	"gz":     {"Compressed SQL", "*.sql.gz;*.gz"},
 	"sqlite": {"SQLite database", "*.sqlite;*.sqlite3;*.db"},
+	"duckdb": {"DuckDB database", "*.duckdb;*.ddb;*.db"},
 }
 
 func filtersFor(kinds []string) []FileFilter {

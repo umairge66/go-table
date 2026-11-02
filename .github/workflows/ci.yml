@@ -1,5 +1,6 @@
 # Tests on every push and pull request: frontend checks, Go tests against
-# real PostgreSQL / MySQL / MariaDB servers, and the end-to-end tests.
+# real PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse servers (and
+# DuckDB, SQLite files), and the end-to-end tests.
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
 run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.number) || github.ref_name }}"
@@ -45,6 +46,24 @@ jobs:
         ports: ["3307:3306"]
         options: >-
           --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 3s --health-timeout 5s --health-retries 40
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: GoTable-test1
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P GoTable-test1 -Q 'SELECT 1'" --health-interval 3s --health-timeout 5s --health-retries 40
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: gotable
+          CLICKHOUSE_PASSWORD: gotable-test
+          CLICKHOUSE_DB: gotable
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "clickhouse-client --user gotable --password gotable-test -q 'SELECT 1'" --health-interval 2s --health-timeout 5s --health-retries 30
     env:
       GOTABLE_TEST_PG_HOST: 127.0.0.1
       GOTABLE_TEST_PG_PORT: "5432"
@@ -61,6 +80,16 @@ jobs:
       GOTABLE_TEST_MARIADB_USER: root
       GOTABLE_TEST_MARIADB_PASSWORD: gotable-test
       GOTABLE_TEST_MARIADB_DB: gotable
+      GOTABLE_TEST_MSSQL_HOST: 127.0.0.1
+      GOTABLE_TEST_MSSQL_PORT: "1433"
+      GOTABLE_TEST_MSSQL_USER: sa
+      GOTABLE_TEST_MSSQL_PASSWORD: GoTable-test1
+      GOTABLE_TEST_MSSQL_DB: master
+      GOTABLE_TEST_CH_HOST: 127.0.0.1
+      GOTABLE_TEST_CH_PORT: "9000"
+      GOTABLE_TEST_CH_USER: gotable
+      GOTABLE_TEST_CH_PASSWORD: gotable-test
+      GOTABLE_TEST_CH_DB: gotable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -84,7 +113,7 @@ jobs:
 
       - name: Go vet
         run: go vet -tags desktop,production,webkit2_41 ./...
-      - name: Go tests (SQLite, PostgreSQL, MySQL, MariaDB)
+      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse)
         run: go test -race -count=1 ./...
 
       - name: Build the app
@@ -95,6 +124,10 @@ jobs:
         working-directory: frontend
         env:
           GOTABLE_E2E_PG: postgres://postgres:gotable-test@127.0.0.1:5432/postgres?sslmode=disable
+          GOTABLE_E2E_COMPAT: >-
+            sqlserver://sa:GoTable-test1@127.0.0.1:1433?database=master
+            clickhouse://gotable:gotable-test@127.0.0.1:9000/gotable
+            duckdb:///tmp/gotable-compat.duckdb
         run: npx playwright test
       - name: Keep the end-to-end traces of a failure
         if: failure()

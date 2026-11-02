@@ -6,7 +6,7 @@ import { FilePicker, pickedName, type PickedFile } from '../components/FilePicke
 import { JobProgress, UploadProgress, useJob } from '../components/Progress'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, timestamp, type SaveTarget } from '../lib/saveFile'
-import { family, type DbObject, type FileSource, type SessionInfo } from '../types'
+import { family, features, type DbObject, type FileSource, type SessionInfo } from '../types'
 import { saveJobAs } from './ExportDialog'
 
 type Tab = 'export' | 'import'
@@ -165,7 +165,8 @@ function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionIn
   const toast = useToast()
   const mysql = family(session.connection.driver) === 'mysql'
   const [file, setFile] = useState<PickedFile | null>(null)
-  const [mode, setMode] = useState<'transaction' | 'continue'>(mysql ? 'continue' : 'transaction')
+  const txn = features(session.connection.driver).transactions // ClickHouse has none
+  const [mode, setMode] = useState<'transaction' | 'continue'>(mysql || !txn ? 'continue' : 'transaction')
   const [upload, setUpload] = useState<{ fraction: number; loaded: number } | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJob(jobId)
@@ -225,7 +226,7 @@ function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionIn
         {([['transaction', 'Stop and undo everything', mysql
           ? 'Runs in one transaction. Note: MySQL commits CREATE/ALTER/DROP immediately, so those can’t be undone.'
           : 'Runs in one transaction: the database is unchanged unless the whole file succeeds.'],
-          ['continue', 'Skip it and keep going', 'Failed statements are listed with their line numbers at the end.']] as const).map(([id, label, desc]) => (
+          ['continue', 'Skip it and keep going', 'Failed statements are listed with their line numbers at the end.']] as const).filter(([id]) => txn || id === 'continue').map(([id, label, desc]) => (
           <label key={id} className={clsx('flex cursor-pointer gap-3 rounded-xl border p-3', mode === id ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-hover')}>
             <input type="radio" className="mt-0.5 accent-[var(--accent)]" checked={mode === id} onChange={() => setMode(id)} />
             <span><span className="block text-[13px] font-medium">{label}</span><span className="block text-[12px] text-muted">{desc}</span></span>

@@ -6,7 +6,11 @@ const languages: PerDriver<SqlLanguage> = {
   mysql: 'mysql',
   mariadb: 'mariadb',
   tidb: 'tidb',
+  singlestore: 'singlestoredb',
   sqlite: 'sqlite',
+  sqlserver: 'transactsql',
+  duckdb: 'duckdb',
+  clickhouse: 'clickhouse',
 }
 
 /**
@@ -23,7 +27,9 @@ export function formatSQL(sql: string, driver: Driver): string {
     tabWidth: 2,
     linesBetweenQueries: 1,
     // PostgreSQL $1 / MySQL ? placeholders and :name parameters stay as they are.
-    paramTypes: family(driver) === 'postgres' ? { positional: false, numbered: ['$'] } : { positional: true },
+    paramTypes: family(driver) === 'postgres' ? { positional: false, numbered: ['$'] }
+      : family(driver) === 'duckdb' ? { positional: true, numbered: ['$'] }
+        : family(driver) === 'sqlserver' ? { positional: false, named: ['@'] } : { positional: true },
   })
   return sql.endsWith('\n') ? out + '\n' : out
 }

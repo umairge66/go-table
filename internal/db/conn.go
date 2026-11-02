@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -334,13 +336,15 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 		return err
 	}
 	defer c.mu.Unlock()
-	tx, err := c.conn.BeginTx(ctx, nil)
+	tx, err := c.begin(ctx)
 	if err != nil {
 		return err
 	}
+	// ClickHouse mutations report no row count.
+	counted := c.Dialect.family != model.DriverClickHouse
 	for _, s := range stmts {
 		res, err := tx.ExecContext(ctx, s.SQL, s.Args...)
-		if err == nil && s.Args != nil && !strings.HasPrefix(s.SQL, "INSERT") {
+		if err == nil && counted && s.Args != nil && !strings.HasPrefix(s.SQL, "INSERT") {
 			if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
 				err = fmt.Errorf("row no longer exists or was changed by someone else")
 			}
@@ -416,7 +420,9 @@ func (c *Conn) execOne(ctx context.Context, stmt string, rowCap int) Result {
 }
 
 var rowKeywords = []string{"SELECT", "WITH", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "PRAGMA",
-	"VALUES", "TABLE", "CALL", "ANALYZE", "CHECK", "CHECKSUM", "OPTIMIZE", "REPAIR", "FETCH"}
+	"VALUES", "TABLE", "CALL", "ANALYZE", "CHECK", "CHECKSUM", "OPTIMIZE", "REPAIR", "FETCH",
+	"FROM", "SUMMARIZE", "PIVOT", "UNPIVOT", // DuckDB
+	"EXISTS"} // ClickHouse
 
 // returnsRows guesses whether a statement produces a result set.
 func returnsRows(stmt string) bool {
@@ -494,6 +500,14 @@ func scanRows(rows *sql.Rows, rowCap int) (*ResultSet, bool, error) {
 
 // toValue converts a driver value to its display/edit text.
 func toValue(v any, dbType string) Value {
+	if isComposite(dbType) { // ClickHouse Array/Map/Tuple: JSON (an Array(UInt8) isn't text)
+		if b, err := json.Marshal(plain(reflect.ValueOf(v))); err == nil {
+			return Text(string(b))
+		}
+	}
+	if b, ok := v.([]byte); ok && len(b) == 16 && dbType == "UNIQUEIDENTIFIER" {
+		return Text(mssqlGUID(b))
+	}
 	switch x := v.(type) {
 	case nil:
 		return NullValue
@@ -512,8 +526,43 @@ func toValue(v any, dbType string) Value {
 		return Text(strconv.FormatFloat(float64(x), 'f', -1, 32))
 	case bool:
 		return Text(strconv.FormatBool(x))
+	case fmt.Stringer: // UUIDs, decimals, big integers, intervals
+		return Text(x.String())
+	case []any, map[string]any, map[any]any:
+		// Lists, structs and maps (DuckDB, ClickHouse) read best as JSON.
+		if b, err := json.Marshal(jsonSafe(x)); err == nil {
+			return Text(string(b))
+		}
 	}
 	return Text(fmt.Sprint(v))
+}
+
+// jsonSafe turns map[any]any (which encoding/json refuses) into
+// map[string]any, recursively.
+func jsonSafe(v any) any {
+	switch x := v.(type) {
+	case map[any]any:
+		m := make(map[string]any, len(x))
+		for k, e := range x {
+			m[fmt.Sprint(k)] = jsonSafe(e)
+		}
+		return m
+	case map[string]any:
+		m := make(map[string]any, len(x))
+		for k, e := range x {
+			m[k] = jsonSafe(e)
+		}
+		return m
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = jsonSafe(e)
+		}
+		return out
+	case fmt.Stringer:
+		return x.String()
+	}
+	return v
 }
 
 func formatTime(t time.Time, dbType string) string {
@@ -561,8 +610,86 @@ func (c *Conn) CurrentDatabase(ctx context.Context) string {
 			return name
 		}
 		return c.Config.DBName
-	case model.DriverSQLite:
+	case model.DriverMSSQL:
+		if err := c.lock(ctx); err != nil {
+			return c.Config.DBName
+		}
+		defer c.mu.Unlock()
+		var name string
+		if err := c.conn.QueryRowContext(ctx, "SELECT DB_NAME()").Scan(&name); err == nil {
+			return name
+		}
+		return c.Config.DBName
+	case model.DriverSQLite, model.DriverDuckDB:
 		return c.Config.Path[strings.LastIndexAny(c.Config.Path, `/\`)+1:]
 	}
 	return c.Schema()
+}
+
+// txn is a transaction, or (ClickHouse) the connection itself.
+type txn interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	Commit() error
+	Rollback() error
+}
+
+// noTx runs statements directly where there are no transactions.
+type noTx struct{ c *sql.Conn }
+
+func (n noTx) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return n.c.ExecContext(ctx, q, args...)
+}
+func (noTx) Commit() error   { return nil }
+func (noTx) Rollback() error { return nil }
+
+// begin starts a transaction on the pinned connection. ClickHouse has none,
+// so its statements apply one by one. Callers hold c.mu.
+func (c *Conn) begin(ctx context.Context) (txn, error) {
+	if c.Dialect.family == model.DriverClickHouse {
+		return noTx{c.conn}, nil
+	}
+	return c.conn.BeginTx(ctx, nil)
+}
+
+func isComposite(dbType string) bool {
+	for _, p := range []string{"Array(", "Map(", "Tuple(", "Nested("} {
+		if strings.HasPrefix(dbType, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// plain turns slices, arrays, maps and pointers of any element type into
+// []any and map[string]any so they encode as JSON lists and objects.
+func plain(v reflect.Value) any {
+	if !v.IsValid() {
+		return nil
+	}
+	if s, ok := v.Interface().(fmt.Stringer); ok && v.Kind() != reflect.Slice && v.Kind() != reflect.Map {
+		return s.String()
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		return plain(v.Elem())
+	case reflect.Slice, reflect.Array:
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			return []any{}
+		}
+		out := make([]any, v.Len())
+		for i := range out {
+			out[i] = plain(v.Index(i))
+		}
+		return out
+	case reflect.Map:
+		out := make(map[string]any, v.Len())
+		for it := v.MapRange(); it.Next(); {
+			out[fmt.Sprint(it.Key().Interface())] = plain(it.Value())
+		}
+		return out
+	}
+	return v.Interface()
 }

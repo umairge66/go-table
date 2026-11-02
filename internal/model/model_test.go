@@ -199,3 +199,46 @@ func TestCompatibleDrivers(t *testing.T) {
 		t.Error("unknown driver accepted")
 	}
 }
+
+func TestMoreDrivers(t *testing.T) {
+	for raw, want := range map[string]struct {
+		d   Driver
+		ssl string
+		db  string
+	}{
+		"postgresql://u:p@ep-cool-name-123.eu-central-1.aws.neon.tech/neondb":                    {DriverNeon, "require", "neondb"},
+		"postgres://postgres:p@db.abcdefgh.supabase.co:5432/postgres":                            {DriverSupabase, "require", "postgres"},
+		"mysql://u:p@aws.connect.psdb.cloud/shop?ssl-mode=VERIFY_IDENTITY":                       {DriverPlanetScale, "verify_identity", "shop"},
+		"postgres://u@localhost/app":                                                             {DriverPostgres, "prefer", "app"},
+		"timescaledb://u@localhost/metrics":                                                      {DriverTimescaleDB, "prefer", "metrics"},
+		"percona://root@localhost/shop":                                                          {DriverPercona, "preferred", "shop"},
+		"singlestore://admin@svc-1.singlestore.com:3306/db":                                      {DriverSingleStore, "preferred", "db"},
+		"sqlserver://sa:p@localhost:1433?database=shop&encrypt=true&TrustServerCertificate=true": {DriverMSSQL, "trust", "shop"},
+		"clickhouse://default@localhost:9440/logs?secure=true":                                   {DriverClickHouse, "require", "logs"},
+	} {
+		c, _, err := ParseURL(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if c.Driver != want.d || c.SSLMode != want.ssl || c.DBName != want.db {
+			t.Errorf("%s: %s %q %q", raw, c.Driver, c.SSLMode, c.DBName)
+		}
+	}
+	for _, raw := range []string{"duckdb:///data/warehouse.duckdb", "/data/warehouse.duckdb"} {
+		c, _, err := ParseURL(raw)
+		if err != nil || c.Driver != DriverDuckDB || c.Path != "/data/warehouse.duckdb" || c.Name != "warehouse" {
+			t.Errorf("%s: %+v %v", raw, c, err)
+		}
+	}
+	if !DriverDuckDB.IsFileBased() || DriverMSSQL.IsFileBased() || DriverMSSQL.DefaultPort() != 1433 || DriverClickHouse.DefaultPort() != 9000 {
+		t.Error("file-based or port wrong")
+	}
+	if DriverNeon.SSLModes()[0] != "require" || DriverPlanetScale.SSLModes()[0] != "required" {
+		t.Error("hosted services must default to TLS")
+	}
+	for _, d := range Drivers {
+		if d.Label() == string(d) || d.Family() == "" {
+			t.Errorf("%s has no spec", d)
+		}
+	}
+}

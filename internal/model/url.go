@@ -10,8 +10,11 @@ import (
 
 // ParseURL builds a connection from a connection string such as
 // postgres://user:pass@host:5432/db?sslmode=require, mysql://…, mariadb://…,
-// cockroachdb://…, yugabytedb://…, tidb://…,
-// sqlite:///path/to/file.db or a plain path to a .db/.sqlite file. The
+// sqlserver://…, clickhouse://…, the compatible servers' own schemes
+// (cockroachdb://, tidb://, …), sqlite:///path/to/file.db, duckdb:///path or
+// a plain path to a .db/.sqlite/.duckdb file. Plain postgres:// and mysql://
+// URLs of known cloud services (Neon, Supabase, PlanetScale, …) pick that
+// service. The
 // password, if present, is returned separately so it can go to the keyring.
 func ParseURL(raw string) (*Connection, string, error) {
 	raw = strings.TrimSpace(raw)
@@ -20,6 +23,12 @@ func ParseURL(raw string) (*Connection, string, error) {
 	}
 	if !strings.Contains(raw, "://") {
 		ext := strings.ToLower(filepath.Ext(raw))
+		if ext == ".duckdb" || ext == ".ddb" {
+			c := NewConnection(DriverDuckDB)
+			c.Path = raw
+			c.Name = strings.TrimSuffix(filepath.Base(raw), filepath.Ext(raw))
+			return c, "", nil
+		}
 		if ext == ".db" || ext == ".sqlite" || ext == ".sqlite3" || ext == ".db3" {
 			c := NewConnection(DriverSQLite)
 			c.Path = raw
@@ -46,20 +55,41 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverYugabyteDB
 	case "tidb":
 		d = DriverTiDB
-	case "sqlite", "sqlite3", "file":
-		c := NewConnection(DriverSQLite)
+	case "timescaledb", "timescale":
+		d = DriverTimescaleDB
+	case "neon":
+		d = DriverNeon
+	case "supabase":
+		d = DriverSupabase
+	case "percona":
+		d = DriverPercona
+	case "singlestore", "memsql":
+		d = DriverSingleStore
+	case "planetscale":
+		d = DriverPlanetScale
+	case "sqlserver", "mssql":
+		d = DriverMSSQL
+	case "clickhouse", "ch":
+		d = DriverClickHouse
+	case "sqlite", "sqlite3", "file", "duckdb":
+		fd := DriverSQLite
+		if strings.EqualFold(u.Scheme, "duckdb") {
+			fd = DriverDuckDB
+		}
+		c := NewConnection(fd)
 		c.Path = u.Path
 		if u.Host != "" && u.Host != "localhost" {
 			c.Path = u.Host + u.Path // sqlite://relative/path.db
 		}
 		if c.Path == "" {
-			return nil, "", fmt.Errorf("the SQLite URL has no file path")
+			return nil, "", fmt.Errorf("the %s URL has no file path", fd.Label())
 		}
 		c.Name = strings.TrimSuffix(filepath.Base(c.Path), filepath.Ext(c.Path))
 		return c, "", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported database type %q", u.Scheme)
 	}
+	d = byHost(d, strings.ToLower(u.Hostname()))
 	c := NewConnection(d)
 	c.Host = u.Hostname()
 	if c.Host == "" {
@@ -85,9 +115,59 @@ func ParseURL(raw string) (*Connection, string, error) {
 	if m := q.Get("ssl-mode"); m != "" && d.Family() == DriverMySQL {
 		c.SSLMode = strings.ToLower(m)
 	}
+	if d == DriverMSSQL {
+		if db := q.Get("database"); db != "" { // sqlserver://user@host?database=shop
+			c.DBName = db
+		}
+		switch strings.ToLower(q.Get("encrypt")) {
+		case "disable":
+			c.SSLMode = "disable"
+		case "true":
+			c.SSLMode = "required"
+		case "strict":
+			c.SSLMode = "strict"
+		}
+		if strings.EqualFold(q.Get("TrustServerCertificate"), "true") {
+			c.SSLMode = "trust"
+		}
+	}
+	if d == DriverClickHouse && (q.Get("secure") == "true" || q.Get("secure") == "1") {
+		c.SSLMode = "require"
+		if q.Get("skip_verify") == "true" {
+			c.SSLMode = "skip-verify"
+		}
+	}
 	c.Name = c.Host
 	if c.DBName != "" {
 		c.Name = c.DBName + " @ " + c.Host
 	}
 	return c, password, nil
+}
+
+// hostedSuffixes maps the host names of cloud services to their driver.
+var hostedSuffixes = []struct {
+	suffix string
+	family Driver
+	driver Driver
+}{
+	{".neon.tech", DriverPostgres, DriverNeon},
+	{".supabase.co", DriverPostgres, DriverSupabase},
+	{".supabase.com", DriverPostgres, DriverSupabase},
+	{".cockroachlabs.cloud", DriverPostgres, DriverCockroachDB},
+	{".psdb.cloud", DriverMySQL, DriverPlanetScale},
+	{".tidbcloud.com", DriverMySQL, DriverTiDB},
+	{".singlestore.com", DriverMySQL, DriverSingleStore},
+}
+
+// byHost picks the service a plain postgres:// or mysql:// URL points at.
+func byHost(d Driver, host string) Driver {
+	if d != DriverPostgres && d != DriverMySQL {
+		return d
+	}
+	for _, h := range hostedSuffixes {
+		if h.family == d && strings.HasSuffix(host, h.suffix) {
+			return h.driver
+		}
+	}
+	return d
 }

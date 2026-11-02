@@ -69,8 +69,15 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	case model.DriverSQLite:
 		sqlDB, err = openSQLite(cfg.Path)
 		eng = sqliteEngine{}
+	case model.DriverMSSQL:
+		sqlDB, err = openMSSQL(cfg, addr, cred.Password)
+		eng = mssqlEngine{}
 	default:
-		err = fmt.Errorf("unsupported driver %q", cfg.Driver)
+		if open, ok := openers[cfg.Driver.Family()]; ok {
+			sqlDB, eng, err = open(cfg, addr, cred.Password)
+		} else {
+			err = fmt.Errorf("%s isn't available in this build of GoTable", cfg.Driver.Label())
+		}
 	}
 	if err != nil {
 		if tunnel != nil {
@@ -90,4 +97,18 @@ func Test(ctx context.Context, cfg *model.Connection, cred Credentials) (string,
 	}
 	defer c.Close()
 	return c.ServerVersion(ctx)
+}
+
+// openers holds engines registered by files that are only part of some
+// builds (DuckDB needs cgo).
+var openers = map[model.Driver]func(cfg *model.Connection, addr, password string) (*sql.DB, engine, error){}
+
+// Supported reports whether this build can open connections of driver d.
+func Supported(d model.Driver) bool {
+	switch d.Family() {
+	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL:
+		return true
+	}
+	_, ok := openers[d.Family()]
+	return ok
 }

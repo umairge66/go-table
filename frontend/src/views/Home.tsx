@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
 import { api } from '../api'
 import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
-import { family, tagInfo, type Connection, type Group } from '../types'
+import { features, tagInfo, type Connection, type Group } from '../types'
 import { ConnectionForm, UrlDialog, newConnection } from './ConnectionForm'
 
 export function subtitle(c: Connection) {
-  if (family(c.driver) === 'sqlite') return c.path ?? ''
+  if (features(c.driver).file) return c.path ?? ''
   let s = `${c.host || '127.0.0.1'}${c.port ? ':' + c.port : ''}`
   if (c.user) s = `${c.user}@${s}`
   if (c.database) s += `/${c.database}`

@@ -26,6 +26,8 @@ type Scanner struct {
 	r     *bufio.Reader
 	kind  model.Driver
 	mysql bool
+	// bs: backslash escapes, `backticks` and # comments (MySQL, ClickHouse).
+	bs    bool
 	delim string
 	line  int
 	copy  *copyReader
@@ -34,7 +36,9 @@ type Scanner struct {
 
 // NewScanner returns a Scanner for the dialect of kind.
 func NewScanner(r io.Reader, kind model.Driver) *Scanner {
-	return &Scanner{r: bufio.NewReaderSize(r, 1<<20), kind: kind.Family(), mysql: kind.Family() == model.DriverMySQL, delim: ";", line: 1}
+	f := kind.Family()
+	return &Scanner{r: bufio.NewReaderSize(r, 1<<20), kind: f, mysql: f == model.DriverMySQL,
+		bs: f == model.DriverMySQL || f == model.DriverClickHouse, delim: ";", line: 1}
 }
 
 var copyFromStdin = regexp.MustCompile(`(?is)^COPY\s.+\sFROM\s+stdin\b`)
@@ -136,17 +140,17 @@ func (s *Scanner) Next() (Stmt, error) {
 			continue
 		case quote != 0:
 			s.buf = append(s.buf, c)
-			if c == '\\' && s.mysql && quote != '`' {
+			if c == '\\' && s.bs && quote != '`' && quote != '[' {
 				if n, err := s.r.ReadByte(); err == nil {
 					if n == '\n' {
 						s.line++
 					}
 					s.buf = append(s.buf, n)
 				}
-			} else if c == quote {
-				if p, _ := s.r.Peek(1); len(p) == 1 && p[0] == quote {
+			} else if closing := closeOf(quote); c == closing {
+				if p, _ := s.r.Peek(1); len(p) == 1 && p[0] == closing {
 					s.r.ReadByte()
-					s.buf = append(s.buf, quote)
+					s.buf = append(s.buf, closing)
 				} else {
 					quote = 0
 				}
@@ -160,6 +164,21 @@ func (s *Scanner) Next() (Stmt, error) {
 			continue
 		}
 
+		// T-SQL batch separator: a GO line ends the statement before it.
+		if lineStart && s.kind == model.DriverMSSQL && (c == 'G' || c == 'g') {
+			if p, _ := s.r.Peek(64); isGoLine(string(append([]byte{c}, p...))) {
+				s.r.ReadString('\n')
+				s.line++
+				lineStart = true
+				if st, ok := emit(); ok {
+					return st, nil
+				}
+				s.buf = s.buf[:0]
+				meaningful = false
+				startLine = s.line
+				continue
+			}
+		}
 		// Commands that occupy a whole line between statements.
 		if lineStart && !meaningful {
 			if s.mysql && (c == 'D' || c == 'd') {
@@ -190,7 +209,7 @@ func (s *Scanner) Next() (Stmt, error) {
 		}
 
 		switch {
-		case c == '-' && peekIs(s.r, '-'), c == '#' && s.mysql:
+		case c == '-' && peekIs(s.r, '-'), c == '#' && s.bs:
 			lineComment = true
 			s.buf = append(s.buf, c)
 			continue
@@ -203,12 +222,12 @@ func (s *Scanner) Next() (Stmt, error) {
 			}
 			blockComment = true
 			continue
-		case c == '\'' || c == '"' || c == '`' && s.mysql:
+		case c == '\'' || c == '"' || c == '`' && s.bs || c == '[' && s.kind == model.DriverMSSQL:
 			quote = c
 			meaningful = true
 			s.buf = append(s.buf, c)
 			continue
-		case c == '$' && s.kind == model.DriverPostgres && (len(s.buf) == 0 || !isIdent(s.buf[len(s.buf)-1])):
+		case c == '$' && (s.kind == model.DriverPostgres || s.kind == model.DriverDuckDB) && (len(s.buf) == 0 || !isIdent(s.buf[len(s.buf)-1])):
 			if tag := peekDollarTag(s.r); tag != nil {
 				s.r.Discard(len(tag) - 1)
 				s.buf = append(s.buf, tag...)
@@ -301,4 +320,12 @@ func (c *copyReader) Read(p []byte) (int, error) {
 	n := copy(p, c.line)
 	c.line = c.line[n:]
 	return n, nil
+}
+
+// closeOf is the character that ends a quote opened with q.
+func closeOf(q byte) byte {
+	if q == '[' {
+		return ']'
+	}
+	return q
 }

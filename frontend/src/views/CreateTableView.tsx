@@ -5,7 +5,7 @@ import { api, ApiError, type NewColumn, type TypeInfo } from '../api'
 import { Button, IconButton, Select, Switch, errorParts, useToast } from '../components/ui'
 import { TypeSelect } from '../components/TypeSelect'
 import { category, findType, groupOf, has, paramProblem, typeString, type TypeSpec } from '../lib/sqlTypes'
-import { family, forDriver, type PerDriver, type SessionInfo } from '../types'
+import { family, features, forDriver, type PerDriver, type SessionInfo } from '../types'
 import { EXPRESSIONS } from './ColumnDialog'
 
 type IndexKind = '' | 'primary' | 'unique' | 'index' | 'fulltext'
@@ -30,12 +30,18 @@ const ID: PerDriver<TypeSpec> = {
   mysql: { base: 'INT', param: '', unsigned: true, array: false, custom: false },
   mariadb: { base: 'INT', param: '', unsigned: true, array: false, custom: false },
   sqlite: { base: 'INTEGER', param: '', unsigned: false, array: false, custom: false },
+  sqlserver: { base: 'int', param: '', unsigned: false, array: false, custom: false },
+  duckdb: { base: 'BIGINT', param: '', unsigned: false, array: false, custom: false },
+  clickhouse: { base: 'UInt64', param: '', unsigned: false, array: false, custom: false },
 }
 const TEXT: PerDriver<TypeSpec> = {
   postgres: { base: 'text', param: '', unsigned: false, array: false, custom: false },
   mysql: { base: 'VARCHAR', param: '255', unsigned: false, array: false, custom: false },
   mariadb: { base: 'VARCHAR', param: '255', unsigned: false, array: false, custom: false },
   sqlite: { base: 'TEXT', param: '', unsigned: false, array: false, custom: false },
+  sqlserver: { base: 'nvarchar', param: '255', unsigned: false, array: false, custom: false },
+  duckdb: { base: 'VARCHAR', param: '', unsigned: false, array: false, custom: false },
+  clickhouse: { base: 'String', param: '', unsigned: false, array: false, custom: false },
 }
 
 /** Colour per type family, readable in light and dark themes. */
@@ -78,6 +84,8 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
   const toast = useToast()
   const driver = session.connection.driver
   const mysql = family(driver) === 'mysql'
+  const clickhouse = family(driver) === 'clickhouse'
+  const f = features(driver)
   const [info, setInfo] = useState<TypeInfo | null>(null)
   const [name, setName] = useState('')
   const [comment, setComment] = useState('')
@@ -86,7 +94,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
   const [collation, setCollation] = useState('')
   const [strict, setStrict] = useState(false)
   const [rows, setRows] = useState<Row[]>(() => [
-    newRow({ name: 'id', spec: forDriver(ID, driver), nullable: false, index: 'primary', autoIncrement: true }),
+    newRow({ name: 'id', spec: forDriver(ID, driver), nullable: false, index: 'primary', autoIncrement: features(driver).autoIncrement }),
     newRow({ spec: forDriver(TEXT, driver) }),
   ])
   const [addCount, setAddCount] = useState(1)
@@ -101,8 +109,9 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
     api.typeInfo(session.id, schema).then((i) => {
       setInfo(i)
       if (mysql) { setEngine((e) => e || i.defaultEngine); setCharset((c) => c || i.defaultCharset); setCollation((c) => c || i.defaultCollation) }
+      if (clickhouse) setEngine((e) => e || i.defaultEngine)
     }).catch(() => setInfo({ customTypes: [], collations: [], charsets: [], engines: [], defaultEngine: '', defaultCharset: '', defaultCollation: '', strict: false }))
-  }, [session.id, schema, mysql])
+  }, [session.id, schema, mysql, clickhouse])
   const custom = info?.customTypes ?? []
 
   const set = (key: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => {
@@ -138,7 +147,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
     collation: r.collation.trim(), onUpdateNow: r.onUpdateNow, primaryKey: r.index === 'primary', autoIncrement: r.autoIncrement,
     index: r.index === 'primary' ? '' : r.index,
   }))
-  const table = { name, columns, comment: family(driver) === 'sqlite' ? '' : comment, engine, charset, collation, strict }
+  const table = { name, columns, comment: f.comments ? comment : '', engine, charset, collation, strict }
   const taken = existing.some((t) => t.toLowerCase() === name.trim().toLowerCase())
   // Problems the page can explain on the spot (the server checks the rest).
   const rowProblem = (r: Row) => (r.spec.custom ? (!r.spec.base.trim() ? 'type the column type' : '') : paramProblem(findType(driver, r.spec.base, custom), r.spec.param))
@@ -221,7 +230,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
               <input autoFocus value={name} placeholder="Untitled table" aria-label="Table name" spellCheck={false}
                 onChange={(e) => setName(e.target.value)}
                 className={clsx('w-full bg-transparent text-[26px] font-semibold tracking-tight placeholder:text-faint focus:outline-none', taken && 'text-err')} />
-              {family(driver) !== 'sqlite'
+              {f.comments
                 ? <input value={comment} placeholder="Add a description (table comment)…" aria-label="Table comment" onChange={(e) => setComment(e.target.value)}
                     className="mt-1 w-full bg-transparent text-[13.5px] text-fg-2 placeholder:text-faint focus:outline-none" />
                 : <div className="mt-1 text-[13px] text-faint">SQLite table in {label}</div>}
@@ -285,12 +294,12 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
                           <datalist id={`exprs-${r.key}`}>{exprs.map((x) => <option key={x} value={x} />)}</datalist>
                         </div>
                         <Pill label="Allow NULL" text="NULL" checked={r.nullable} disabled={primary} onChange={(v) => set(r.key, { nullable: v })} />
-                        <Pill label="Auto-increment" text="AI" checked={r.autoIncrement} disabled={!has(t, 'int') && !r.autoIncrement} onChange={(v) => set(r.key, { autoIncrement: v })} />
+                        {f.autoIncrement && <Pill label="Auto-increment" text="AI" checked={r.autoIncrement} disabled={!has(t, 'int') && !r.autoIncrement} onChange={(v) => set(r.key, { autoIncrement: v })} />}
                         <Select selectClassName={clsx('rounded-lg text-[12px] font-semibold tracking-wide', INDEX_STYLE[r.index])} value={r.index} aria-label="Index"
                           onChange={(e) => set(r.key, { index: e.target.value as IndexKind })}>
                           <option value="">—</option>
                           <option value="primary">PRIMARY</option>
-                          <option value="unique">UNIQUE</option>
+                          {f.uniqueIndexes && <option value="unique">UNIQUE</option>}
                           <option value="index">INDEX</option>
                           {mysql && <option value="fulltext">FULLTEXT</option>}
                         </Select>
@@ -305,12 +314,12 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
                       {prob && <div className="mt-1 pl-[30px] text-[11.5px] font-medium text-err">{prob}</div>}
                       {r.open && (
                         <div className="mt-2 ml-[30px] flex flex-wrap items-end gap-x-5 gap-y-3 rounded-xl border border-line bg-panel p-3 animate-fade" aria-label={`More options for column ${idx + 1}`}>
-                          <Labeled label="Collation" className="w-56">
+                          {f.collations && <Labeled label="Collation" className="w-56">
                             <input className={clsx(field, 'border-line font-mono')} list={`colls-${r.key}`} value={r.collation} aria-label="Collation"
                               placeholder={family(driver) === 'sqlite' ? 'BINARY' : 'default'} onChange={(e) => set(r.key, { collation: e.target.value })} />
                             <datalist id={`colls-${r.key}`}>{(info?.collations ?? []).slice(0, 500).map((c) => <option key={c} value={c} />)}</datalist>
-                          </Labeled>
-                          {family(driver) !== 'sqlite' && (
+                          </Labeled>}
+                          {f.comments && (
                             <Labeled label="Comment" className="min-w-48 flex-1">
                               <input className={clsx(field, 'border-line')} value={r.comment} placeholder="What this column holds" aria-label="Column comment"
                                 onChange={(e) => set(r.key, { comment: e.target.value })} />
@@ -319,7 +328,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
                           <div className="flex flex-wrap items-center gap-4 pb-1.5">
                             {mysql && has(t, 'unsigned') && <Switch checked={r.spec.unsigned} label="UNSIGNED" onChange={(v) => set(r.key, { spec: { ...r.spec, unsigned: v } })} />}
                             {mysql && has(t, 'time') && <Switch checked={r.onUpdateNow} label="On update: CURRENT_TIMESTAMP" onChange={(v) => set(r.key, { onUpdateNow: v })} />}
-                            {family(driver) === 'postgres' && !r.spec.custom && <Switch checked={r.spec.array} label="Array ( [ ] )" onChange={(v) => set(r.key, { spec: { ...r.spec, array: v } })} />}
+                            {(family(driver) === 'postgres' || family(driver) === 'duckdb') && !r.spec.custom && <Switch checked={r.spec.array} label="Array ( [ ] )" onChange={(v) => set(r.key, { spec: { ...r.spec, array: v } })} />}
                           </div>
                           <div className="ml-auto flex gap-0.5 pb-0.5">
                             <IconButton label="Move up" disabled={idx === 0} onClick={() => move(r.key, -1)}><ArrowUp className="size-3.5" /></IconButton>
@@ -351,10 +360,17 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
             <Stat label="Indexes" value={String(indexes)} />
           </div>
 
-          {(mysql || (family(driver) === 'sqlite' && info?.strict)) && (
+          {(mysql || clickhouse || (family(driver) === 'sqlite' && info?.strict)) && (
             <section className="rounded-xl border border-line bg-panel p-3.5" aria-label="Table options">
               <div className="mb-3 flex items-center gap-2 text-[12.5px] font-semibold"><Settings2 className="size-3.5 text-muted" /> Table options</div>
-              {mysql ? (
+              {clickhouse ? (
+                <Labeled label="Table engine">
+                  <Select value={engine} onChange={(e) => setEngine(e.target.value)} aria-label="Storage engine">
+                    {(info?.engines ?? []).map((e) => <option key={e} value={e}>{e}{e === info?.defaultEngine ? ' (default)' : ''}</option>)}
+                  </Select>
+                  <div className="mt-1 text-[11.5px] text-muted">MergeTree engines sort the rows by the primary key.</div>
+                </Labeled>
+              ) : mysql ? (
                 <div className="space-y-2.5">
                   <Labeled label="Storage engine">
                     <Select value={engine} onChange={(e) => setEngine(e.target.value)} aria-label="Storage engine">

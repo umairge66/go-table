@@ -18,6 +18,10 @@ type Span struct {
 func SplitStatements(kind model.Driver, script string) []Span {
 	kind = kind.Family()
 	mysql := kind == model.DriverMySQL
+	// ClickHouse, like MySQL, escapes with backslashes and allows # comments.
+	backslash := mysql || kind == model.DriverClickHouse
+	mssql := kind == model.DriverMSSQL
+	dollar := kind == model.DriverPostgres || kind == model.DriverDuckDB
 	var out []Span
 	delim := ";"
 	start := 0
@@ -46,11 +50,25 @@ func SplitStatements(kind model.Driver, script string) []Span {
 			start = i
 			continue
 		}
+		// T-SQL batch separator: GO alone on its line (with an optional count).
+		if mssql && atLineStart(script, i) && isGoLine(script[i:]) {
+			emit(i)
+			if eol := strings.IndexByte(script[i:], '\n'); eol >= 0 {
+				i += eol
+			} else {
+				i = n
+			}
+			start = i
+			continue
+		}
 		switch {
 		case ch == '\'' || ch == '"' || ch == '`':
-			i = skipQuoted(script, i, ch, mysql)
+			i = skipQuoted(script, i, ch, backslash)
 			continue
-		case ch == '-' && i+1 < n && script[i+1] == '-', mysql && ch == '#':
+		case ch == '[' && mssql:
+			i = skipBracket(script, i)
+			continue
+		case ch == '-' && i+1 < n && script[i+1] == '-', backslash && ch == '#':
 			if eol := strings.IndexByte(script[i:], '\n'); eol >= 0 {
 				i += eol
 			} else {
@@ -64,7 +82,7 @@ func SplitStatements(kind model.Driver, script string) []Span {
 				i = n
 			}
 			continue
-		case ch == '$' && kind == model.DriverPostgres:
+		case ch == '$' && dollar:
 			if tag, ok := dollarTag(script[i:]); ok {
 				if end := strings.Index(script[i+len(tag):], tag); end >= 0 {
 					i += len(tag) + end + len(tag)
@@ -194,6 +212,41 @@ func onlyComments(s string) bool {
 			s = s[end+2:]
 		default:
 			return s == ""
+		}
+	}
+	return true
+}
+
+// skipBracket skips a [quoted identifier] (]] escapes a bracket).
+func skipBracket(s string, i int) int {
+	for j := i + 1; j < len(s); j++ {
+		if s[j] == ']' {
+			if j+1 < len(s) && s[j+1] == ']' {
+				j++
+				continue
+			}
+			return j + 1
+		}
+	}
+	return len(s)
+}
+
+// isGoLine reports a T-SQL "GO" batch separator line: GO, optionally a
+// repeat count, nothing else.
+func isGoLine(s string) bool {
+	line := s
+	if eol := strings.IndexByte(s, '\n'); eol >= 0 {
+		line = s[:eol]
+	}
+	f := strings.Fields(line)
+	if len(f) == 0 || !strings.EqualFold(f[0], "GO") || len(f) > 2 {
+		return false
+	}
+	if len(f) == 2 {
+		for _, r := range f[1] {
+			if r < '0' || r > '9' {
+				return false
+			}
 		}
 	}
 	return true

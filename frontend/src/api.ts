@@ -108,6 +108,8 @@ export const api = {
   deleteGroup: (id: string) => call('DELETE', `/api/groups/${id}`),
   test: (c: Connection, secrets: Secrets) => call<{ version: string; ms: number }>('POST', '/api/test', { connection: c, secrets }),
   parseURL: (url: string) => call<{ connection: Connection; password: string }>('POST', '/api/parse-url', { url }),
+  /** drivers this build can connect to (DuckDB needs a cgo build). */
+  drivers: () => call<{ supported: string[] }>('GET', '/api/drivers'),
   checkSSHKey: (path: string) => call<{ ok: boolean; encrypted?: boolean; problem?: string }>('POST', '/api/ssh-key/check', { path }),
 
   queries: (connectionId: string) => call<SavedQuery[]>('GET', `/api/queries?${q({ connection: connectionId })}`),

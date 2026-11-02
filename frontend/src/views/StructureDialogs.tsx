@@ -4,12 +4,15 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Field, IconButton, Input, Modal, Select, errorParts, useToast } from '../components/ui'
-import { family, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
+import { driverInfo, family, features, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
 // SQL, then the same request runs it.
 
 const isMySQL = (d: Driver) => family(d) === 'mysql'
+
+/** ddlNotAtomic: schema changes commit statement by statement (see the server's runDDL). */
+const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb'].includes(family(d)) || d === 'cockroachdb'
 
 /** useAlter reviews and runs one-click changes (drop, set primary key…). */
 export function useAlter(session: SessionInfo, table: TableRef, onDone: () => void) {
@@ -50,8 +53,8 @@ export function useAlter(session: SessionInfo, table: TableRef, onDone: () => vo
       <div className="h-[200px] overflow-hidden rounded-lg border border-line" data-testid="alter-review">
         <SqlEditor value={review.statements.join('\n')} driver={session.connection.driver} readOnly />
       </div>
-      {isMySQL(session.connection.driver) && review.statements.length > 1 && (
-        <div className="mt-2 text-[12px] text-muted">MySQL applies each statement as it runs; if one fails, the ones before it stay applied.</div>
+      {ddlNotAtomic(session.connection.driver) && review.statements.length > 1 && (
+        <div className="mt-2 text-[12px] text-muted">{driverInfo(session.connection.driver).label} applies each statement as it runs; if one fails, the ones before it stay applied.</div>
       )}
     </Modal>
   )
@@ -153,7 +156,6 @@ function ColumnPicker({ columns, value, onChange, label }: { columns: Column[]; 
   )
 }
 
-const PG_METHODS = ['btree', 'hash', 'gin', 'gist', 'brin', 'spgist']
 
 export function IndexDialog({ session, table, columns, initial, onClose, onDone }: {
   session: SessionInfo; table: TableRef; columns: Column[]
@@ -175,16 +177,16 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
         <Field label="Kind">
           <Select value={kind} aria-label="Index kind" onChange={(e) => setKind(e.target.value as typeof kind)}>
             <option value="index">Index</option>
-            <option value="unique">Unique</option>
+            {features(driver).uniqueIndexes && <option value="unique">Unique</option>}
             {isMySQL(driver) && <option value="fulltext">Fulltext</option>}
             {isMySQL(driver) && <option value="spatial">Spatial</option>}
           </Select>
         </Field>
-        {family(driver) !== 'sqlite' && (
-          <Field label="Method">
+        {features(driver).indexMethods.length > 0 && (
+          <Field label={family(driver) === 'clickhouse' ? 'Type' : 'Method'}>
             <Select value={method} aria-label="Index method" disabled={special} onChange={(e) => setMethod(e.target.value)}>
               <option value="">default</option>
-              {(family(driver) === 'postgres' ? PG_METHODS : ['btree', 'hash']).map((m) => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              {features(driver).indexMethods.map((m) => <option key={m} value={m}>{family(driver) === 'clickhouse' ? m : m.toUpperCase()}</option>)}
             </Select>
           </Field>
         )}

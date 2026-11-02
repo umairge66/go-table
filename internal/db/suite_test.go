@@ -11,6 +11,23 @@ import (
 )
 
 // suiteDDL returns engine specific DDL for the conformance suite tables.
+// dropSeq and createSeq manage DuckDB's id sequence (a no-op elsewhere).
+func dropSeq(d any) string   { return seqSQL(d, "DROP SEQUENCE IF EXISTS gt_people_seq") }
+func createSeq(d any) string { return seqSQL(d, "CREATE SEQUENCE gt_people_seq") }
+func seqSQL(d any, q string) string {
+	var drv model.Driver
+	switch x := d.(type) {
+	case model.Driver:
+		drv = x
+	case Dialect:
+		drv = x.kind
+	}
+	if drv.Family() == model.DriverDuckDB {
+		return q
+	}
+	return "SELECT 1"
+}
+
 func suiteDDL(d model.Driver) []string {
 	id := "id INTEGER PRIMARY KEY"
 	switch d.Family() {
@@ -18,6 +35,10 @@ func suiteDDL(d model.Driver) []string {
 		id = "id SERIAL PRIMARY KEY"
 	case model.DriverMySQL, model.DriverMariaDB:
 		id = "id INT AUTO_INCREMENT PRIMARY KEY"
+	case model.DriverMSSQL:
+		id = "id INT IDENTITY(1,1) PRIMARY KEY"
+	case model.DriverDuckDB:
+		id = "id INTEGER DEFAULT nextval('gt_people_seq') PRIMARY KEY"
 	}
 	var pre []string
 	if d == model.DriverCockroachDB {
@@ -28,6 +49,8 @@ func suiteDDL(d model.Driver) []string {
 		"DROP VIEW IF EXISTS gt_people_view",
 		"DROP TABLE IF EXISTS gt_people",
 		"DROP TABLE IF EXISTS gt_nopk",
+		dropSeq(d),
+		createSeq(d),
 		"CREATE TABLE gt_people ("+id+", name VARCHAR(100) NOT NULL, city VARCHAR(100), score INT DEFAULT 0)",
 		"CREATE INDEX gt_people_city_idx ON gt_people (city)",
 		"CREATE TABLE gt_nopk (a INT, b VARCHAR(10))",
@@ -74,14 +97,14 @@ func runSuite(t *testing.T, c *Conn) {
 	t.Run("enum values", func(t *testing.T) {
 		var ddl []string
 		switch kind {
-		case model.DriverPostgres:
+		case model.DriverPostgres, model.DriverDuckDB:
 			ddl = []string{"DROP TABLE IF EXISTS gt_moods", "DROP TYPE IF EXISTS gt_mood",
 				"CREATE TYPE gt_mood AS ENUM ('sad', 'it''s ok', 'happy')", "CREATE TABLE gt_moods (id INT PRIMARY KEY, mood gt_mood, note TEXT)"}
 		case model.DriverMySQL, model.DriverMariaDB:
 			ddl = []string{"DROP TABLE IF EXISTS gt_moods",
 				"CREATE TABLE gt_moods (id INT PRIMARY KEY, mood ENUM('sad', 'it''s ok', 'happy'), tags SET('a', 'b'), note TEXT)"}
 		default:
-			t.Skip("SQLite has no enum types")
+			t.Skipf("%s has no enum types", kind.Label())
 		}
 		for _, s := range ddl {
 			if res, err := c.Execute(ctx, s, 0); err != nil || res[len(res)-1].Err != nil {
@@ -99,7 +122,7 @@ func runSuite(t *testing.T, c *Conn) {
 		if want := []string{"sad", "it's ok", "happy"}; !slices.Equal(values["mood"], want) {
 			t.Errorf("mood values %q, want %q", values["mood"], want)
 		}
-		if kind != model.DriverPostgres && !slices.Equal(values["tags"], []string{"a", "b"}) {
+		if kind == model.DriverMySQL && !slices.Equal(values["tags"], []string{"a", "b"}) {
 			t.Errorf("tags values %q", values["tags"])
 		}
 		if values["note"] != nil || values["id"] != nil {
@@ -244,8 +267,14 @@ func runSuite(t *testing.T, c *Conn) {
 			return
 		}
 		kinds := []string{"database"}
-		if kind == model.DriverPostgres {
+		switch kind {
+		case model.DriverPostgres, model.DriverMSSQL:
 			kinds = append(kinds, "schema")
+		case model.DriverDuckDB:
+			if _, err := c.CreateDatabase(ctx, NewDatabase{Name: "x", Kind: "database"}); err == nil {
+				t.Fatal("DuckDB has no CREATE DATABASE")
+			}
+			kinds = []string{"schema"}
 		}
 		for _, k := range kinds {
 			name := "gt_created_" + k
@@ -258,7 +287,7 @@ func runSuite(t *testing.T, c *Conn) {
 				t.Fatalf("create %s: %v", k, err)
 			}
 			list, _ := c.Schemas(ctx)
-			if k == "database" && kind == model.DriverPostgres {
+			if k == "database" && (kind == model.DriverPostgres || kind == model.DriverMSSQL) {
 				list, _ = c.Databases(ctx)
 			}
 			if !slices.Contains(list, name) {
@@ -463,7 +492,7 @@ func runSuite(t *testing.T, c *Conn) {
 	t.Run("no primary key edits one row", func(t *testing.T) {
 		key := map[string]Value{"a": Text("1"), "b": Text("x")}
 		changes := []Change{{Kind: ChangeUpdate, Key: key, Values: map[string]Value{"b": Text("z")}}}
-		if kind == model.DriverMySQL || kind == model.DriverMariaDB {
+		if kind == model.DriverMySQL || kind == model.DriverMSSQL {
 			if err := c.ApplyChanges(ctx, nopk, changes, false); err != nil {
 				t.Fatal(err)
 			}
@@ -528,8 +557,12 @@ func runSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("session state persists", func(t *testing.T) {
-		if _, err := c.Execute(ctx, "BEGIN", 0); err != nil {
-			t.Fatal(err)
+		begin := "BEGIN"
+		if kind == model.DriverMSSQL {
+			begin = "BEGIN TRANSACTION"
+		}
+		if res, err := c.Execute(ctx, begin, 0); err != nil || res[0].Err != nil {
+			t.Fatal(err, res)
 		}
 		if res, _ := c.Execute(ctx, "DELETE FROM gt_people", 0); res[0].Err != nil {
 			t.Fatal(res[0].Err)
@@ -597,7 +630,7 @@ func runSuite(t *testing.T, c *Conn) {
 		}
 	})
 
-	for _, s := range []string{"DROP VIEW gt_people_view", "DROP TABLE gt_people", "DROP TABLE gt_nopk"} {
+	for _, s := range []string{"DROP VIEW gt_people_view", "DROP TABLE gt_people", "DROP TABLE gt_nopk", dropSeq(c.Dialect)} {
 		c.Execute(ctx, s, 0)
 	}
 }

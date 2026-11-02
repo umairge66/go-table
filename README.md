@@ -1,8 +1,9 @@
 # GoTable
 
-A modern database client for PostgreSQL, MySQL, MariaDB and SQLite, and the
-servers compatible with them: CockroachDB, YugabyteDB and TiDB. A Go
-backend with a web UI, shipped as one binary that opens in a native window
+A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
+DuckDB and ClickHouse, and the servers and cloud services compatible with
+them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, TiDB, Percona
+Server, SingleStore, PlanetScale). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -24,6 +25,20 @@ on macOS).
 The layout: a connection list beside the connection form, a rail of open
 databases, a table sidebar, tabs, a filter row above the grid, a row
 inspector and a Data / Structure / Definition switch.
+
+## Databases
+
+| Database | Notes |
+|---|---|
+| PostgreSQL, MySQL, MariaDB, SQLite | everything below |
+| SQL Server (2017+, Azure SQL) | schemas of the connected database; other databases open next to it. Comments are `MS_Description` properties |
+| DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
+| ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
+| CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
+| TiDB, Percona Server, SingleStore, PlanetScale | MySQL protocol and SQL |
+
+Neon, Supabase and PlanetScale default to TLS; pasting a `postgres://` or
+`mysql://` URL with their host name picks them.
 
 ## Features
 
@@ -193,6 +208,8 @@ go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o bin\gotable.
 ```
 
 From Linux, `make build-windows` cross-compiles the same `bin/gotable.exe`.
+It is built without cgo, so it can't open DuckDB files; every other
+database works.
 On Windows GoTable keeps the system title bar; shortcuts, the native
 Save/Open dialogs and saved passwords (Credential Manager) work as on Linux.
 
@@ -219,10 +236,11 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
-ENGINES="crdb yb tidb" scripts/test-dbs.sh   # CockroachDB, YugabyteDB, TiDB
+ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, ClickHouse, CockroachDB,
+                                  # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
 make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
-GOTABLE_E2E_COMPAT="cockroachdb://… tidb://…" make e2e  # and one per compatible server
+GOTABLE_E2E_COMPAT="sqlserver://… clickhouse://… duckdb:///tmp/x.duckdb" make e2e  # one UI scenario per URL
 ```
 
 
@@ -268,9 +286,8 @@ The packaging is `scripts/package.sh` (`make package-linux` /
 
 ## Not implemented yet
 
-Other engines (SQL Server, Redis, MongoDB, ClickHouse, …), renaming, changing
-or dropping columns and indexes through the UI, ER diagrams, Excel import and
-user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
+Other engines (Oracle, Redis, MongoDB, …), DuckDB in the Windows build, ER
+diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 
 ## License

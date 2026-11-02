@@ -24,3 +24,13 @@ test('dates and times round-trip in the server format', () => {
   expect(parseTime('7:30')).toEqual({ h: 7, mi: 30, s: 0, frac: '', tz: '' })
   expect(parseTime('10:00:00+02')).toMatchObject({ h: 10, tz: '+02' })
 })
+
+test('booleans and dates of the other engines', () => {
+  expect(cellKind('bit', undefined, 'sqlserver')).toEqual({ kind: 'choice', options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] })
+  expect(cellKind('Bool', undefined, 'clickhouse').kind).toBe('choice')
+  expect(cellKind('BOOLEAN', undefined, 'duckdb').kind).toBe('choice')
+  expect(cellKind('datetime2(3)', undefined, 'sqlserver').kind).toBe('datetime')
+  expect(cellKind('DateTime64(3)', undefined, 'clickhouse').kind).toBe('datetime')
+  expect(cellKind('Date32', undefined, 'clickhouse').kind).toBe('date')
+  expect(cellKind('bit', undefined, 'mysql').kind).toBe('text')
+})

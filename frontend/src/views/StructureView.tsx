@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, KeyRound, Link2, ListOrdered
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
+import { family, features, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
 
@@ -42,6 +42,9 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   const driver = session.connection.driver
   const mysql = family(driver) === 'mysql'
   const sqlite = family(driver) === 'sqlite'
+  const f = features(driver)
+  // DuckDB can add a primary key but not change one; ClickHouse's is its sort key.
+  const pkChangeable = (has: boolean) => f.primaryKey || (!has && family(driver) === 'duckdb')
   const menu = useMenu()
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [checked, setChecked] = useState<string[]>([])
@@ -67,12 +70,14 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
     menu.open(e, [
       { label: 'Edit…', icon: <Pencil />, onSelect: () => setDialog({ kind: 'column', editing: c }) },
       'sep',
-      { label: pk ? 'Make it the primary key' : 'Primary key', icon: <KeyRound />, disabled: pk?.columns.length === 1 && pk.columns[0] === c.name, onSelect: () => setPrimary([c.name]) },
-      ...(pk && !pk.columns.includes(c.name) ? [{ label: 'Add to the primary key', onSelect: () => setPrimary([...pk.columns, c.name]) }] : []),
-      { label: 'Unique', onSelect: () => addIndex([c.name], 'unique') },
+      ...(pkChangeable(!!pk) ? [
+        { label: pk ? 'Make it the primary key' : 'Primary key', icon: <KeyRound />, disabled: pk?.columns.length === 1 && pk.columns[0] === c.name, onSelect: () => setPrimary([c.name]) },
+        ...(pk && !pk.columns.includes(c.name) ? [{ label: 'Add to the primary key', onSelect: () => setPrimary([...pk.columns, c.name]) }] : []),
+      ] : []),
+      ...(f.uniqueIndexes ? [{ label: 'Unique', onSelect: () => addIndex([c.name], 'unique') }] : []),
       { label: 'Index', icon: <ListOrdered />, onSelect: () => addIndex([c.name], 'index') },
       ...(mysql && isText ? [{ label: 'Fulltext', icon: <Search />, onSelect: () => addIndex([c.name], 'fulltext') }] : []),
-      { label: 'Foreign key…', icon: <Link2 />, onSelect: () => setDialog({ kind: 'foreignKey', column: c.name }) },
+      ...(f.foreignKeys ? [{ label: 'Foreign key…', icon: <Link2 />, onSelect: () => setDialog({ kind: 'foreignKey', column: c.name }) }] : []),
       ...(mysql ? [
         'sep' as const,
         { label: 'Move to the top', icon: <ArrowUpToLine />, disabled: i === 0, onSelect: () => move(c, 'first') },
@@ -84,7 +89,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
     ])
   }
 
-  const extra = (c: Column) => [c.autoIncrement && (mysql ? 'AUTO_INCREMENT' : sqlite ? 'rowid' : 'identity'), c.onUpdateNow && 'ON UPDATE CURRENT_TIMESTAMP'].filter(Boolean).join(' · ')
+  const auto = mysql ? 'AUTO_INCREMENT' : sqlite ? 'rowid' : family(driver) === 'sqlserver' ? 'IDENTITY' : family(driver) === 'duckdb' ? 'sequence' : 'identity'
+  const extra = (c: Column) => [c.autoIncrement && auto, c.onUpdateNow && 'ON UPDATE CURRENT_TIMESTAMP'].filter(Boolean).join(' · ')
   const showCollation = columns.some((c) => c.collation)
   const allChecked = checked.length === columns.length && columns.length > 0
 
@@ -96,8 +102,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
         {!readOnly && checked.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-accent-soft px-3 py-1.5 text-[12px] animate-fade" role="toolbar" aria-label="Selected columns">
             <span className="mr-1 font-medium text-accent">{checked.length} selected:</span>
-            <Button size="sm" variant="ghost" icon={<KeyRound className="size-3.5" />} onClick={() => setPrimary(inOrder(checked))}>Primary key</Button>
-            <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'unique')}>Unique</Button>
+            {pkChangeable(!!pk) && <Button size="sm" variant="ghost" icon={<KeyRound className="size-3.5" />} onClick={() => setPrimary(inOrder(checked))}>Primary key</Button>}
+            {f.uniqueIndexes && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'unique')}>Unique</Button>}
             <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'index')}>Index</Button>
             {mysql && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'fulltext')}>Fulltext</Button>}
             <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={checked.length === columns.length} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
@@ -162,8 +168,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                   <td className="px-3 py-1.5 font-mono text-[12px]">{x.columns.join(', ')}</td>
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      <IconButton label={`Rename ${x.name}`} disabled={x.primary && (mysql || sqlite)} onClick={() => setDialog({ kind: 'renameIndex', name: x.name })}><Pencil className="size-3.5" /></IconButton>
-                      <IconButton label={`Drop ${x.name}`} onClick={() => alter.run([{ kind: 'drop_index', name: x.name }], x.primary ? 'Drop the primary key' : `Drop index ${x.name}`, { danger: true, done: 'Index dropped' })}>
+                      {f.renameIndex && <IconButton label={`Rename ${x.name}`} disabled={x.primary && (mysql || sqlite)} onClick={() => setDialog({ kind: 'renameIndex', name: x.name })}><Pencil className="size-3.5" /></IconButton>}
+                      <IconButton label={`Drop ${x.name}`} disabled={x.primary && !pkChangeable(true)} onClick={() => alter.run([{ kind: 'drop_index', name: x.name }], x.primary ? 'Drop the primary key' : `Drop index ${x.name}`, { danger: true, done: 'Index dropped' })}>
                         <Trash2 className="size-3.5" />
                       </IconButton>
                     </span>
@@ -174,19 +180,19 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
           )}
         </Section>
 
-        <Section title="Foreign keys" count={foreignKeys.length} actions={<Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'foreignKey' })}>Add foreign key</Button>}>
+        {(f.foreignKeys || foreignKeys.length > 0) && <Section title="Foreign keys" count={foreignKeys.length} actions={f.foreignKeys && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'foreignKey' })}>Add foreign key</Button>}>
           {foreignKeys.length === 0 ? <Empty>No foreign keys. A foreign key makes a column point at rows of another table.</Empty> : (
             <Rows heads={['Name', 'Columns', 'References', 'On delete', 'On update']}>
-              {foreignKeys.map((f) => (
-                <tr key={f.name} data-testid={`fk-${f.name}`} className="group border-b border-line-2 last:border-0 hover:bg-hover">
-                  <td className="px-3 py-1.5 font-medium">{sqlite ? <span className="text-muted">#{Number(f.name) + 1}</span> : f.name}</td>
-                  <td className="px-3 py-1.5 font-mono text-[12px]">{f.from.join(', ')}</td>
-                  <td className="px-3 py-1.5 font-mono text-[12px]">{f.table}({f.columns.join(', ')})</td>
-                  <td className="px-3 py-1.5 text-[11.5px] text-muted">{f.onDelete}</td>
-                  <td className="px-3 py-1.5 text-[11.5px] text-muted">{f.onUpdate}</td>
+              {foreignKeys.map((fk) => (
+                <tr key={fk.name} data-testid={`fk-${fk.name}`} className="group border-b border-line-2 last:border-0 hover:bg-hover">
+                  <td className="px-3 py-1.5 font-medium">{sqlite ? <span className="text-muted">#{Number(fk.name) + 1}</span> : fk.name}</td>
+                  <td className="px-3 py-1.5 font-mono text-[12px]">{fk.from.join(', ')}</td>
+                  <td className="px-3 py-1.5 font-mono text-[12px]">{fk.table}({fk.columns.join(', ')})</td>
+                  <td className="px-3 py-1.5 text-[11.5px] text-muted">{fk.onDelete}</td>
+                  <td className="px-3 py-1.5 text-[11.5px] text-muted">{fk.onUpdate}</td>
                   <td className="px-2 py-1 text-right">
-                    <IconButton label={`Drop foreign key ${f.from.join(', ')}`} className="opacity-60 group-hover:opacity-100"
-                      onClick={() => alter.run([{ kind: 'drop_foreign_key', name: f.name! }], `Drop the foreign key on ${f.from.join(', ')}`, { danger: true, done: 'Foreign key dropped' })}>
+                    <IconButton label={`Drop foreign key ${fk.from.join(', ')}`} className="opacity-60 group-hover:opacity-100"
+                      onClick={() => alter.run([{ kind: 'drop_foreign_key', name: fk.name! }], `Drop the foreign key on ${fk.from.join(', ')}`, { danger: true, done: 'Foreign key dropped' })}>
                       <Trash2 className="size-3.5" />
                     </IconButton>
                   </td>
@@ -194,10 +200,10 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
               ))}
             </Rows>
           )}
-        </Section>
+        </Section>}
 
-        {!sqlite && (
-          <Section title="Checks" count={info?.checks.length ?? 0} actions={<Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'check' })}>Add check</Button>}>
+        {(f.checks || (info?.checks.length ?? 0) > 0) && (
+          <Section title="Checks" count={info?.checks.length ?? 0} actions={f.checks && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'check' })}>Add check</Button>}>
             {!info?.checks.length ? <Empty>No CHECK constraints. A check makes every row meet a condition, e.g. price {'>'}= 0.</Empty> : (
               <Rows heads={['Name', 'Condition']}>
                 {info.checks.map((ck) => (
@@ -329,7 +335,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>
         </div>
-        {family(driver) !== 'sqlite' && (
+        {features(driver).comments && (
           <div className="flex items-end gap-2">
             <Field label="Table comment" className="flex-1"><Input value={comment} placeholder="optional" aria-label="Table comment" onChange={(e) => setComment(e.target.value)} /></Field>
             <Button disabled={comment === (info?.comment ?? '')} onClick={() => run([{ kind: 'table_comment', comment }], 'Change the table comment', { done: 'Comment saved' })}>Save</Button>

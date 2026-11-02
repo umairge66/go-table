@@ -3,6 +3,8 @@ package db
 import (
 	"fmt"
 	"strings"
+
+	"gotable/internal/model"
 )
 
 // Op is a filter operator offered in the data view filter bar.
@@ -115,13 +117,13 @@ func (w *whereBuilder) condition(f Filter, columns []string) (string, error) {
 	case OpNotLike:
 		return w.d.TextExpr(f.Column) + " NOT LIKE " + w.bind(f.Value), nil
 	case OpContains:
-		return like(false, "%"+escapeLike(f.Value)+"%"), nil
+		return like(false, "%"+w.d.escapeLike(f.Value)+"%"), nil
 	case OpNotContain:
-		return like(true, "%"+escapeLike(f.Value)+"%"), nil
+		return like(true, "%"+w.d.escapeLike(f.Value)+"%"), nil
 	case OpBeginsWith:
-		return like(false, escapeLike(f.Value)+"%"), nil
+		return like(false, w.d.escapeLike(f.Value)+"%"), nil
 	case OpEndsWith:
-		return like(false, "%"+escapeLike(f.Value)), nil
+		return like(false, "%"+w.d.escapeLike(f.Value)), nil
 	}
 	return "", fmt.Errorf("unknown operator %q", f.Op)
 }
@@ -174,6 +176,8 @@ func BuildSelect(d Dialect, t TableRef, p Page, columns []string) (string, []any
 			parts[i] = d.QuoteIdent(s.Column) + " " + string(dir)
 		}
 		q += " ORDER BY " + strings.Join(parts, ", ")
+	} else if d.family == model.DriverMSSQL && (p.Limit > 0 || p.Offset > 0) {
+		q += " ORDER BY (SELECT NULL)" // OFFSET … FETCH needs an ORDER BY
 	}
 	return q + d.LimitOffset(p.Limit, p.Offset), args, nil
 }
