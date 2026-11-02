@@ -1,8 +1,8 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'duckdb' | 'clickhouse'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse'
   | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
   | 'tidb' | 'percona' | 'singlestore' | 'planetscale'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'duckdb' | 'clickhouse'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse'
 
 /** family maps compatible servers and services to the engine they follow. */
 export const family = (d: Driver): Family => driverInfo(d).family
@@ -33,18 +33,27 @@ export interface Features {
   collations: boolean
   /** Index methods/types offered when adding an index. */
   indexMethods: string[]
+  /** New databases or schemas can be made from the app. */
+  createDatabase: boolean
+  /** A SQL import can run as one transaction (undone on error). */
+  importTransaction: boolean
+  /** Foreign keys take ON UPDATE actions. */
+  onUpdate: boolean
 }
 
 const BASE: Features = { transactions: true, foreignKeys: true, checks: true, renameIndex: true, primaryKey: true, uniqueIndexes: true,
-  autoIncrement: true, cascade: false, schemas: false, file: false, comments: true, collations: true, indexMethods: [] }
+  autoIncrement: true, cascade: false, schemas: false, file: false, comments: true, collations: true, indexMethods: [],
+  createDatabase: true, importTransaction: true, onUpdate: true }
 
 export const FEATURES: Record<Family, Features> = {
   postgres: { ...BASE, cascade: true, schemas: true, indexMethods: ['btree', 'hash', 'gin', 'gist', 'brin', 'spgist'] },
   mysql: { ...BASE, transactions: true, indexMethods: ['btree', 'hash'] },
   sqlite: { ...BASE, checks: false, primaryKey: true, file: true, comments: false },
   sqlserver: { ...BASE, schemas: true },
+  // A schema is a user; DDL commits by itself; foreign keys have no ON UPDATE.
+  oracle: { ...BASE, cascade: true, schemas: true, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
   duckdb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, schemas: true, file: true },
-  clickhouse: { ...BASE, transactions: false, foreignKeys: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
+  clickhouse: { ...BASE, transactions: false, importTransaction: false, foreignKeys: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
     autoIncrement: false, collations: false, indexMethods: ['minmax', 'set(100)', 'bloom_filter', 'ngrambf_v1(3, 256, 2, 0)', 'tokenbf_v1(256, 2, 0)'] },
 }
 /** DRIVER_FEATURES: where a server differs from its family's engine. */
@@ -171,12 +180,13 @@ export interface QueryResult {
  * without a logo (see lib/driverLogos); user is the usual administrator
  * account (the User field's placeholder); hosted services require TLS.
  */
-export const DRIVERS: { id: Driver; label: string; family: Family; port: number; color: string; user: string; hosted?: boolean; host?: string }[] = [
+export const DRIVERS: { id: Driver; label: string; family: Family; port: number; color: string; user: string; hosted?: boolean; host?: string; database?: string }[] = [
   { id: 'postgres', label: 'PostgreSQL', family: 'postgres', port: 5432, color: '#336791', user: 'postgres' },
   { id: 'mysql', label: 'MySQL', family: 'mysql', port: 3306, color: '#00758f', user: 'root' },
   { id: 'mariadb', label: 'MariaDB', family: 'mysql', port: 3306, color: '#b4644a', user: 'root' },
   { id: 'sqlite', label: 'SQLite', family: 'sqlite', port: 0, color: '#3b82c4', user: '' },
   { id: 'sqlserver', label: 'SQL Server', family: 'sqlserver', port: 1433, color: '#a91d22', user: 'sa' },
+  { id: 'oracle', label: 'Oracle', family: 'oracle', port: 1521, color: '#c74634', user: 'system', database: 'service name, e.g. FREEPDB1' },
   { id: 'duckdb', label: 'DuckDB', family: 'duckdb', port: 0, color: '#8a6d00', user: '' },
   { id: 'clickhouse', label: 'ClickHouse', family: 'clickhouse', port: 9000, color: '#9a8a00', user: 'default' },
   { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
@@ -191,7 +201,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
-export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'duckdb', 'clickhouse']
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -215,6 +225,7 @@ export const SSL_MODES: PerDriver<string[]> = {
   /** optional: only the login is encrypted (and a self-signed certificate is accepted); trust: encrypted, any certificate. */
   sqlserver: ['optional', 'disable', 'required', 'trust', 'strict'],
   clickhouse: ['disable', 'require', 'skip-verify'],
+  oracle: ['disable', 'require', 'skip-verify'],
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],

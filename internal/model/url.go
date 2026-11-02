@@ -71,6 +71,8 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverMSSQL
 	case "clickhouse", "ch":
 		d = DriverClickHouse
+	case "oracle":
+		d = DriverOracle // oracle://user:pw@host:1521/SERVICE_NAME
 	case "sqlite", "sqlite3", "file", "duckdb":
 		fd := DriverSQLite
 		if strings.EqualFold(u.Scheme, "duckdb") {
@@ -129,6 +131,12 @@ func ParseURL(raw string) (*Connection, string, error) {
 		}
 		if strings.EqualFold(q.Get("TrustServerCertificate"), "true") {
 			c.SSLMode = "trust"
+		}
+	}
+	if d == DriverOracle && strings.EqualFold(q.Get("ssl"), "true") {
+		c.SSLMode = "require"
+		if strings.EqualFold(q.Get("ssl verify"), "false") {
+			c.SSLMode = "skip-verify"
 		}
 	}
 	if d == DriverClickHouse && (q.Get("secure") == "true" || q.Get("secure") == "1") {

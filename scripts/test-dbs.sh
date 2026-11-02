@@ -9,6 +9,7 @@
 #   mysql    MySQL          yb        YugabyteDB     (PostgreSQL, ~2 GB image)
 #   mariadb  MariaDB        ts        TimescaleDB    (PostgreSQL)
 #   mssql    SQL Server     tidb      TiDB           (MySQL protocol)
+#   oracle   Oracle 23ai Free (~1.5 GB image)
 #   ch       ClickHouse     percona   Percona Server (MySQL)
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
@@ -27,10 +28,11 @@ CH_IMAGE=${CH_IMAGE:-clickhouse/clickhouse-server:24.8}
 TS_IMAGE=${TS_IMAGE:-timescale/timescaledb:latest-pg17}
 PERCONA_IMAGE=${PERCONA_IMAGE:-percona/percona-server:8.4}
 S2_IMAGE=${S2_IMAGE:-ghcr.io/singlestore-labs/singlestoredb-dev:latest}
+ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23-slim-faststart}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql ch crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -71,6 +73,7 @@ has ch && run ch -e CLICKHOUSE_USER=gotable -e CLICKHOUSE_PASSWORD=$PW -e CLICKH
 has ts && run ts -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$TS_IMAGE"
 has percona && run percona -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$PERCONA_IMAGE"
 has s2 && run s2 -e ROOT_PASSWORD=$PW -p 127.0.0.1::3306 "$S2_IMAGE"
+has oracle && run oracle -e ORACLE_PASSWORD=$PW -e APP_USER=gotable -e APP_USER_PASSWORD=$PW -p 127.0.0.1::1521 "$ORACLE_IMAGE"
 
 # export_env NAME HOST_PORT USER PASSWORD DB
 export_env() {
@@ -126,6 +129,11 @@ if has s2; then
 	wait_ready s2 in_container s2 singlestore -uroot -p$PW -h127.0.0.1 -e 'SELECT 1'
 	in_container s2 singlestore -uroot -p$PW -h127.0.0.1 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
 	export_env SINGLESTORE "$(port s2 3306)" root $PW gotable
+fi
+
+if has oracle; then
+	wait_ready oracle in_container oracle healthcheck.sh
+	export_env ORACLE "$(port oracle 1521)" gotable $PW FREEPDB1
 fi
 
 if [[ "${KEEP:-}" == 1 ]]; then

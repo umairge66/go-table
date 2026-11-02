@@ -31,6 +31,7 @@ const ID: PerDriver<TypeSpec> = {
   mariadb: { base: 'INT', param: '', unsigned: true, array: false, custom: false },
   sqlite: { base: 'INTEGER', param: '', unsigned: false, array: false, custom: false },
   sqlserver: { base: 'int', param: '', unsigned: false, array: false, custom: false },
+  oracle: { base: 'NUMBER', param: '', unsigned: false, array: false, custom: false },
   duckdb: { base: 'BIGINT', param: '', unsigned: false, array: false, custom: false },
   clickhouse: { base: 'UInt64', param: '', unsigned: false, array: false, custom: false },
 }
@@ -40,6 +41,7 @@ const TEXT: PerDriver<TypeSpec> = {
   mariadb: { base: 'VARCHAR', param: '255', unsigned: false, array: false, custom: false },
   sqlite: { base: 'TEXT', param: '', unsigned: false, array: false, custom: false },
   sqlserver: { base: 'nvarchar', param: '255', unsigned: false, array: false, custom: false },
+  oracle: { base: 'VARCHAR2', param: '255', unsigned: false, array: false, custom: false },
   duckdb: { base: 'VARCHAR', param: '', unsigned: false, array: false, custom: false },
   clickhouse: { base: 'String', param: '', unsigned: false, array: false, custom: false },
 }

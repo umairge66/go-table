@@ -1,6 +1,6 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands'
-import { MSSQL, MySQL, PostgreSQL, SQLite, sql, type SQLDialect } from '@codemirror/lang-sql'
+import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, sql, type SQLDialect } from '@codemirror/lang-sql'
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec } from '@codemirror/state'
@@ -21,7 +21,7 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, duckdb: PostgreSQL, clickhouse: MySQL }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL }
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */

@@ -164,6 +164,21 @@ func (s *Scanner) Next() (Stmt, error) {
 			continue
 		}
 
+		// Oracle: "/" alone on a line ends the statement or PL/SQL block.
+		if lineStart && s.kind == model.DriverOracle && c == '/' {
+			if p, _ := s.r.Peek(64); isSlashLine(string(append([]byte{c}, p...))) {
+				s.r.ReadString('\n')
+				s.line++
+				lineStart = true
+				if st, ok := emit(); ok {
+					return st, nil
+				}
+				s.buf = s.buf[:0]
+				meaningful = false
+				startLine = s.line
+				continue
+			}
+		}
 		// T-SQL batch separator: a GO line ends the statement before it.
 		if lineStart && s.kind == model.DriverMSSQL && (c == 'G' || c == 'g') {
 			if p, _ := s.r.Peek(64); isGoLine(string(append([]byte{c}, p...))) {
@@ -237,7 +252,8 @@ func (s *Scanner) Next() (Stmt, error) {
 			}
 		}
 
-		if depth == 0 && c == s.delim[0] && (len(s.delim) == 1 || peekString(s.r, s.delim[1:])) {
+		inBlock := s.kind == model.DriverOracle && plsqlBlock.MatchString(stripLeadingComments(string(s.buf)))
+		if depth == 0 && !inBlock && c == s.delim[0] && (len(s.delim) == 1 || peekString(s.r, s.delim[1:])) {
 			s.r.Discard(len(s.delim) - 1)
 			endWord()
 			if st, ok := emit(); ok {

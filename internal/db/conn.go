@@ -70,6 +70,10 @@ func newConn(ctx context.Context, cfg *model.Connection, sqlDB *sql.DB, eng engi
 		return nil, err
 	}
 	c := &Conn{Config: cfg, Dialect: DialectFor(cfg.Driver), db: sqlDB, conn: sc, eng: eng, tunnel: tunnel}
+	if err := c.initSession(ctx); err != nil {
+		c.Close()
+		return nil, err
+	}
 	if s, err := eng.currentSchema(ctx, c); err == nil {
 		c.schema = s
 	}
@@ -124,6 +128,9 @@ func (c *Conn) reconnect(ctx context.Context) error {
 		return err
 	}
 	c.conn = sc
+	if err := c.initSession(ctx); err != nil {
+		return err
+	}
 	if c.schema == "" {
 		return nil
 	}
@@ -567,6 +574,8 @@ func jsonSafe(v any) any {
 
 func formatTime(t time.Time, dbType string) string {
 	switch {
+	case dbType == "DATE" && (t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0):
+		return t.Format("2006-01-02 15:04:05") // Oracle's DATE has a time of day
 	case dbType == "DATE":
 		return t.Format("2006-01-02")
 	case dbType == "TIME":
@@ -692,4 +701,17 @@ func plain(v reflect.Value) any {
 		return out
 	}
 	return v.Interface()
+}
+
+// sessionIniter is an engine that sets up each new session (Oracle's date
+// formats).
+type sessionIniter interface {
+	initSession(ctx context.Context, c *Conn) error
+}
+
+func (c *Conn) initSession(ctx context.Context) error {
+	if in, ok := c.eng.(sessionIniter); ok {
+		return in.initSession(ctx, c)
+	}
+	return nil
 }

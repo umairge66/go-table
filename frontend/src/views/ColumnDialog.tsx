@@ -17,6 +17,8 @@ export const TYPES: PerDriver<string[]> = {
   sqlite: ['TEXT', 'INTEGER', 'REAL', 'NUMERIC', 'BLOB', 'BOOLEAN', 'DATETIME'],
   sqlserver: ['nvarchar(255)', 'int', 'bigint', 'decimal(18,2)', 'bit', 'date', 'datetime2', 'uniqueidentifier', 'nvarchar(max)',
     'float', 'datetimeoffset', 'varbinary(max)', 'smallint', 'time', 'money'],
+  oracle: ['VARCHAR2(255)', 'NUMBER', 'NUMBER(10,2)', 'INTEGER', 'DATE', 'TIMESTAMP', 'CLOB', 'BLOB', 'NVARCHAR2(255)', 'CHAR(1)',
+    'BINARY_DOUBLE', 'RAW(16)', 'TIMESTAMP WITH TIME ZONE', 'BOOLEAN', 'JSON'],
   duckdb: ['VARCHAR', 'INTEGER', 'BIGINT', 'DECIMAL(18,3)', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'UUID', 'DOUBLE',
     'JSON', 'BLOB', 'INTEGER[]', 'VARCHAR[]', 'TIME', 'INTERVAL'],
   clickhouse: ['String', 'Int32', 'Int64', 'UInt64', 'Float64', 'Decimal(18,4)', 'Bool', 'Date', 'DateTime', 'DateTime64(3)',
@@ -29,6 +31,7 @@ export const EXPRESSIONS: PerDriver<string[]> = {
   mariadb: ['CURRENT_TIMESTAMP', 'uuid()'],
   sqlite: [],
   sqlserver: ['SYSUTCDATETIME()', 'GETDATE()', 'NEWID()', 'NEWSEQUENTIALID()'],
+  oracle: ['SYSDATE', 'SYSTIMESTAMP', 'CURRENT_TIMESTAMP', 'SYS_GUID()'],
   duckdb: ['current_timestamp', 'current_date', 'uuid()'],
   clickhouse: ['now()', 'today()', 'generateUUIDv4()', 'now64(3)'],
 }

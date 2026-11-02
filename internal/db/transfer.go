@@ -172,8 +172,10 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	switch c.Dialect.family {
 	case model.DriverMSSQL:
 		begin, rollback = "BEGIN TRANSACTION", "ROLLBACK TRANSACTION"
-	case model.DriverClickHouse:
-		o.Transaction = false // no transactions: statements apply one by one
+	case model.DriverClickHouse, model.DriverOracle:
+		// ClickHouse has no transactions; Oracle commits every DDL
+		// statement, so a script can't be undone as a whole.
+		o.Transaction = false
 	}
 	if o.Transaction {
 		if _, err := c.Exec(ctx, begin); err != nil {
@@ -321,6 +323,11 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	cr.LazyQuotes = true
 	cr.ReuseRecord = true
 	batch := min(1000, c.Dialect.maxParams()/len(o.Columns))
+	if c.Dialect.family == model.DriverOracle {
+		// One row per INSERT: Oracle before 23ai takes no multi-row VALUES,
+		// and INSERT ALL gives every row the same identity value.
+		batch = 1
+	}
 
 	if err := c.lock(ctx); err != nil {
 		return 0, err
@@ -526,7 +533,12 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 		var batch []string
 		flush := func() {
 			if len(batch) > 0 {
-				sw.printf("INSERT INTO %s (%s) VALUES\n  %s;\n", d.QuoteIdent(t.Name), cols, strings.Join(batch, ",\n  "))
+				if d.family == model.DriverOracle { // one VALUES row per INTO
+					sw.printf("INSERT ALL\n  INTO %s (%s) VALUES %s\nSELECT 1 FROM dual;\n", d.QuoteIdent(t.Name), cols,
+						strings.Join(batch, "\n  INTO "+d.QuoteIdent(t.Name)+" ("+cols+") VALUES "))
+				} else {
+					sw.printf("INSERT INTO %s (%s) VALUES\n  %s;\n", d.QuoteIdent(t.Name), cols, strings.Join(batch, ",\n  "))
+				}
 				batch = batch[:0]
 			}
 		}
@@ -722,7 +734,7 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 		return ddl, nil, nil
 	case model.DriverMSSQL:
 		return mssqlEngine{}.createTable(ctx, c, TableRef{Schema: o.Schema, Name: o.Name}, false)
-	case model.DriverDuckDB, model.DriverClickHouse:
+	case model.DriverDuckDB, model.DriverClickHouse, model.DriverOracle:
 		def, err := c.eng.definition(ctx, c, o)
 		if err != nil {
 			return "", nil, err
@@ -765,7 +777,7 @@ func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
 		def = regexp.MustCompile(`(?i)\s+DEFINER=\S+`).ReplaceAllString(def, "")
 		def = strings.ReplaceAll(def, c.Dialect.QuoteIdent(o.Schema)+".", "")
 		return def, nil
-	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse:
+	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse, model.DriverOracle:
 		def, err := c.Definition(ctx, o)
 		return unqualify(c.Dialect, o.Schema, def), err
 	default:

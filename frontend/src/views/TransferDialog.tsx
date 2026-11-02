@@ -165,7 +165,7 @@ function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionIn
   const toast = useToast()
   const mysql = family(session.connection.driver) === 'mysql'
   const [file, setFile] = useState<PickedFile | null>(null)
-  const txn = features(session.connection.driver).transactions // ClickHouse has none
+  const txn = features(session.connection.driver).importTransaction // not on ClickHouse or Oracle
   const [mode, setMode] = useState<'transaction' | 'continue'>(mysql || !txn ? 'continue' : 'transaction')
   const [upload, setUpload] = useState<{ fraction: number; loaded: number } | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)

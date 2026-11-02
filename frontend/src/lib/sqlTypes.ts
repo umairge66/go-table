@@ -156,6 +156,31 @@ const CATALOG: PerDriver<TypeGroup[]> = {
       { name: 'xml', hint: 'XML document' }, { name: 'rowversion', hint: 'changes on every update' },
     ] },
   ],
+  oracle: [
+    { label: 'Numeric', types: [
+      { name: 'NUMBER', hint: 'exact number, any size', param: { kind: 'precision', placeholder: '10,2' }, traits: ['int'] },
+      { name: 'INTEGER', hint: 'whole number (NUMBER(38))', traits: ['int'] },
+      { name: 'BINARY_DOUBLE', hint: 'approximate, 8 bytes' },
+      { name: 'BINARY_FLOAT', hint: 'approximate, 4 bytes' },
+      { name: 'FLOAT', hint: 'approximate number' },
+    ] },
+    { label: 'Text', types: [
+      { name: 'VARCHAR2', hint: 'text up to the length', param: len('length', '255', true), traits: ['text'] },
+      { name: 'NVARCHAR2', hint: 'Unicode text up to the length', param: len('length', '255', true), traits: ['text'] },
+      { name: 'CHAR', hint: 'fixed-length text', param: len('length', '1'), traits: ['text'] },
+      { name: 'CLOB', hint: 'text of any length' },
+    ] },
+    { label: 'Date and time', types: [
+      { name: 'DATE', hint: 'date and time, to the second' },
+      { name: 'TIMESTAMP', hint: 'date and time with fractions', param: { kind: 'fsp' } },
+      { name: 'TIMESTAMP WITH TIME ZONE', hint: 'with its time zone' },
+      { name: 'INTERVAL DAY TO SECOND', hint: 'a duration' },
+    ] },
+    { label: 'Other', types: [
+      { name: 'BLOB', hint: 'bytes of any length' }, { name: 'RAW', hint: 'bytes up to the length', param: len('length', '16', true) },
+      { name: 'BOOLEAN', hint: 'true / false (23ai)' }, { name: 'JSON', hint: 'JSON document (21c)' },
+    ] },
+  ],
   duckdb: [
     { label: 'Numeric', types: [
       { name: 'INTEGER', hint: '4 bytes', traits: ['int'] },

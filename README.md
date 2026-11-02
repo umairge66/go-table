@@ -1,7 +1,7 @@
 # GoTable
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-DuckDB and ClickHouse, and the servers and cloud services compatible with
+Oracle, DuckDB and ClickHouse, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, TiDB, Percona
 Server, SingleStore, PlanetScale). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
@@ -31,6 +31,7 @@ inspector and a Data / Structure / Definition switch.
 | Database | Notes |
 |---|---|
 | PostgreSQL, MySQL, MariaDB, SQLite | everything below |
+| Oracle (12c+; tested on 23ai Free) | pure-Go driver, no Oracle client needed. The Database field is the service name (e.g. `FREEPDB1`); schemas are users. DDL commits as it runs (no ON UPDATE for foreign keys); PL/SQL blocks in the editor end with a `/` line |
 | SQL Server (2017+, Azure SQL) | schemas of the connected database; other databases open next to it. Comments are `MS_Description` properties |
 | DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
@@ -254,7 +255,7 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
-ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, ClickHouse, CockroachDB,
+ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
 make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
@@ -275,9 +276,9 @@ cd frontend && GOTABLE_SCREENSHOTS=../docs/screenshots \
 
 GitHub Actions (`.github/workflows/`):
 
-- **CI** — on every push and pull request, as four parallel jobs: TypeScript
+- **CI** — on every push and pull request, as parallel jobs: TypeScript
   and unit tests; `go vet`; the Go tests against real PostgreSQL 15, MySQL
-  8.4, MariaDB 11, SQL Server 2022 and ClickHouse (service containers) and
+  8.4, MariaDB 11, SQL Server 2022, ClickHouse and Oracle 23ai (service containers) and
   DuckDB/SQLite files; and the end-to-end tests in Chrome, including the
   PostgreSQL scenario (`scripts/e2e-demo.sql`) and one per SQL Server,
   ClickHouse and DuckDB. Each job keeps its own Go build cache.
@@ -320,7 +321,7 @@ The packaging is `scripts/package.sh` (`make package-linux` /
 
 ## Not implemented yet
 
-Other engines (Oracle, Redis, MongoDB, …), DuckDB in the Windows build, ER
+Other engines (Redis, MongoDB, IBM Db2, …), DuckDB in the Windows build, ER
 diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 

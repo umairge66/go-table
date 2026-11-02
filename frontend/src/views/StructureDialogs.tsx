@@ -12,7 +12,7 @@ import { driverInfo, family, features, type Column, type DbObject, type Driver, 
 const isMySQL = (d: Driver) => family(d) === 'mysql'
 
 /** ddlNotAtomic: schema changes commit statement by statement (see the server's runDDL). */
-const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb'].includes(family(d)) || d === 'cockroachdb'
+const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb', 'oracle'].includes(family(d)) || d === 'cockroachdb'
 
 /** useAlter reviews and runs one-click changes (drop, set primary key…). */
 export function useAlter(session: SessionInfo, table: TableRef, onDone: () => void) {
@@ -257,7 +257,7 @@ export function ForeignKeyDialog({ session, table, columns, initialColumn, onClo
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="On delete"><Select value={onDelete} aria-label="On delete" onChange={(e) => setOnDelete(e.target.value)}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</Select></Field>
-        <Field label="On update"><Select value={onUpdate} aria-label="On update" onChange={(e) => setOnUpdate(e.target.value)}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</Select></Field>
+        {features(session.connection.driver).onUpdate && <Field label="On update"><Select value={onUpdate} aria-label="On update" onChange={(e) => setOnUpdate(e.target.value)}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</Select></Field>}
       </div>
     </AlterDialog>
   )

@@ -363,7 +363,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		switch d.family {
 		case model.DriverMSSQL:
 			return []string{mssqlRename(d, t, x.Name, n, "INDEX")}, nil
-		case model.DriverPostgres:
+		case model.DriverPostgres, model.DriverOracle:
 			return []string{"ALTER INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name}) + " RENAME TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverSQLite:
 			if x.Constraint {
@@ -396,7 +396,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 				return nil, errors.New("DuckDB can't drop or replace a primary key; recreate the table instead")
 			}
 			return []string{alter + "ADD PRIMARY KEY (" + quoteList(d, op.Columns) + ");"}, nil
-		case model.DriverMSSQL: // separate statements; a new key needs NOT NULL columns
+		case model.DriverMSSQL, model.DriverOracle: // separate statements; a new key needs NOT NULL columns
 			var out []string
 			if has {
 				out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(pk.Name)+";")
@@ -510,8 +510,11 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			return []string{s}, nil
 		case model.DriverClickHouse:
 			return []string{alter + "MODIFY COMMENT " + d.QuoteLiteral(Text(op.Comment)) + ";"}, nil
-		case model.DriverPostgres, model.DriverDuckDB:
+		case model.DriverPostgres, model.DriverDuckDB, model.DriverOracle:
 			v := "NULL"
+			if d.family == model.DriverOracle {
+				v = "''" // Oracle clears a comment with ''
+			}
 			if strings.TrimSpace(op.Comment) != "" {
 				v = d.QuoteLiteral(Text(op.Comment))
 			}
@@ -587,7 +590,10 @@ func foreignKeyClause(d Dialect, t TableRef, fk ForeignKeyDef) (string, error) {
 			return "", fmt.Errorf("unknown referential action %q", a)
 		}
 	}
-	if d.family == model.DriverMSSQL { // no RESTRICT; NO ACTION refuses the change the same way
+	if d.family == model.DriverOracle && fk.OnUpdate != "" && !strings.EqualFold(fk.OnUpdate, "NO ACTION") && !strings.EqualFold(fk.OnUpdate, "RESTRICT") {
+		return "", errors.New("Oracle has no ON UPDATE actions for foreign keys")
+	}
+	if d.family == model.DriverMSSQL || d.family == model.DriverOracle { // no RESTRICT; NO ACTION refuses the change the same way
 		for _, a := range []*string{&fk.OnDelete, &fk.OnUpdate} {
 			if strings.EqualFold(*a, "RESTRICT") {
 				*a = ""
@@ -639,7 +645,7 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 		return nil, fmt.Errorf("unknown index method %q", x.Method)
 	case d.family == model.DriverSQLite && method != "" && method != "btree":
 		return nil, errors.New("SQLite indexes are always B-trees")
-	case (d.family == model.DriverMSSQL || d.family == model.DriverDuckDB) && method != "":
+	case (d.family == model.DriverMSSQL || d.family == model.DriverDuckDB || d.family == model.DriverOracle) && method != "":
 		return nil, fmt.Errorf("%s doesn't take an index method here", familyLabel(d))
 	case d.family == model.DriverClickHouse && x.Unique:
 		return nil, errors.New("ClickHouse has no unique indexes")
@@ -684,10 +690,13 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 	if x.Unique {
 		s += "UNIQUE "
 	}
-	if d.family == model.DriverSQLite {
+	switch d.family {
+	case model.DriverSQLite:
 		// The index goes in the table's database; the table name stays bare.
 		s += "INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: name}) + " ON " + d.QuoteIdent(t.Name)
-	} else {
+	case model.DriverOracle: // the index belongs to the table's schema
+		s += "INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: name}) + " ON " + d.QualifiedName(t)
+	default:
 		s += "INDEX " + d.QuoteIdent(name) + " ON " + d.QualifiedName(t)
 	}
 	if method != "" && d.family == model.DriverPostgres {
@@ -725,6 +734,8 @@ func buildModifyColumn(d Dialect, t TableRef, st TableState, op AlterOp) ([]stri
 		return mssqlModifyColumn(d, t, old, def, alter)
 	case model.DriverClickHouse:
 		return chModifyColumn(d, old, def, alter)
+	case model.DriverOracle:
+		return oracleModifyColumn(d, t, old, def, alter)
 	case model.DriverMySQL:
 		extra := ""
 		if op.AutoIncrement {
@@ -976,6 +987,50 @@ func chModifyColumn(d Dialect, old Column, def ColumnDef, alter string) ([]strin
 	}
 	if c := strings.TrimSpace(def.Comment); c != old.Comment {
 		out = append(out, alter+"COMMENT COLUMN "+col+" "+d.QuoteLiteral(Text(c))+";")
+	}
+	if len(out) == 0 {
+		return nil, errors.New("nothing to change")
+	}
+	return out, nil
+}
+
+// oracleModifyColumn changes a column on Oracle: RENAME COLUMN, then
+// MODIFY for the type, NULL and default (each only if it changes: Oracle
+// refuses to set NOT NULL on a NOT NULL column), and COMMENT ON COLUMN.
+func oracleModifyColumn(d Dialect, t TableRef, old Column, def ColumnDef, alter string) ([]string, error) {
+	var out []string
+	name := old.Name
+	if def.Name != old.Name {
+		out = append(out, alter+"RENAME COLUMN "+d.QuoteIdent(old.Name)+" TO "+d.QuoteIdent(def.Name)+";")
+		name = def.Name
+	}
+	col := d.QuoteIdent(name)
+	var mods []string
+	if newType := strings.TrimSpace(def.Type); !sameType(newType, old.Type) {
+		mods = append(mods, newType)
+	}
+	if def.DefaultKind != old.DefaultKind || (def.DefaultKind != DefaultNone && def.Default != old.DefaultText) {
+		switch def.DefaultKind {
+		case DefaultNone, DefaultNull:
+			mods = append(mods, "DEFAULT NULL")
+		case DefaultValue:
+			mods = append(mods, "DEFAULT "+d.QuoteLiteral(Text(def.Default)))
+		case DefaultExpression:
+			mods = append(mods, "DEFAULT "+strings.TrimSpace(def.Default))
+		}
+	}
+	if def.Nullable != old.Nullable {
+		if def.Nullable {
+			mods = append(mods, "NULL")
+		} else {
+			mods = append(mods, "NOT NULL")
+		}
+	}
+	if len(mods) > 0 {
+		out = append(out, alter+"MODIFY ("+col+" "+strings.Join(mods, " ")+");")
+	}
+	if c := strings.TrimSpace(def.Comment); c != old.Comment {
+		out = append(out, "COMMENT ON COLUMN "+d.QualifiedName(t)+"."+col+" IS "+d.QuoteLiteral(Text(c))+";")
 	}
 	if len(out) == 0 {
 		return nil, errors.New("nothing to change")

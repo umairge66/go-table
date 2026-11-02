@@ -119,7 +119,8 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 		}
 		b.WriteString(" COLLATE " + cl)
 	}
-	if notNull && d.family != model.DriverClickHouse { // ClickHouse columns are NOT NULL unless Nullable(…)
+	oracle := d.family == model.DriverOracle                      // DEFAULT and identity come before NOT NULL there
+	if notNull && d.family != model.DriverClickHouse && !oracle { // ClickHouse columns are NOT NULL unless Nullable(…)
 		b.WriteString(" NOT NULL")
 	}
 	switch c.DefaultKind {
@@ -138,6 +139,9 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 		b.WriteString(" ON UPDATE CURRENT_TIMESTAMP")
 	}
 	b.WriteString(extra)
+	if oracle && notNull {
+		b.WriteString(" NOT NULL")
+	}
 	if cm := strings.TrimSpace(c.Comment); cm != "" && (d.mysqlLike() || d.family == model.DriverClickHouse) {
 		b.WriteString(" COMMENT " + d.QuoteLiteral(Text(cm)))
 	}
@@ -162,8 +166,8 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 	}
 	var b strings.Builder
 	add := " ADD COLUMN "
-	if d.family == model.DriverMSSQL {
-		add = " ADD " // T-SQL has no COLUMN keyword here
+	if d.family == model.DriverMSSQL || d.family == model.DriverOracle {
+		add = " ADD " // no COLUMN keyword here
 	}
 	// DuckDB can't add a column with NOT NULL: add it, then set NOT NULL.
 	notNullAfter := d.family == model.DriverDuckDB && !c.Nullable
@@ -181,7 +185,7 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 	}
 	if comment != "" {
 		switch d.family {
-		case model.DriverPostgres, model.DriverDuckDB:
+		case model.DriverPostgres, model.DriverDuckDB, model.DriverOracle:
 			out = append(out, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s;", d.QualifiedName(t), d.QuoteIdent(strings.TrimSpace(c.Name)), d.QuoteLiteral(Text(comment))))
 		case model.DriverMSSQL:
 			out = append(out, mssqlComment(d, t, strings.TrimSpace(c.Name), "", comment))
@@ -217,7 +221,8 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 
 // runDDLLocked is runDDL for callers that hold c.mu.
 func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
-	if c.Config.Driver == model.DriverCockroachDB || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverDuckDB {
+	if c.Config.Driver == model.DriverCockroachDB || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverDuckDB ||
+		c.Dialect.family == model.DriverOracle { // Oracle commits each DDL statement anyway
 		// CockroachDB refuses some schema changes (ALTER COLUMN TYPE) inside
 		// a transaction, DuckDB still sees an index dropped earlier in the
 		// same transaction, and ClickHouse has none. So each statement
@@ -289,6 +294,18 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 		if cascade {
 			out = append(out, "SET FOREIGN_KEY_CHECKS = 1;")
 		}
+	case model.DriverOracle:
+		// CASCADE CONSTRAINTS drops the foreign keys that point at a table.
+		suffix := ";"
+		if cascade {
+			suffix = " CASCADE CONSTRAINTS;"
+		}
+		for _, v := range views {
+			out = append(out, "DROP VIEW "+v+";")
+		}
+		for _, t := range tables {
+			out = append(out, "DROP TABLE "+t+suffix)
+		}
 	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse:
 		if cascade {
 			return nil, fmt.Errorf("%s can't drop with CASCADE: include the tables and views that depend on these", familyLabel(d))
@@ -348,7 +365,7 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 			c.conn.ExecContext(context.WithoutCancel(ctx), s)
 		}
 	}()
-	if c.Dialect.mysqlLike() || c.Dialect.family == model.DriverClickHouse {
+	if c.Dialect.mysqlLike() || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverOracle {
 		for _, s := range body {
 			if _, err := c.conn.ExecContext(ctx, s); err != nil {
 				if strings.HasPrefix(body[0], "SET FOREIGN_KEY_CHECKS = 0") {
@@ -395,6 +412,10 @@ func (c *Conn) dropOrder(ctx context.Context, objs []Object) []Object {
 				WHERE constraint_type = 'FOREIGN KEY' AND schema_name = ? AND table_name = ?`, o.Schema, o.Name)
 		case model.DriverClickHouse:
 			// no foreign keys
+		case model.DriverOracle:
+			parents, err = c.queryStrings(ctx, `SELECT DISTINCT r.table_name FROM all_constraints k
+				JOIN all_constraints r ON r.owner = k.r_owner AND r.constraint_name = k.r_constraint_name
+				WHERE k.owner = :1 AND k.table_name = :2 AND k.constraint_type = 'R'`, o.Schema, o.Name)
 		default:
 			parents, err = c.queryStrings(ctx, `SELECT DISTINCT REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE
 				WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL`, o.Schema, o.Name)

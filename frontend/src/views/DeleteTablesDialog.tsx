@@ -66,6 +66,7 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
             <Switch checked={cascade} onChange={setCascade} label="Also drop objects that depend on them" />
             <div className="mt-1 pl-[42px] text-[12px] text-muted">
               {family(driver) === 'postgres' ? 'Views and foreign keys of other tables that reference these are dropped too (CASCADE).'
+                : family(driver) === 'oracle' ? 'Foreign keys of other tables that reference these are dropped too (CASCADE CONSTRAINTS).'
                 : 'Foreign keys from other tables won’t block the delete.'}
             </div>
           </div>
@@ -74,7 +75,7 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
           <div className="mb-1 text-[11.5px] font-medium text-muted">SQL that will run</div>
           <pre data-testid="drop-sql" className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-panel-2 px-3 py-2.5 font-mono text-[12px] text-fg-2">{sql.join('\n')}</pre>
           <div className="mt-1 text-[12px] text-muted">
-            {family(driver) === 'mysql' || !features(driver).transactions ? `${driverInfo(driver).label} can’t undo a DROP: there is no way back without a backup.` : 'Runs in one transaction: either everything is deleted or nothing.'}
+            {family(driver) === 'mysql' || family(driver) === 'oracle' || !features(driver).transactions ? `${driverInfo(driver).label} can’t undo a DROP: there is no way back without a backup.` : 'Runs in one transaction: either everything is deleted or nothing.'}
           </div>
         </div>
         {problem && (

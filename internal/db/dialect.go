@@ -49,6 +49,8 @@ func (d Dialect) Placeholder(n int) string {
 		return "$" + strconv.Itoa(n)
 	case model.DriverMSSQL:
 		return "@p" + strconv.Itoa(n)
+	case model.DriverOracle:
+		return ":" + strconv.Itoa(n)
 	}
 	return "?"
 }
@@ -67,6 +69,8 @@ func (d Dialect) QuoteLiteral(v Value) string {
 			return "0x" + h
 		case model.DriverClickHouse:
 			return "unhex('" + h + "')"
+		case model.DriverOracle:
+			return "HEXTORAW('" + h + "')"
 		case model.DriverDuckDB:
 			var b strings.Builder
 			for i := 0; i+1 < len(h); i += 2 {
@@ -103,6 +107,8 @@ func (d Dialect) TextExpr(col string) string {
 		return "CAST(" + q + " AS VARCHAR)"
 	case model.DriverClickHouse:
 		return "toString(" + q + ")"
+	case model.DriverOracle:
+		return "TO_CHAR(" + q + ")"
 	}
 	return q
 }
@@ -120,7 +126,7 @@ func (d Dialect) LikeOp() string {
 // MySQL use it by default (and MySQL would parse '\' as an open literal).
 func (d Dialect) likeEscape() string {
 	switch d.family {
-	case model.DriverSQLite, model.DriverMSSQL, model.DriverDuckDB:
+	case model.DriverSQLite, model.DriverMSSQL, model.DriverDuckDB, model.DriverOracle:
 		return ` ESCAPE '\'`
 	}
 	return ""
@@ -138,7 +144,7 @@ func (d Dialect) escapeLike(s string) string {
 
 // LimitOffset renders a LIMIT/OFFSET clause.
 func (d Dialect) LimitOffset(limit, offset int) string {
-	if d.family == model.DriverMSSQL { // needs an ORDER BY before it (BuildSelect)
+	if d.family == model.DriverMSSQL || d.family == model.DriverOracle { // SQL Server also needs an ORDER BY (BuildSelect)
 		if limit <= 0 && offset <= 0 {
 			return ""
 		}

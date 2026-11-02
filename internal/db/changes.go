@@ -73,8 +73,8 @@ func BuildChange(d Dialect, t TableRef, c Change, hasPK bool) (Statement, error)
 	switch c.Kind {
 	case ChangeInsert:
 		if len(c.Values) == 0 {
-			if d.family == model.DriverClickHouse {
-				return Statement{}, fmt.Errorf("ClickHouse can't insert a row without values: fill in at least one column")
+			if d.family == model.DriverClickHouse || d.family == model.DriverOracle {
+				return Statement{}, fmt.Errorf("%s can't insert a row without values: fill in at least one column", familyLabel(d))
 			}
 			return Statement{SQL: insertDefaults(d, name)}, nil
 		}
@@ -135,6 +135,9 @@ func singleRowTop(d Dialect, hasPK bool) string {
 }
 
 func singleRowSuffix(d Dialect, hasPK bool) string {
+	if !hasPK && d.family == model.DriverOracle {
+		return " AND ROWNUM = 1"
+	}
 	// SingleStore can't limit an UPDATE/DELETE that spans its partitions.
 	if !hasPK && d.mysqlLike() && d.kind != model.DriverSingleStore {
 		return " LIMIT 1"
@@ -177,6 +180,13 @@ func Preview(d Dialect, s Statement) string {
 			b.WriteString(next())
 		case ch == '@' && d.family == model.DriverMSSQL && strings.HasPrefix(sql[i:], "@p") && i+2 < len(sql) && sql[i+2] >= '0' && sql[i+2] <= '9':
 			j := i + 2
+			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
+				j++
+			}
+			b.WriteString(next())
+			i = j - 1
+		case ch == ':' && d.family == model.DriverOracle && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9':
+			j := i + 1
 			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
 				j++
 			}

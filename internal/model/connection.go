@@ -23,6 +23,7 @@ const (
 	DriverDuckDB   Driver = "duckdb"
 	// DriverClickHouse connects over ClickHouse's native protocol.
 	DriverClickHouse Driver = "clickhouse"
+	DriverOracle     Driver = "oracle"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -54,6 +55,7 @@ var specs = map[Driver]driverSpec{
 	DriverMSSQL:       {"SQL Server", DriverMSSQL, 1433, false},
 	DriverDuckDB:      {"DuckDB", DriverDuckDB, 0, false},
 	DriverClickHouse:  {"ClickHouse", DriverClickHouse, 9000, false},
+	DriverOracle:      {"Oracle", DriverOracle, 1521, false},
 	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
 	DriverYugabyteDB:  {"YugabyteDB", DriverPostgres, 5433, false},
 	DriverTimescaleDB: {"TimescaleDB", DriverPostgres, 5432, false},
@@ -67,13 +69,13 @@ var specs = map[Driver]driverSpec{
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverDuckDB, DriverClickHouse,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
-// DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverDuckDB or
-// DriverClickHouse. Code that only cares about syntax compares families;
+// DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
+// DriverDuckDB or DriverClickHouse. Code that only cares about syntax compares families;
 // code for one product's quirks compares drivers.
 func (d Driver) Family() Driver {
 	if s, ok := specs[d]; ok {
@@ -115,7 +117,7 @@ func (d Driver) SSLModes() []string {
 	case DriverMSSQL:
 		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
 		modes = []string{"optional", "disable", "required", "trust", "strict"}
-	case DriverClickHouse:
+	case DriverClickHouse, DriverOracle:
 		modes = []string{"disable", "require", "skip-verify"}
 	default:
 		return nil

@@ -1,7 +1,7 @@
 # Tests on every push and pull request, as parallel jobs so the run takes as
 # long as the slowest one: frontend checks, Go vet, Go tests against real
 # PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse servers (and DuckDB,
-# SQLite files), and the end-to-end tests.
+# SQLite files), Oracle in a job of its own, and the end-to-end tests.
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
 run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.number) || github.ref_name }}"
@@ -151,6 +151,43 @@ jobs:
       # cmd/gotable has no tests; vet builds it (with WebKitGTK).
       - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse)
         run: go test -race -count=1 ./internal/...
+
+  oracle:
+    name: Oracle tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Its own job: the image is large and the other tests needn't wait.
+    services:
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: gotable-test
+          APP_USER: gotable
+          APP_USER_PASSWORD: gotable-test
+        ports: ["1521:1521"]
+        options: >-
+          --health-cmd healthcheck.sh --health-interval 5s --health-timeout 5s --health-retries 60
+    env:
+      GOTABLE_TEST_ORACLE_HOST: 127.0.0.1
+      GOTABLE_TEST_ORACLE_PORT: "1521"
+      GOTABLE_TEST_ORACLE_USER: gotable
+      GOTABLE_TEST_ORACLE_PASSWORD: gotable-test
+      GOTABLE_TEST_ORACLE_DB: FREEPDB1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-oracle-${{ hashFiles('go.sum') }}
+          restore-keys: go-oracle-
+      - name: Go tests (Oracle)
+        run: go test -race -count=1 -run 'Oracle' ./internal/db/
 
   e2e:
     name: End-to-end tests

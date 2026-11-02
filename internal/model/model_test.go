@@ -77,7 +77,7 @@ func TestValidate(t *testing.T) {
 		"no user":       func(c *Connection) { c.User = "" },
 		"bad port":      func(c *Connection) { c.Port = 70000 },
 		"ssh no host":   func(c *Connection) { c.UseSSHTunnel = true; c.SSHUser = "u" },
-		"unknown drv":   func(c *Connection) { c.Driver = "oracle" },
+		"unknown drv":   func(c *Connection) { c.Driver = "db2" },
 		"sqlite nofile": func(c *Connection) { c.Driver = DriverSQLite },
 		"sqlite ssh": func(c *Connection) {
 			c.Driver, c.Path, c.UseSSHTunnel, c.SSHHost, c.SSHUser = DriverSQLite, "/x", true, "h", "u"
@@ -148,7 +148,7 @@ func TestParseURL(t *testing.T) {
 	if c.Driver != DriverSQLite || c.Name != "notes" {
 		t.Fatalf("%+v", c)
 	}
-	for _, bad := range []string{"", "hello", "oracle://x", "postgres://h:99999/x", "sqlite://"} {
+	for _, bad := range []string{"", "hello", "db2://x", "postgres://h:99999/x", "sqlite://"} {
 		if _, _, err := ParseURL(bad); err == nil {
 			t.Errorf("%q should fail", bad)
 		}
@@ -193,7 +193,7 @@ func TestCompatibleDrivers(t *testing.T) {
 			t.Errorf("%s: SSL mode %q", raw, c.SSLMode)
 		}
 	}
-	bad := NewConnection("oracle")
+	bad := NewConnection("db2")
 	bad.Name, bad.User = "x", "u"
 	if bad.Validate() == nil {
 		t.Error("unknown driver accepted")
@@ -240,5 +240,15 @@ func TestMoreDrivers(t *testing.T) {
 		if d.Label() == string(d) || d.Family() == "" {
 			t.Errorf("%s has no spec", d)
 		}
+	}
+}
+
+func TestOracleURL(t *testing.T) {
+	c, pw, err := ParseURL("oracle://scott:tiger@db.example.com:1522/FREEPDB1?ssl=true")
+	if err != nil || c.Driver != DriverOracle || c.Port != 1522 || c.DBName != "FREEPDB1" || c.SSLMode != "require" || pw != "tiger" {
+		t.Fatalf("%+v %q %v", c, pw, err)
+	}
+	if DriverOracle.DefaultPort() != 1521 || DriverOracle.Family() != DriverOracle || NewConnection(DriverOracle).SSLMode != "disable" {
+		t.Error("oracle defaults")
 	}
 }

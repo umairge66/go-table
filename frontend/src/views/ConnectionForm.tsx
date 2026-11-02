@@ -215,7 +215,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
               <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
               <Field label="Password">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
             </div>
-            <Field label="Database"><Input value={c.database ?? ''} placeholder="optional" onChange={(e) => set('database', e.target.value)} /></Field>
+            <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>
           </>
         )}
       </section>

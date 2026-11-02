@@ -561,7 +561,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     ...dbs.filter((d) => d.key !== activeDb.key).flatMap((d) => objectCommands(d, true)),
     { id: 'new-query', label: 'New query', hint: 'Ctrl T', icon: <Code2 />, run: () => newQuery() },
     { id: 'new-table', label: 'New table…', icon: <Plus />, run: () => newTable(activeDb) },
-    { id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) },
+    ...(!features(conn.driver).createDatabase ? [] : [{ id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) }]),
     { id: 'saved-queries', label: 'Saved queries', icon: <FileCode2 />, run: () => { setSidebarHidden(false); setSideTab('queries') } },
     { id: 'history', label: 'Query history', icon: <History />, run: () => { setSidebarHidden(false); setSideTab('history') } },
     { id: 'toggle-sidebar', label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', hint: 'Ctrl B', icon: <PanelLeft />, run: toggleSidebar },
@@ -587,8 +587,8 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     ...(pg ? (serverDbs ?? []).map((name) => ({ id: 'db:' + name, label: name, group: 'Databases on this server', icon: <Server />,
       active: name === activeDb.info.database, hint: name !== activeDb.info.database && dbs.some((d) => d.info.database === name) ? 'open' : undefined,
       run: () => openDb({ database: name }) })) : []),
-    { id: 'create-database', label: pg ? 'Create database or schema…' : family(conn.driver) === 'sqlite' ? 'Create database file…' : fileDb ? 'Create schema…' : 'Create database…',
-      group: 'Actions', icon: <Plus />, run: () => setCreatingDb(true) },
+    ...(!features(conn.driver).createDatabase ? [] : [{ id: 'create-database', label: pg ? 'Create database or schema…' : family(conn.driver) === 'sqlite' ? 'Create database file…' : fileDb ? 'Create schema…' : 'Create database…',
+      group: 'Actions', icon: <Plus />, run: () => setCreatingDb(true) }]),
   ]
 
   const tag = tagInfo(conn.tag)

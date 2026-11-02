@@ -1,6 +1,7 @@
 package db
 
 import (
+	"regexp"
 	"strings"
 
 	"gotable/internal/model"
@@ -21,6 +22,7 @@ func SplitStatements(kind model.Driver, script string) []Span {
 	// ClickHouse, like MySQL, escapes with backslashes and allows # comments.
 	backslash := mysql || kind == model.DriverClickHouse
 	mssql := kind == model.DriverMSSQL
+	oracle := kind == model.DriverOracle
 	dollar := kind == model.DriverPostgres || kind == model.DriverDuckDB
 	var out []Span
 	delim := ";"
@@ -47,6 +49,17 @@ func SplitStatements(kind model.Driver, script string) []Span {
 				delim = d
 			}
 			i += eol
+			start = i
+			continue
+		}
+		// Oracle: a PL/SQL block (and any statement) ends at "/" alone on a line.
+		if oracle && atLineStart(script, i) && isSlashLine(script[i:]) {
+			emit(i)
+			if eol := strings.IndexByte(script[i:], '\n'); eol >= 0 {
+				i += eol
+			} else {
+				i = n
+			}
 			start = i
 			continue
 		}
@@ -96,7 +109,8 @@ func SplitStatements(kind model.Driver, script string) []Span {
 		case kind == model.DriverSQLite && depth > 0 && isWordAt(script, i, "END"):
 			depth--
 		}
-		if depth == 0 && strings.HasPrefix(script[i:], delim) {
+		// Inside a PL/SQL block ";" ends its statements, not the block.
+		if depth == 0 && strings.HasPrefix(script[i:], delim) && !(oracle && plsqlBlock.MatchString(stripLeadingComments(script[start:i]))) {
 			emit(i)
 			i += len(delim)
 			start = i
@@ -250,4 +264,17 @@ func isGoLine(s string) bool {
 		}
 	}
 	return true
+}
+
+// plsqlBlock is the start of an Oracle PL/SQL block, which runs up to a "/"
+// line rather than the first ";".
+var plsqlBlock = regexp.MustCompile(`(?is)^(DECLARE|BEGIN|CREATE\s+(OR\s+REPLACE\s+)?((NON)?EDITIONABLE\s+)?(PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE)\b)`)
+
+// isSlashLine reports a line holding only "/" (SQL*Plus runs the block).
+func isSlashLine(s string) bool {
+	line := s
+	if eol := strings.IndexByte(s, '\n'); eol >= 0 {
+		line = s[:eol]
+	}
+	return strings.TrimSpace(line) == "/"
 }
