@@ -1,6 +1,7 @@
-# Tests on every push and pull request: frontend checks, Go tests against
-# real PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse servers (and
-# DuckDB, SQLite files), and the end-to-end tests.
+# Tests on every push and pull request, as parallel jobs so the run takes as
+# long as the slowest one: frontend checks, Go vet, Go tests against real
+# PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse servers (and DuckDB,
+# SQLite files), and the end-to-end tests.
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
 run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.number) || github.ref_name }}"
@@ -8,7 +9,9 @@ run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}',
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "LICENSE"]
   pull_request:
+    paths-ignore: ["**.md", "LICENSE"]
 
 permissions:
   contents: read
@@ -18,10 +21,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Tests
+  frontend:
+    name: Frontend checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Types and unit tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc -p .
+          npx vitest run
+
+  vet:
+    name: Go vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false # per-job cache below; a shared key keeps only one job's builds
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-vet-${{ hashFiles('go.sum') }}
+          restore-keys: go-vet-
+      - name: Install WebKitGTK
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
+      - name: Go vet (desktop and browser builds)
+        run: |
+          go vet -tags desktop,production,webkit2_41 ./...
+          go vet -tags browser ./cmd/...
+
+  go:
+    name: Go tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:15-alpine
@@ -95,29 +140,73 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ hashFiles('go.sum') }}
+          restore-keys: go-test-
+      # cmd/gotable has no tests; vet builds it (with WebKitGTK).
+      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse)
+        run: go test -race -count=1 ./internal/...
+
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: gotable-test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: GoTable-test1
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P GoTable-test1 -Q 'SELECT 1'" --health-interval 3s --health-timeout 5s --health-retries 40
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: gotable
+          CLICKHOUSE_PASSWORD: gotable-test
+          CLICKHOUSE_DB: gotable
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "clickhouse-client --user gotable --password gotable-test -q 'SELECT 1'" --health-interval 2s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-e2e-${{ hashFiles('go.sum') }}
+          restore-keys: go-e2e-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install WebKitGTK
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
-
-      - name: Frontend checks and build
+      - name: Build the web UI
         working-directory: frontend
-        run: |
-          npm ci
-          npx tsc -p .
-          npx vitest run
-          npm run build
-
-      - name: Go vet
-        run: go vet -tags desktop,production,webkit2_41 ./...
-      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse)
-        run: go test -race -count=1 ./...
-
+        run: npm ci && npm run build
+      # The browser build is the same app without the native window, so it
+      # needs no WebKitGTK; cgo stays on for DuckDB.
       - name: Build the app
-        run: go build -tags desktop,production,webkit2_41 -o bin/gotable ./cmd/gotable
+        run: go build -tags browser -o bin/gotable ./cmd/gotable
       - name: Demo data for the PostgreSQL scenario
         run: psql "postgres://postgres:gotable-test@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 -f scripts/e2e-demo.sql
       - name: End-to-end tests (Chrome)

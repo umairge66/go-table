@@ -8,10 +8,17 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", "LICENSE"]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push to main replaces the build of the older one; a release
+# (tag) always finishes.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   package:
@@ -28,6 +35,22 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false # per-target cache below
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-package-${{ matrix.target }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-package-${{ matrix.target }}-
+      # linuxdeploy and its GTK plugin (scripts/package.sh fetches them once).
+      - uses: actions/cache@v4
+        if: matrix.target == 'linux'
+        with:
+          path: |
+            build/linuxdeploy
+            build/linuxdeploy-plugin-gtk.sh
+          key: appimage-tools-${{ hashFiles('scripts/package.sh') }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -249,17 +249,23 @@ GOTABLE_E2E_COMPAT="sqlserver://… clickhouse://… duckdb:///tmp/x.duckdb" mak
 
 GitHub Actions (`.github/workflows/`):
 
-- **CI** — on every push and pull request: TypeScript and unit tests, `go
-  vet`, the Go tests against real PostgreSQL 15, MySQL 8.4 and MariaDB 11
-  (service containers), and the end-to-end tests in Chrome, including the
-  PostgreSQL scenario (`scripts/e2e-demo.sql`).
+- **CI** — on every push and pull request, as four parallel jobs: TypeScript
+  and unit tests; `go vet`; the Go tests against real PostgreSQL 15, MySQL
+  8.4, MariaDB 11, SQL Server 2022 and ClickHouse (service containers) and
+  DuckDB/SQLite files; and the end-to-end tests in Chrome, including the
+  PostgreSQL scenario (`scripts/e2e-demo.sql`) and one per SQL Server,
+  ClickHouse and DuckDB. Each job keeps its own Go build cache.
 - **Build** — on every push to `main`: the `.deb`, `.rpm`, AppImage,
-  `.tar.gz` and Windows `.zip`, downloadable from the run's artifacts.
+  `.tar.gz` and Windows `.zip`, downloadable from the run's artifacts. A
+  newer push cancels the older build.
+
+Changes to Markdown files or the licence alone run neither.
   Linux builds run on Ubuntu 22.04, so one binary covers Ubuntu 22.04+,
   Debian 12+ and Fedora 36+.
 
 To publish a release, push a version tag; the same files are attached to a
-GitHub release with generated notes:
+GitHub release whose notes are the full commit messages since the previous
+tag (`scripts/release-notes.sh`):
 
 ```sh
 git tag v0.1.0
