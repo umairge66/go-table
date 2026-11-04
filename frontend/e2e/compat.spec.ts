@@ -8,10 +8,11 @@ import { expect, test } from '@playwright/test'
 //   sqlserver://sa:pw@127.0.0.1:1433?database=gotable
 //   clickhouse://gotable:pw@127.0.0.1:9000/gotable
 //   duckdb:///tmp/compat.duckdb
+//   mongodb://gotable:pw@127.0.0.1:27017/gotable?authSource=admin
 // scripts/test-dbs.sh with KEEP=1 prints the ports of its containers.
 const urls = (process.env.GOTABLE_E2E_COMPAT ?? '').split(/\s+/).filter(Boolean)
 const LABELS: Record<string, string> = { cockroachdb: 'CockroachDB', yugabytedb: 'YugabyteDB', tidb: 'TiDB', timescaledb: 'TimescaleDB',
-  percona: 'Percona Server', singlestore: 'SingleStore', sqlserver: 'SQL Server', oracle: 'Oracle', clickhouse: 'ClickHouse', duckdb: 'DuckDB' }
+  percona: 'Percona Server', singlestore: 'SingleStore', sqlserver: 'SQL Server', oracle: 'Oracle', clickhouse: 'ClickHouse', duckdb: 'DuckDB', mongodb: 'MongoDB' }
 
 /** The test table in each database's own SQL. */
 const DDL: Record<string, string> = {
@@ -51,11 +52,16 @@ test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_CO
         await editor.fill(sql)
         await page.keyboard.press('Control+Shift+Enter')
       }
-      await runSQL(`DROP TABLE IF EXISTS gt_compat;
+      const mongo = scheme === 'mongodb'
+      await runSQL(mongo ? `db.gt_compat.drop()
+db.gt_compat.insertMany([
+  { _id: 1, name: 'one', seen: ISODate('2024-03-15T10:20:30Z') },
+  { _id: 2, name: 'two', seen: null },
+])` : `DROP TABLE IF EXISTS gt_compat;
 ${DDL[scheme] ?? 'CREATE TABLE gt_compat (id INT PRIMARY KEY, name VARCHAR(40) NOT NULL, seen TIMESTAMP)'};
 INSERT INTO gt_compat VALUES (1, 'one', '2024-03-15 10:20:30'), (2, 'two', NULL);`)
-      // Three statements ran (ClickHouse reports no row count for the INSERT).
-      await expect.poll(() => page.getByText(/OK — \d+ row\(s\) affected/).count()).toBe(3)
+      // Every statement ran (ClickHouse reports no row count for the INSERT).
+      await expect.poll(() => page.getByText(/OK — \d+ row\(s\) affected/).count()).toBe(mongo ? 2 : 3)
       await page.keyboard.press('Control+w')
       await page.getByRole('button', { name: 'Refresh tables' }).click()
       // Oracle keeps names written without quotes in upper case.
@@ -81,7 +87,7 @@ INSERT INTO gt_compat VALUES (1, 'one', '2024-03-15 10:20:30'), (2, 'two', NULL)
       await view.getByRole('tab', { name: 'Structure' }).click()
       await expect(view.getByText(scheme === 'oracle' ? 'SEEN' : 'seen', { exact: true })).toBeVisible()
       await view.getByRole('tab', { name: 'Data' }).click()
-      await runSQL('DROP TABLE gt_compat')
+      await runSQL(mongo ? 'db.gt_compat.drop()' : 'DROP TABLE gt_compat')
       expect(errors).toEqual([])
       await page.close()
     })

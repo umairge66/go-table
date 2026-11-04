@@ -23,6 +23,12 @@ func Explain(err error) Friendly {
 		return false
 	}
 	switch {
+	case has("server selection error", "server selection timeout") && !has("authentication failed", "unable to authenticate"):
+		return Friendly{"Can't reach the server", "No MongoDB server answered. Check the host and port, that it is running, and for a replica set that its members' addresses can be reached from here (directConnection=true in Options connects to just this one)."}
+	case has("requires authentication", "unauthorized", "not authorized on"):
+		return Friendly{"Not allowed", "This MongoDB user may not do that, or the server needs a user and password. A user defined in another database needs authSource=<that database> in Options."}
+	case has("e11000 duplicate key"):
+		return Friendly{"A document with that key already exists", "A unique index, or _id, already has this value."}
 	// Specific messages first: they contain words the general rules below match.
 	case has("other objects depend on it", "referenced by a foreign key", "cannot drop table") ||
 		has("foreign key constraint failed") && has("drop"):

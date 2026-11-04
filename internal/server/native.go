@@ -99,6 +99,7 @@ func (s *Server) nativeDialogs() Dialogs {
 
 var fileKinds = map[string]FileFilter{
 	"sql":    {"SQL file", "*.sql"},
+	"js":     {"MongoDB shell script", "*.js"},
 	"csv":    {"CSV file", "*.csv;*.tsv;*.txt"},
 	"json":   {"JSON file", "*.json"},
 	"zip":    {"ZIP archive", "*.zip"},

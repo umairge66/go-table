@@ -252,3 +252,50 @@ func TestOracleURL(t *testing.T) {
 		t.Error("oracle defaults")
 	}
 }
+
+func TestMongoDBDriver(t *testing.T) {
+	if DriverMongoDB.DefaultPort() != 27017 || DriverMongoDB.Family() != DriverMongoDB || DriverMongoDB.IsFileBased() || NewConnection(DriverMongoDB).SSLMode != "disable" {
+		t.Fatal("MongoDB's defaults")
+	}
+	c, pw, err := ParseURL("mongodb://me%40corp:p%2Fw@db.example:27018/shop?replicaSet=rs0&tls=true")
+	if err != nil || c.Driver != DriverMongoDB || c.Host != "db.example" || c.Port != 27018 || c.User != "me@corp" || pw != "p/w" || c.DBName != "shop" || c.SSLMode != "require" {
+		t.Fatalf("%+v %q %v", c, pw, err)
+	}
+	// The database in a URL is where the user is defined, unless it says otherwise.
+	if c.Options != "authSource=shop&replicaSet=rs0" {
+		t.Fatal(c.Options)
+	}
+	c, _, err = ParseURL("mongodb://u:p@a:1,b:2,c:3/shop?authSource=admin")
+	if err != nil || c.Host != "a:1,b:2,c:3" || c.Port != 0 || c.Options != "authSource=admin" || c.Name != "shop @ a:1,b:2,c:3" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	c, _, err = ParseURL("mongodb+srv://u@cluster0.example.net/?appName=x")
+	if err != nil || !c.SRV || c.Host != "cluster0.example.net" || c.Port != 0 || c.SSLMode != "require" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	c, _, err = ParseURL("mongodb://localhost")
+	if err != nil || c.Host != "localhost" || c.Port != 27017 || c.User != "" || c.Options != "" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, _, err := ParseURL("mongodb://h:99999/x"); err == nil {
+		t.Fatal("expected a bad port to fail")
+	}
+	if _, _, err := ParseURL("mongodb://"); err == nil {
+		t.Fatal("expected a missing host to fail")
+	}
+	// A server without authentication needs no user.
+	v := NewConnection(DriverMongoDB)
+	v.Name = "local"
+	if err := v.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// An SSH tunnel leads to one host.
+	v.UseSSHTunnel, v.SSHHost, v.SSHUser, v.Host = true, "bastion", "me", "a:1,b:2"
+	if err := v.Validate(); err == nil {
+		t.Fatal("expected a host list over a tunnel to fail")
+	}
+	v.Host, v.SRV = "cluster.example", true
+	if err := v.Validate(); err == nil {
+		t.Fatal("expected SRV over a tunnel to fail")
+	}
+}

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -10,7 +11,7 @@ import (
 
 // ParseURL builds a connection from a connection string such as
 // postgres://user:pass@host:5432/db?sslmode=require, mysql://…, mariadb://…,
-// sqlserver://…, clickhouse://…, the compatible servers' own schemes
+// sqlserver://…, clickhouse://…, mongodb://…, mongodb+srv://…, the compatible servers' own schemes
 // (cockroachdb://, tidb://, …), sqlite:///path/to/file.db, duckdb:///path or
 // a plain path to a .db/.sqlite/.duckdb file. Plain postgres:// and mysql://
 // URLs of known cloud services (Neon, Supabase, PlanetScale, …) pick that
@@ -36,6 +37,9 @@ func ParseURL(raw string) (*Connection, string, error) {
 			return c, "", nil
 		}
 		return nil, "", fmt.Errorf("not a connection URL: expected something like postgres://user@host/db")
+	}
+	if l := strings.ToLower(raw); strings.HasPrefix(l, "mongodb://") || strings.HasPrefix(l, "mongodb+srv://") {
+		return parseMongoURL(raw)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -145,6 +149,84 @@ func ParseURL(raw string) (*Connection, string, error) {
 			c.SSLMode = "skip-verify"
 		}
 	}
+	c.Name = c.Host
+	if c.DBName != "" {
+		c.Name = c.DBName + " @ " + c.Host
+	}
+	return c, password, nil
+}
+
+// parseMongoURL reads mongodb://user:pw@host1:1,host2:2/db?options and
+// mongodb+srv://. It is parsed by hand as net/url refuses several hosts. In
+// such a URL the database is also where the user is defined, unless
+// authSource says otherwise; GoTable's default is admin, so that is kept as
+// an explicit option.
+func parseMongoURL(raw string) (*Connection, string, error) {
+	scheme, rest, _ := strings.Cut(raw, "://")
+	c := NewConnection(DriverMongoDB)
+	c.SRV = strings.EqualFold(scheme, "mongodb+srv")
+	authority, path := rest, ""
+	if i := strings.IndexAny(rest, "/?"); i >= 0 {
+		authority, path = rest[:i], rest[i:]
+	}
+	password := ""
+	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
+		user, pw, _ := strings.Cut(authority[:i], ":")
+		authority = authority[i+1:]
+		var err error
+		if c.User, err = url.PathUnescape(user); err != nil {
+			return nil, "", fmt.Errorf("invalid user name: %w", err)
+		}
+		if password, err = url.PathUnescape(pw); err != nil {
+			return nil, "", fmt.Errorf("invalid password: %w", err)
+		}
+	}
+	switch {
+	case authority == "":
+		return nil, "", fmt.Errorf("the MongoDB URL has no host")
+	case strings.Contains(authority, ","): // a replica set's seed list
+		c.Host, c.Port = authority, 0
+	default:
+		c.Host = authority
+		if h, p, err := net.SplitHostPort(authority); err == nil {
+			n, err := strconv.Atoi(p)
+			if err != nil || n <= 0 || n > 65535 {
+				return nil, "", fmt.Errorf("invalid port %q", p)
+			}
+			c.Host, c.Port = h, n
+		}
+	}
+	if c.SRV {
+		c.Port = 0
+		c.SSLMode = "require" // an SRV connection defaults to TLS
+	}
+	path, query, _ := strings.Cut(path, "?")
+	db, err := url.PathUnescape(strings.TrimPrefix(path, "/"))
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid database name: %w", err)
+	}
+	c.DBName = db
+	q, err := url.ParseQuery(query)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid options: %w", err)
+	}
+	tlsOn := func(k string) bool { return strings.EqualFold(q.Get(k), "true") }
+	if tlsOn("tls") || tlsOn("ssl") {
+		c.SSLMode = "require"
+	}
+	if tlsOn("tlsInsecure") || tlsOn("tlsAllowInvalidCertificates") {
+		c.SSLMode = "skip-verify"
+	}
+	if q.Get("tls") == "false" || q.Get("ssl") == "false" {
+		c.SSLMode = "disable"
+	}
+	for _, k := range []string{"tls", "ssl", "tlsInsecure", "tlsAllowInvalidCertificates"} {
+		q.Del(k)
+	}
+	if c.User != "" && c.DBName != "" && !q.Has("authSource") {
+		q.Set("authSource", c.DBName)
+	}
+	c.Options = q.Encode()
 	c.Name = c.Host
 	if c.DBName != "" {
 		c.Name = c.DBName + " @ " + c.Host

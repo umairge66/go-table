@@ -161,6 +161,9 @@ func sqliteConstantDefault(e string) bool {
 // BuildAddColumn returns the statements that add a column: ALTER TABLE …
 // ADD COLUMN, plus COMMENT ON COLUMN for PostgreSQL.
 func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
+	if d.family == model.DriverMongoDB {
+		return nil, errMongoNoColumns
+	}
 	if err := c.validate(d); err != nil {
 		return nil, err
 	}
@@ -199,6 +202,9 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 // AddColumn adds a column. On PostgreSQL and SQLite the statements run in a
 // transaction; MySQL commits DDL implicitly.
 func (c *Conn) AddColumn(ctx context.Context, t TableRef, def ColumnDef) ([]string, error) {
+	if c.mongo != nil {
+		return nil, errMongoNoColumns
+	}
 	if c.Dialect.family == model.DriverDuckDB {
 		return c.Alter(ctx, t, []AlterOp{{Kind: AlterAddColumn, Def: &def}}, false) // index detour
 	}
@@ -253,6 +259,9 @@ func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
 func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 	if len(objs) == 0 {
 		return nil, errors.New("choose at least one table")
+	}
+	if d.family == model.DriverMongoDB {
+		return buildMongoDrop(objs)
 	}
 	var views, tables []string
 	for _, o := range objs {
@@ -336,6 +345,9 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 // Drop drops tables and views. PostgreSQL and SQLite do it in one
 // transaction (all or nothing); MySQL commits DDL immediately.
 func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string, error) {
+	if c.mongo != nil {
+		return c.mongoDrop(ctx, objs)
+	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err
 	}

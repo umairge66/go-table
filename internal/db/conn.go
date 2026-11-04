@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
 	"gotable/internal/model"
 )
 
@@ -49,6 +51,13 @@ type Conn struct {
 	eng    engine
 	tunnel io.Closer
 	schema string
+
+	// mongo replaces db and conn on a MongoDB connection, which has no SQL:
+	// the methods that would run SQL go to the functions in mongo*.go first.
+	mongo *mongo.Client
+	// mongoTxn: the server takes transactions (a replica set or mongos).
+	mongoTxn    bool
+	mongoClosed bool
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -89,6 +98,9 @@ func newConn(ctx context.Context, cfg *model.Connection, sqlDB *sql.DB, eng engi
 func (c *Conn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.mongo != nil {
+		return c.closeMongo()
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -109,6 +121,13 @@ func (c *Conn) Close() error {
 // active schema restored; other session state is lost with the old one.
 func (c *Conn) lock(ctx context.Context) error {
 	c.mu.Lock()
+	if c.mongo != nil { // the client reconnects by itself
+		if c.mongoClosed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		return nil
+	}
 	if c.conn == nil {
 		c.mu.Unlock()
 		return ErrClosed
@@ -147,6 +166,9 @@ func (c *Conn) Ping(ctx context.Context) error {
 		return err
 	}
 	defer c.mu.Unlock()
+	if c.mongo != nil {
+		return c.mongo.Ping(ctx, nil)
+	}
 	return c.conn.PingContext(ctx)
 }
 
@@ -233,6 +255,23 @@ func (c *Conn) Columns(ctx context.Context, t TableRef) ([]Column, error) {
 	return cols, nil
 }
 
+// ColumnNames lists a table's columns for autocomplete, cheaply where working
+// them out is expensive.
+func (c *Conn) ColumnNames(ctx context.Context, t TableRef) ([]string, error) {
+	if c.mongo != nil {
+		return c.mongoQuickFields(ctx, t)
+	}
+	cols, err := c.Columns(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(cols))
+	for i, col := range cols {
+		names[i] = col.Name
+	}
+	return names, nil
+}
+
 // scanForeignKeys groups (constraint, column, ref schema, ref table, ref
 // column, on delete, on update) rows, ordered by constraint and position,
 // into foreign keys.
@@ -297,6 +336,9 @@ func (c *Conn) Definition(ctx context.Context, o Object) (string, error) {
 
 // FetchRows returns one page of a table.
 func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []string) (*ResultSet, error) {
+	if c.mongo != nil {
+		return c.mongoFetchRows(ctx, t, p, columns)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -315,6 +357,9 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 
 // CountRows counts the rows matching the page filters.
 func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []string) (int64, error) {
+	if c.mongo != nil {
+		return c.mongoCountRows(ctx, t, p, columns)
+	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
 		return 0, err
@@ -331,6 +376,9 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 // ApplyChanges commits pending edits in one transaction. On error nothing is
 // committed and the failing statement is reported.
 func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, hasPK bool) error {
+	if c.mongo != nil {
+		return c.mongoApplyChanges(ctx, t, changes)
+	}
 	stmts := make([]Statement, 0, len(changes))
 	for _, ch := range changes {
 		s, err := BuildChange(c.Dialect, t, ch, hasPK)
@@ -364,6 +412,22 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	return tx.Commit()
 }
 
+// PreviewChanges renders pending edits the way the review dialog shows them.
+func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change, hasPK bool) ([]string, error) {
+	if c.mongo != nil {
+		return c.mongoPreviewChanges(ctx, t, changes)
+	}
+	out := make([]string, 0, len(changes))
+	for _, ch := range changes {
+		s, err := BuildChange(c.Dialect, t, ch, hasPK)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Preview(c.Dialect, s))
+	}
+	return out, nil
+}
+
 // Execute runs every statement of a script and returns one Result per
 // statement. Execution stops at the first error. rowCap limits the rows
 // kept per result set (0 = unlimited).
@@ -375,6 +439,9 @@ func (c *Conn) Execute(ctx context.Context, script string, rowCap int) ([]Result
 // script happen under one lock, so concurrent queries for different schemas
 // of the same session can't interleave.
 func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int) ([]Result, error) {
+	if c.mongo != nil {
+		return c.mongoExecuteIn(ctx, schema, script, rowCap)
+	}
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {
 		return nil, fmt.Errorf("nothing to execute")

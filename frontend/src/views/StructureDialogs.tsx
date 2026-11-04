@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Field, IconButton, Input, Modal, Select, errorParts, useToast } from '../components/ui'
-import { driverInfo, family, features, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
+import { driverInfo, family, features, isMongo, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
 // SQL, then the same request runs it.
@@ -12,7 +12,7 @@ import { driverInfo, family, features, type Column, type DbObject, type Driver, 
 const isMySQL = (d: Driver) => family(d) === 'mysql'
 
 /** ddlNotAtomic: schema changes commit statement by statement (see the server's runDDL). */
-const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb', 'oracle'].includes(family(d)) || d === 'cockroachdb'
+const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb', 'oracle', 'mongodb'].includes(family(d)) || d === 'cockroachdb'
 
 /** useAlter reviews and runs one-click changes (drop, set primary key…). */
 export function useAlter(session: SessionInfo, table: TableRef, onDone: () => void) {
@@ -44,7 +44,7 @@ export function useAlter(session: SessionInfo, table: TableRef, onDone: () => vo
   }
   const production = session.connection.tag === 'production'
   const node = review && (
-    <Modal width={680} title={review.title} subtitle={<>on <b className="font-medium text-fg-2">{table.name}</b> — this SQL will run:</>} onClose={() => setReview(null)}
+    <Modal width={680} title={review.title} subtitle={<>on <b className="font-medium text-fg-2">{table.name}</b> — {isMongo(session.connection.driver) ? 'these commands will run' : 'this SQL will run'}:</>} onClose={() => setReview(null)}
       footer={<>
         {production && <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-err"><AlertTriangle className="size-3.5" /> This is PRODUCTION.</span>}
         <Button variant="ghost" onClick={() => setReview(null)}>Cancel</Button>
@@ -125,7 +125,7 @@ export function AlterDialog({ session, table, title, submitLabel, done, ops, inc
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); submit() }} aria-label={title}>
         {children}
         <div>
-          <div className="mb-1 text-[11.5px] font-medium text-muted">SQL that will run</div>
+          <div className="mb-1 text-[11.5px] font-medium text-muted">{isMongo(session.connection.driver) ? 'Commands that will run' : 'SQL that will run'}</div>
           <pre data-testid="alter-sql" className={clsx('min-h-[44px] overflow-x-auto whitespace-pre-wrap rounded-lg border px-3 py-2.5 font-mono text-[12px]',
             problem && !unchanged ? 'border-err/30 bg-err/5 text-err' : 'border-line bg-panel-2 text-fg-2', unchanged && 'text-muted')}>
             {unchanged ? 'No changes yet.' : problem || (preview.length ? preview.join('\n') : incomplete ?? '…')}

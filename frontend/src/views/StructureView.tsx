@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, KeyRound, Link2, ListOrdered
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isMongo } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
 
@@ -11,6 +11,7 @@ type Dialog =
   | { kind: 'column'; editing?: Column }
   | { kind: 'index'; columns?: string[]; type?: 'index' | 'unique' | 'fulltext' }
   | { kind: 'renameIndex'; name: string }
+  | { kind: 'renameField'; name: string }
   | { kind: 'foreignKey'; column?: string }
   | { kind: 'check' }
 
@@ -51,6 +52,9 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   const changed = (column?: string) => { setDialog(null); setChecked([]); onChanged(column) }
   const alter = useAlter(session, table, () => changed())
   useEffect(() => { setChecked((cs) => cs.filter((c) => columns.some((x) => x.name === c))) }, [columns])
+  // A collection has no column definitions: a field can only be renamed or removed.
+  const mongo = isMongo(driver)
+  const editColumn = (c: Column) => setDialog(mongo ? { kind: 'renameField', name: c.name } : { kind: 'column', editing: c })
   const pk = indexes.find((x) => x.primary)
   const inOrder = (names: string[]) => columns.map((c) => c.name).filter((n) => names.includes(n))
   const list = (names: string[]) => names.join(', ')
@@ -68,7 +72,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   const columnMenu = (e: React.MouseEvent, c: Column, i: number) => {
     const isText = /char|text|enum|set/i.test(c.type)
     menu.open(e, [
-      { label: 'Edit…', icon: <Pencil />, onSelect: () => setDialog({ kind: 'column', editing: c }) },
+      { label: mongo ? 'Rename…' : 'Edit…', icon: <Pencil />, disabled: mongo && c.primaryKey, onSelect: () => editColumn(c) },
       'sep',
       ...(pkChangeable(!!pk) ? [
         { label: pk ? 'Make it the primary key' : 'Primary key', icon: <KeyRound />, disabled: pk?.columns.length === 1 && pk.columns[0] === c.name, onSelect: () => setPrimary([c.name]) },
@@ -85,7 +89,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
         { label: 'Move down', icon: <ArrowDown />, disabled: i === columns.length - 1, onSelect: () => move(c, columns[i + 1].name) },
       ] : []),
       'sep',
-      { label: 'Drop column', icon: <Trash2 />, danger: true, disabled: columns.length === 1, onSelect: () => dropColumns([c.name]) },
+      { label: mongo ? 'Remove from every document' : 'Drop column', icon: <Trash2 />, danger: true, disabled: columns.length === 1 || (mongo && c.primaryKey), onSelect: () => dropColumns([c.name]) },
     ])
   }
 
@@ -96,7 +100,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
 
   return (
     <div className="h-full overflow-auto p-4" data-testid="structure">
-      <Section title="Columns" count={columns.length} actions={!readOnly && (
+      <Section title={mongo ? 'Fields' : 'Columns'} count={columns.length} actions={!readOnly && !mongo && (
         <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'column' })}>Add column</Button>
       )}>
         {!readOnly && checked.length > 0 && (
@@ -106,7 +110,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
             {f.uniqueIndexes && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'unique')}>Unique</Button>}
             <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'index')}>Index</Button>
             {mysql && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'fulltext')}>Fulltext</Button>}
-            <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={checked.length === columns.length} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
+            <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={checked.length === columns.length || (mongo && checked.includes('_id'))} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
             <div className="flex-1" />
             <button className="text-[12px] text-muted hover:text-fg" onClick={() => setChecked([])}>Clear</button>
           </div>
@@ -120,7 +124,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                     onChange={() => setChecked(allChecked ? [] : columns.map((c) => c.name))} />
                 </th>
               )}
-              {['#', 'Name', 'Type', ...(showCollation ? ['Collation'] : []), 'Null', 'Default', 'Extra', 'Comment'].map((h) => <th key={h} className="border-b border-line px-3 py-2 font-semibold">{h}</th>)}
+              {(mongo ? ['#', 'Name', 'Type', 'Note'] : ['#', 'Name', 'Type', ...(showCollation ? ['Collation'] : []), 'Null', 'Default', 'Extra', 'Comment']).map((h) => <th key={h} className="border-b border-line px-3 py-2 font-semibold">{h}</th>)}
               {!readOnly && <th className="w-24 border-b border-line" />}
             </tr>
           </thead>
@@ -138,15 +142,17 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                 <td className="px-3 py-1.5 font-medium"><span className="inline-flex items-center gap-1.5">{c.primaryKey && <KeyRound className="size-3 text-warn" aria-label="primary key" />}{c.name}</span></td>
                 <td className="px-3 py-1.5 font-mono text-[12px] text-accent">{c.type}</td>
                 {showCollation && <td className="px-3 py-1.5 font-mono text-[11.5px] text-muted">{c.collation}</td>}
-                <td className="px-3 py-1.5">{c.nullable ? <span className="text-muted">yes</span> : <span className="font-medium">NOT NULL</span>}</td>
-                <td className="px-3 py-1.5 font-mono text-[12px] text-muted">{c.default ?? <span className="text-faint">—</span>}</td>
-                <td className="px-3 py-1.5 text-[11.5px] uppercase text-muted">{extra(c)}</td>
+                {!mongo && <>
+                  <td className="px-3 py-1.5">{c.nullable ? <span className="text-muted">yes</span> : <span className="font-medium">NOT NULL</span>}</td>
+                  <td className="px-3 py-1.5 font-mono text-[12px] text-muted">{c.default ?? <span className="text-faint">—</span>}</td>
+                  <td className="px-3 py-1.5 text-[11.5px] uppercase text-muted">{extra(c)}</td>
+                </>}
                 <td className="px-3 py-1.5 text-muted">{c.comment}</td>
                 {!readOnly && (
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      <IconButton label={`Edit ${c.name}`} onClick={() => setDialog({ kind: 'column', editing: c })}><Pencil className="size-3.5" /></IconButton>
-                      <IconButton label={`Drop ${c.name}`} disabled={columns.length === 1} onClick={() => dropColumns([c.name])}><Trash2 className="size-3.5" /></IconButton>
+                      <IconButton label={`Edit ${c.name}`} disabled={mongo && c.primaryKey} onClick={() => editColumn(c)}><Pencil className="size-3.5" /></IconButton>
+                      <IconButton label={`Drop ${c.name}`} disabled={columns.length === 1 || (mongo && c.primaryKey)} onClick={() => dropColumns([c.name])}><Trash2 className="size-3.5" /></IconButton>
                       <IconButton label={`More for ${c.name}`} onClick={(e) => columnMenu(e, c, i)}><MoreHorizontal className="size-3.5" /></IconButton>
                     </span>
                   </td>
@@ -242,6 +248,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
       {dialog?.kind === 'index' && (
         <IndexDialog session={session} table={table} columns={columns} initial={dialog.columns && { columns: dialog.columns, kind: dialog.type }} onClose={() => setDialog(null)} onDone={() => changed()} />
       )}
+      {dialog?.kind === 'renameField' && <RenameFieldDialog session={session} table={table} name={dialog.name} onClose={() => setDialog(null)} onDone={(n) => changed(n)} />}
       {dialog?.kind === 'renameIndex' && <RenameIndexDialog session={session} table={table} name={dialog.name} onClose={() => setDialog(null)} onDone={() => changed()} />}
       {dialog?.kind === 'foreignKey' && (
         <ForeignKeyDialog session={session} table={table} columns={columns} initialColumn={dialog.column} onClose={() => setDialog(null)} onDone={() => changed()} />
@@ -291,6 +298,18 @@ function IndexKind({ x }: { x: Index }) {
   )
 }
 
+function RenameFieldDialog({ session, table, name, onClose, onDone }: { session: SessionInfo; table: TableRef; name: string; onClose: () => void; onDone: (name: string) => void }) {
+  const [newName, setNewName] = useState(name)
+  const to = newName.trim()
+  const ops: AlterOp[] | null = to && to !== name ? [{ kind: 'modify_column', column: name, def: { name: to } as ColumnDef }] : null
+  return (
+    <AlterDialog session={session} table={table} title={`Rename field ${name}`} submitLabel="Rename" done="Field renamed" ops={ops} width={520}
+      incomplete="Enter the new name." onClose={onClose} onDone={() => onDone(to)}>
+      <Field label="New name" hint="Every document that has this field changes."><Input autoFocus value={newName} aria-label="New field name" onChange={(e) => setNewName(e.target.value)} /></Field>
+    </AlterDialog>
+  )
+}
+
 function RenameIndexDialog({ session, table, name, onClose, onDone }: { session: SessionInfo; table: TableRef; name: string; onClose: () => void; onDone: () => void }) {
   const [newName, setNewName] = useState(name)
   const ops: AlterOp[] | null = newName.trim() && newName.trim() !== name ? [{ kind: 'rename_index', name, newName: newName.trim() }] : null
@@ -328,10 +347,10 @@ function TableOperations({ session, table, info, run, onRenamed }: {
 
   return (
     <section className="mb-6" aria-label="Table operations">
-      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">Table</h3>
+      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">{isMongo(driver) ? 'Collection' : 'Table'}</h3>
       <div className="space-y-4 rounded-xl border border-line p-4">
         <div className="flex items-end gap-2">
-          <Field label="Rename table" className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label={isMongo(driver) ? 'Rename collection' : 'Rename table'} className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>
         </div>
@@ -366,9 +385,9 @@ function TableOperations({ session, table, info, run, onRenamed }: {
           </div>
         )}
         <div className="flex items-center gap-3 border-t border-line-2 pt-4">
-          <div className="flex-1 text-[12.5px] text-muted">Delete every row but keep the table and its structure.</div>
+          <div className="flex-1 text-[12.5px] text-muted">{isMongo(driver) ? 'Delete every document but keep the collection and its indexes.' : 'Delete every row but keep the table and its structure.'}</div>
           <Button variant="ghost" className="text-err" icon={<Eraser className="size-3.5" />}
-            onClick={() => run([{ kind: 'truncate' }], `Empty ${table.name}`, { danger: true, done: 'Table emptied' })}>Empty table…</Button>
+            onClick={() => run([{ kind: 'truncate' }], `Empty ${table.name}`, { danger: true, done: isMongo(driver) ? 'Collection emptied' : 'Table emptied' })}>{isMongo(driver) ? 'Empty collection…' : 'Empty table…'}</Button>
         </div>
       </div>
     </section>

@@ -470,6 +470,9 @@ func (s *Server) exportTableJob(se *session, in jobRequest) (*Job, error) {
 	if in.Format != "csv" && in.Format != "json" && in.Format != "sql" {
 		return nil, fmt.Errorf("unknown format %q", in.Format)
 	}
+	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverMongoDB {
+		return nil, errors.New("MongoDB has no SQL: export CSV or JSON, or the whole database as a script")
+	}
 	ref := db.TableRef{Schema: in.Table.Schema, Name: in.Table.Name}
 	return s.startJob(se, in.Schema, "export-table", "Export "+ref.Name, "rows", func(ctx context.Context, c *db.Conn, j *Job) error {
 		page := in.Page.page()
@@ -550,7 +553,11 @@ func (s *Server) exportDatabaseJob(se *session, in jobRequest) (*Job, error) {
 	base := unsafeName.ReplaceAllString(dbName, "_") + "-" + stamp
 	return s.startJob(se, in.Schema, "export-database", "Export "+dbName, "rows", func(ctx context.Context, c *db.Conn, j *Job) error {
 		if in.Format == "sql" {
-			f, err := s.resultFile(j, base+".sql")
+			ext := ".sql"
+			if c.Config.Driver.Family() == model.DriverMongoDB {
+				ext = ".js" // a script of shell commands
+			}
+			f, err := s.resultFile(j, base+ext)
 			if err != nil {
 				return err
 			}

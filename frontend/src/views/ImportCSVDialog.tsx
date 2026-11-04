@@ -5,7 +5,7 @@ import { api, type TableRef } from '../api'
 import { FilePicker, pickedName, type PickedFile } from '../components/FilePicker'
 import { JobProgress, UploadProgress, useJob } from '../components/Progress'
 import { Button, Field, Input, Modal, Select, Spinner, Switch, errorParts, useToast } from '../components/ui'
-import type { Column, FileSource, SessionInfo } from '../types'
+import { isMongo, type Column, type FileSource, type SessionInfo } from '../types'
 import { toSource } from './TransferDialog'
 
 const DELIMS: [string, string][] = [[',', 'Comma ,'], [';', 'Semicolon ;'], ['\t', 'Tab'], ['|', 'Pipe |']]
@@ -21,7 +21,7 @@ export function autoMap(columns: string[], header: string[] | null): number[] {
 }
 
 /** ImportCSVDialog loads a CSV file into a table with a preview and column mapping. */
-export function ImportCSVDialog({ session, table, columns, onClose, onImported }: {
+export function ImportCSVDialog({ session, table, columns: tableColumns, onClose, onImported }: {
   session: SessionInfo
   table: TableRef
   columns: Column[]
@@ -74,9 +74,16 @@ export function ImportCSVDialog({ session, table, columns, onClose, onImported }
   }, [source, delimiter, toast])
 
   const csvHeader = preview && header ? preview.rows[0] ?? [] : null
+  // A collection takes any field: the file's own headers are columns too.
+  const columns = useMemo(() => {
+    if (!isMongo(session.connection.driver) || !csvHeader) return tableColumns
+    const known = new Set(tableColumns.map((c) => normalize(c.name)))
+    const extra = csvHeader.filter((h) => h && !known.has(normalize(h)))
+    return [...tableColumns, ...extra.map((name): Column => ({ name, type: 'new field', nullable: true, default: null, primaryKey: false, comment: '' }))]
+  }, [tableColumns, csvHeader, session.connection.driver]) // eslint-disable-line react-hooks/exhaustive-deps
   const fieldCount = Math.max(0, ...(preview?.rows.map((r) => r.length) ?? [0]))
   const names = useMemo(() => columns.map((c) => c.name), [columns])
-  useEffect(() => { if (preview) setMapping(autoMap(names, csvHeader)) }, [preview, header]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (preview) setMapping(autoMap(names, csvHeader)) }, [preview, header, names.length]) // eslint-disable-line react-hooks/exhaustive-deps
   const fieldLabel = (i: number) => (csvHeader?.[i] ? `${csvHeader[i]}` : `Column ${i + 1}`)
   const sample = (i: number) => preview?.rows[header ? 1 : 0]?.[i] ?? ''
   const mapped = mapping.filter((m) => m >= 0).length

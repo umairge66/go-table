@@ -1,7 +1,7 @@
 # GoTable
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB and ClickHouse, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse and MongoDB, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, TiDB, Percona
 Server, SingleStore, PlanetScale). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
@@ -35,12 +35,53 @@ inspector and a Data / Structure / Definition switch.
 | SQL Server (2017+, Azure SQL) | schemas of the connected database; other databases open next to it. Comments are `MS_Description` properties |
 | DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
+| MongoDB (4.4+, Atlas; tested on 7) | a document database: see [below](#mongodb) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
 
 Neon, Supabase and PlanetScale default to TLS; pasting a `postgres://` or
 `mysql://` URL with their host name picks them.
+
+### MongoDB
+
+A collection opens like a table, with each top-level field as a column:
+
+- **Columns** come from the collection's first 500 documents, and a page of
+  rows adds any field they missed. A field's type is shown as MongoDB names
+  it, or as `int|string` when documents differ. Nested documents and arrays
+  are one cell of JSON.
+- **Editing** keeps types: text typed into a cell is read as the type the
+  field holds, and text that doesn't fit is refused (spell out another type
+  with `NumberLong("5")`, `ISODate("2024-03-15")`…). Review & commit shows
+  the exact `updateOne` / `insertOne` / `deleteOne` commands. They run in one
+  transaction on a replica set or sharded cluster; a standalone server has
+  no transactions, so they run one by one and an error says what was applied.
+- **Filters** compare with every type a value could be (`5` finds the number
+  and the string); searches also find numbers, dates and ids. The raw filter
+  takes a query document: `{ age: { $gt: 30 } }`.
+- **The query editor** runs shell commands, one per line or separated by `;`:
+  `db.people.find({ age: { $gt: 30 } }).sort({ name: 1 }).limit(10)`,
+  `aggregate`, `countDocuments`, `distinct`, `insertOne/Many`,
+  `updateOne/Many`, `replaceOne`, `deleteOne/Many`, `findOneAnd…`,
+  `createIndex`, `dropIndex`, `getIndexes`, `renameCollection`, `drop`,
+  `db.createCollection`, `db.createView`, `db.runCommand`, `show dbs`,
+  `show collections` and `use`. Results of a plain `find()` can be edited in
+  place. Only literal values are read: GoTable doesn't run JavaScript, so
+  variables, functions and loops aren't available.
+- **Structure**: rename a field or remove it from every document, add and drop
+  indexes, rename or empty the collection. There are no foreign keys, CHECKs
+  or column definitions.
+- **Export and import**: a table as CSV or JSON; a database as a script of
+  shell commands (collections, indexes, views and documents, every value
+  keeping its exact type) that imports into any database. CSV imports take the
+  file's own headers as new fields.
+- **Connecting**: no user is needed on a server without authentication; a user
+  is looked up in `admin` unless `authSource` says otherwise. `mongodb://` and
+  `mongodb+srv://` URLs can be pasted; the Options field takes driver options
+  such as `replicaSet=rs0`, and Host a list such as `a:27017,b:27017`. Over an
+  SSH tunnel GoTable talks to that one member. A database appears with its first
+  collection: run `use mydb`, then `db.createCollection("first")`.
 
 ## Features
 
@@ -255,11 +296,12 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
-ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, CockroachDB,
+ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
 make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
 GOTABLE_E2E_COMPAT="sqlserver://… clickhouse://… duckdb:///tmp/x.duckdb" make e2e  # one UI scenario per URL
+GOTABLE_E2E_MONGODB=mongodb://user:pw@host/gt_e2e?authSource=admin make e2e  # adds the MongoDB scenario (it drops that database)
 ```
 
 The screenshots in `docs/screenshots/` are taken by
@@ -278,10 +320,10 @@ GitHub Actions (`.github/workflows/`):
 
 - **CI** — on every push and pull request, as parallel jobs: TypeScript
   and unit tests; `go vet`; the Go tests against real PostgreSQL 15, MySQL
-  8.4, MariaDB 11, SQL Server 2022, ClickHouse and Oracle 23ai (service containers) and
+  8.4, MariaDB 11, SQL Server 2022, ClickHouse, MongoDB 7 and Oracle 23ai (service containers) and
   DuckDB/SQLite files; and the end-to-end tests in Chrome, including the
-  PostgreSQL scenario (`scripts/e2e-demo.sql`) and one per SQL Server,
-  ClickHouse and DuckDB. Each job keeps its own Go build cache.
+  PostgreSQL scenario (`scripts/e2e-demo.sql`), MongoDB's, and one per SQL
+  Server, ClickHouse, MongoDB and DuckDB. Each job keeps its own Go build cache.
 - **Build** — on every push to `main`: the `.deb`, `.rpm`, AppImage,
   `.tar.gz`, Windows `.zip` and the macOS `.dmg` (built on a Mac runner),
   downloadable from the run's artifacts. A
@@ -321,7 +363,7 @@ The packaging is `scripts/package.sh` (`make package-linux` /
 
 ## Not implemented yet
 
-Other engines (Redis, MongoDB, IBM Db2, …), DuckDB in the Windows build, ER
+Other engines (Redis, IBM Db2, …), DuckDB in the Windows build, ER
 diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 
@@ -337,4 +379,5 @@ uses; no endorsement is implied. The SVG artwork comes from
 [Simple Icons](https://simpleicons.org) (CC0-1.0); see
 `frontend/src/lib/driverLogos.ts` for the source and each owner's guidelines.
 MySQL is a trademark of Oracle; GoTable shows a generic icon for it rather
-than the MySQL logo.
+than the MySQL logo. MongoDB is a trademark of MongoDB, Inc., and is likewise
+shown with a generic icon.

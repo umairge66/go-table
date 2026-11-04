@@ -1,3 +1,4 @@
+import { formatMongo } from './mongoShell'
 import { format, type SqlLanguage } from 'sql-formatter'
 import { family, forDriver, type Driver, type PerDriver } from '../types'
 
@@ -10,6 +11,7 @@ const languages: PerDriver<SqlLanguage> = {
   sqlite: 'sqlite',
   sqlserver: 'transactsql',
   oracle: 'plsql',
+  mongodb: 'sql', // never used: see formatSQL
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
 }
@@ -20,6 +22,7 @@ const languages: PerDriver<SqlLanguage> = {
  * blank line. Throws if the SQL can't be parsed.
  */
 export function formatSQL(sql: string, driver: Driver): string {
+  if (family(driver) === 'mongodb') return formatMongo(sql)
   const out = format(sql, {
     language: forDriver(languages, driver),
     keywordCase: 'upper',

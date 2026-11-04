@@ -1,11 +1,13 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb'
   | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
   | 'tidb' | 'percona' | 'singlestore' | 'planetscale'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb'
 
 /** family maps compatible servers and services to the engine they follow. */
 export const family = (d: Driver): Family => driverInfo(d).family
+/** isMongo: a document database, with collections and shell commands instead of tables and SQL. */
+export const isMongo = (d: Driver) => family(d) === 'mongodb'
 
 /** PerDriver: a value for each family, optionally overridden for one driver. */
 export type PerDriver<T> = Record<Family, T> & Partial<Record<Driver, T>>
@@ -55,6 +57,10 @@ export const FEATURES: Record<Family, Features> = {
   duckdb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, schemas: true, file: true },
   clickhouse: { ...BASE, transactions: false, importTransaction: false, foreignKeys: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
     autoIncrement: false, collations: false, indexMethods: ['minmax', 'set(100)', 'bloom_filter', 'ngrambf_v1(3, 256, 2, 0)', 'tokenbf_v1(256, 2, 0)'] },
+  // Fields live in documents; a database appears with its first collection. A
+  // commit is one transaction only on a replica set (the server decides).
+  mongodb: { ...BASE, transactions: false, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, autoIncrement: false,
+    comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
 }
 /** DRIVER_FEATURES: where a server differs from its family's engine. */
 const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions?: boolean }>> = {
@@ -84,6 +90,10 @@ export interface Connection {
   ssl_key_path?: string
   ssl_cert_path?: string
   ssl_ca_path?: string
+  /** srv: look the hosts up in DNS (mongodb+srv://, e.g. MongoDB Atlas). */
+  srv?: boolean
+  /** options: driver options as a query string (MongoDB), e.g. authSource=admin&replicaSet=rs0. */
+  options?: string
   use_ssh_tunnel?: boolean
   ssh_host?: string
   ssh_port?: number
@@ -189,6 +199,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'oracle', label: 'Oracle', family: 'oracle', port: 1521, color: '#c74634', user: 'system', database: 'service name, e.g. FREEPDB1' },
   { id: 'duckdb', label: 'DuckDB', family: 'duckdb', port: 0, color: '#8a6d00', user: '' },
   { id: 'clickhouse', label: 'ClickHouse', family: 'clickhouse', port: 9000, color: '#9a8a00', user: 'default' },
+  { id: 'mongodb', label: 'MongoDB', family: 'mongodb', port: 27017, color: '#00684a', user: 'optional' },
   { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
   { id: 'yugabytedb', label: 'YugabyteDB', family: 'postgres', port: 5433, color: '#c4471f', user: 'yugabyte' },
   { id: 'timescaledb', label: 'TimescaleDB', family: 'postgres', port: 5432, color: '#a3610b', user: 'postgres' },
@@ -201,7 +212,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
-export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse']
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -226,6 +237,7 @@ export const SSL_MODES: PerDriver<string[]> = {
   sqlserver: ['optional', 'disable', 'required', 'trust', 'strict'],
   clickhouse: ['disable', 'require', 'skip-verify'],
   oracle: ['disable', 'require', 'skip-verify'],
+  mongodb: ['disable', 'require', 'skip-verify'],
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],

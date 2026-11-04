@@ -11,7 +11,8 @@ import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, error
 import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
 import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
-import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo } from '../types'
+import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isMongo } from '../types'
+import { mongoColl } from '../lib/mongoShell'
 import { ExportDialog } from './ExportDialog'
 import { FkLookup } from './FkLookup'
 import { ImportCSVDialog } from './ImportCSVDialog'
@@ -88,6 +89,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
 
   const names = useMemo(() => columns?.map((c) => c.name) ?? [], [columns])
   const pk = useMemo(() => (columns ?? []).map((c, i) => (c.primaryKey ? i : -1)).filter((i) => i >= 0), [columns])
+  const mongo = isMongo(session.connection.driver)
   const pending = pendingCount(edits)
   const onDirtyRef = useRef(onDirty)
   onDirtyRef.current = onDirty
@@ -119,6 +121,12 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         setTableInfo(st.table ?? null)
       }
       const res = await api.rows(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal)
+      // A collection's columns come from a sample of it: a page can hold more.
+      if (mongo && res.columns.length > cols.length) {
+        const known = cols
+        setColumns([...known, ...res.columns.slice(known.length).map((name, i): Column => ({
+          name, type: res.types[known.length + i] || 'null', nullable: true, default: null, primaryKey: false, comment: 'not in the sampled documents' }))])
+      }
       setData(res)
       setEdits(emptyEdits())
       setDataKey((k) => k + 1)
@@ -233,7 +241,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     menu.open(e, [
       { label: 'Copy value', icon: <Copy />, kbd: 'Ctrl C', onSelect: () => navigator.clipboard?.writeText(v ?? 'NULL') },
       { label: rs.length > 1 ? `Copy ${rs.length} rows as JSON` : 'Copy row as JSON', onSelect: () => navigator.clipboard?.writeText(JSON.stringify(rs.length > 1 ? rs.map(rowObject) : rowObject(r), null, 2)) },
-      { label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) },
+      ...(mongo ? [] : [{ label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) }]),
       'sep',
       ...(columns?.[c]?.references && v !== null && onOpenReference ? (() => {
         const fk = columns[c].references!
@@ -332,8 +340,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               ))}
               <div className="flex items-center gap-1.5">
                 <span className="w-[13px]" />
-                <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">WHERE (raw SQL, optional)</span>
-                <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder="created_at > now() - interval '7 days'" onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
+                <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">{mongo ? 'Query filter (optional)' : 'WHERE (raw SQL, optional)'}</span>
+                <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder={mongo ? '{ age: { $gt: 30 } }' : "created_at > now() - interval '7 days'"} onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
                 <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
                 <Button size="sm" variant="primary" onClick={apply} kbd="Ctrl ↵">Apply</Button>
               </div>
@@ -362,10 +370,12 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                 total === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted">
                     <Rows3 className="size-8 text-faint" />
-                    <div className="text-[13px] font-medium text-fg-2">{activeFilterCount || applied.quick ? 'No rows match your filter' : 'This table is empty'}</div>
+                    <div className="text-[13px] font-medium text-fg-2">{activeFilterCount || applied.quick ? 'No rows match your filter' : mongo ? 'This collection is empty' : 'This table is empty'}</div>
                     <div className="flex gap-2">
                       {(activeFilterCount > 0 || applied.quick) && <Button size="sm" onClick={clearFilters}>Clear filter</Button>}
-                      {!readOnly && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
+                      {/* Without documents there are no fields to fill in, so a command writes the first one. */}
+                      {!readOnly && mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => openQuery(`${mongoColl(object.name)}.insertOne({\n  name: "",\n})`)}>Add a document</Button>}
+                      {!readOnly && !mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
                     </div>
                   </div>
                 ) : (<>
@@ -440,11 +450,12 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
           </>
         )}
         {mode !== 'data' && <div className="flex-1" />}
-        <Button size="sm" variant="ghost" onClick={() => openQuery(`SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>Open in SQL</Button>
+        <Button size="sm" variant="ghost" onClick={() => openQuery(mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{mongo ? 'Open in query' : 'Open in SQL'}</Button>
       </div>
 
       {review && (
-        <Modal width={720} title="Review changes" subtitle={`${review.length} statement${review.length === 1 ? '' : 's'} will run in one transaction on ${object.name}.`}
+        <Modal width={720} title="Review changes" subtitle={mongo ? `${review.length} command${review.length === 1 ? '' : 's'} will run on ${object.name}, in one transaction on a replica set and one by one on a single server.`
+          : `${review.length} statement${review.length === 1 ? '' : 's'} will run in one transaction on ${object.name}.`}
           onClose={() => setReview(null)}
           footer={<>
             {session.connection.tag === 'production' && <span className="mr-auto text-[12px] font-medium text-err">⚠ This is PRODUCTION.</span>}

@@ -24,6 +24,9 @@ const (
 	// DriverClickHouse connects over ClickHouse's native protocol.
 	DriverClickHouse Driver = "clickhouse"
 	DriverOracle     Driver = "oracle"
+	// DriverMongoDB is a document database: it has no SQL, so internal/db
+	// talks to it through its own driver rather than database/sql.
+	DriverMongoDB Driver = "mongodb"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -56,6 +59,7 @@ var specs = map[Driver]driverSpec{
 	DriverDuckDB:      {"DuckDB", DriverDuckDB, 0, false},
 	DriverClickHouse:  {"ClickHouse", DriverClickHouse, 9000, false},
 	DriverOracle:      {"Oracle", DriverOracle, 1521, false},
+	DriverMongoDB:     {"MongoDB", DriverMongoDB, 27017, false},
 	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
 	DriverYugabyteDB:  {"YugabyteDB", DriverPostgres, 5433, false},
 	DriverTimescaleDB: {"TimescaleDB", DriverPostgres, 5432, false},
@@ -69,13 +73,13 @@ var specs = map[Driver]driverSpec{
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
 // DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
-// DriverDuckDB or DriverClickHouse. Code that only cares about syntax compares families;
+// DriverDuckDB, DriverClickHouse or DriverMongoDB. Code that only cares about syntax compares families;
 // code for one product's quirks compares drivers.
 func (d Driver) Family() Driver {
 	if s, ok := specs[d]; ok {
@@ -117,7 +121,7 @@ func (d Driver) SSLModes() []string {
 	case DriverMSSQL:
 		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
 		modes = []string{"optional", "disable", "required", "trust", "strict"}
-	case DriverClickHouse, DriverOracle:
+	case DriverClickHouse, DriverOracle, DriverMongoDB:
 		modes = []string{"disable", "require", "skip-verify"}
 	default:
 		return nil
@@ -170,6 +174,12 @@ type Connection struct {
 	SSLKeyPath  string `json:"ssl_key_path,omitempty"`
 	SSLCertPath string `json:"ssl_cert_path,omitempty"`
 	SSLCAPath   string `json:"ssl_ca_path,omitempty"`
+
+	// SRV looks the hosts up in DNS (mongodb+srv://, e.g. MongoDB Atlas).
+	SRV bool `json:"srv,omitempty"`
+	// Options is a query string of driver options (MongoDB), e.g.
+	// authSource=admin&replicaSet=rs0.
+	Options string `json:"options,omitempty"`
 
 	UseSSHTunnel bool   `json:"use_ssh_tunnel,omitempty"`
 	SSHHost      string `json:"ssh_host,omitempty"`
@@ -264,7 +274,8 @@ func (c *Connection) Validate() error {
 			return fmt.Errorf("database file is required")
 		}
 	default:
-		if c.User == "" {
+		// A MongoDB server runs without users unless told otherwise.
+		if c.User == "" && c.Driver.Family() != DriverMongoDB {
 			return fmt.Errorf("user is required")
 		}
 		if c.Port < 0 || c.Port > 65535 {
@@ -280,6 +291,9 @@ func (c *Connection) Validate() error {
 		}
 		if c.SSHHost == "" || c.SSHUser == "" {
 			return fmt.Errorf("SSH host and user are required")
+		}
+		if c.SRV || strings.Contains(c.Host, ",") {
+			return fmt.Errorf("an SSH tunnel goes to one host: enter it instead of a host list or an SRV name")
 		}
 	}
 	return nil

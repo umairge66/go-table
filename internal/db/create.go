@@ -64,6 +64,9 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 	if name == "" {
 		return nil, errors.New("table name is required")
 	}
+	if d.family == model.DriverMongoDB { // fields come with the documents
+		return []string{"db.createCollection(" + jsonString(name) + ")"}, nil
+	}
 	if len(t.Columns) == 0 {
 		return nil, errors.New("add at least one column")
 	}
@@ -307,6 +310,9 @@ func (c *Conn) CreateTable(ctx context.Context, schema string, t NewTable) ([]st
 	if err != nil {
 		return nil, err
 	}
+	if c.mongo != nil {
+		return stmts, c.mongoRun(ctx, schema, stmts)
+	}
 	return stmts, c.runDDL(ctx, stmts)
 }
 
@@ -323,6 +329,9 @@ var charsetPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // BuildCreateDatabase returns CREATE DATABASE / CREATE SCHEMA.
 func BuildCreateDatabase(d Dialect, nd NewDatabase) (string, error) {
+	if d.family == model.DriverMongoDB {
+		return "", errMongoNoCreateDatabase
+	}
 	name := strings.TrimSpace(nd.Name)
 	if name == "" {
 		return "", errors.New("database name is required")
@@ -367,6 +376,9 @@ func BuildCreateDatabase(d Dialect, nd NewDatabase) (string, error) {
 // CreateDatabase creates a database or schema. CREATE DATABASE can't run
 // inside a transaction on PostgreSQL, so it runs on its own.
 func (c *Conn) CreateDatabase(ctx context.Context, nd NewDatabase) (string, error) {
+	if c.mongo != nil {
+		return "", errMongoNoCreateDatabase
+	}
 	stmt, err := BuildCreateDatabase(c.Dialect, nd)
 	if err != nil {
 		return "", err
@@ -402,6 +414,9 @@ func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
 	}
 	defer c.mu.Unlock()
 	info := &TypeInfo{CustomTypes: []string{}, Collations: []string{}, Charsets: []string{}, Engines: []string{}}
+	if c.mongo != nil {
+		return info, nil
+	}
 	var err error
 	switch {
 	case c.Dialect.family == model.DriverPostgres:

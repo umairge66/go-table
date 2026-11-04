@@ -17,6 +17,9 @@ import (
 
 // Exec runs one statement and discards any rows it returns.
 func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
+	if c.mongo != nil {
+		return c.mongoExec(ctx, stmt)
+	}
 	if err := c.lock(ctx); err != nil {
 		return 0, err
 	}
@@ -54,6 +57,9 @@ func (c *Conn) CopyFrom(ctx context.Context, stmt string, r io.Reader) (int64, e
 // StreamRows calls fn for every row of a table page (Limit 0 = all rows)
 // without holding the result in memory.
 func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []string, fn func(cols, types []string, row []Value) error) error {
+	if c.mongo != nil {
+		return c.mongoStreamRows(ctx, t, p, columns, fn)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return err
@@ -145,6 +151,9 @@ func snippet(s string) string {
 // ImportSQL runs every statement of a script read from r. progress, if
 // set, is called after each statement with the running result.
 func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, progress func(*ImportResult)) (*ImportResult, error) {
+	if c.mongo != nil {
+		return c.mongoImportScript(ctx, r, o, progress)
+	}
 	if o.MaxErrors <= 0 {
 		o.MaxErrors = 200
 	}
@@ -311,6 +320,9 @@ func (d Dialect) maxParams() int {
 // ImportCSV inserts the records of a CSV stream into a table in one
 // transaction. progress is called after every batch with the rows so far.
 func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImportOptions, progress func(rows int64)) (int64, error) {
+	if c.mongo != nil {
+		return c.mongoImportCSV(ctx, r, t, o, progress)
+	}
 	if len(o.Columns) == 0 || len(o.Columns) != len(o.Mapping) {
 		return 0, errors.New("choose at least one column to import")
 	}
@@ -446,6 +458,9 @@ func (s *sqlWriter) printf(format string, a ...any) {
 // Dump writes a portable SQL dump of the given tables and views. Table
 // names are written without a schema so the dump can be loaded anywhere.
 func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress func(DumpProgress)) error {
+	if c.mongo != nil {
+		return c.mongoDump(ctx, w, o, progress)
+	}
 	if o.BatchSize <= 0 {
 		o.BatchSize = 200
 	}

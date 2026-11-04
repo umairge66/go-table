@@ -773,7 +773,6 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 	}
 	ref := db.TableRef{Schema: in.Table.Schema, Name: in.Table.Name}
 	var changes []db.Change
-	var preview []string
 	for _, c := range in.Changes {
 		ch := db.Change{Key: valuesIn(c.Key), Values: valuesIn(c.Values)}
 		switch c.Kind {
@@ -787,13 +786,12 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, fmt.Errorf("unknown change kind %q", c.Kind))
 			return
 		}
-		st, err := db.BuildChange(se.c().Dialect, ref, ch, in.HasPK)
-		if err != nil {
-			writeErr(w, 400, err)
-			return
-		}
-		preview = append(preview, db.Preview(se.c().Dialect, st))
 		changes = append(changes, ch)
+	}
+	preview, err := se.c().PreviewChanges(r.Context(), ref, changes, in.HasPK)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
 	}
 	if in.DryRun {
 		writeJSON(w, 200, map[string]any{"statements": nonNil(preview)})
@@ -984,12 +982,9 @@ func (s *Server) completions(w http.ResponseWriter, r *http.Request) {
 			tables[o.Name] = []string{}
 			continue
 		}
-		cols, err := se.c().Columns(r.Context(), db.TableRef{Schema: o.Schema, Name: o.Name})
-		names := make([]string, 0, len(cols))
-		if err == nil {
-			for _, c := range cols {
-				names = append(names, c.Name)
-			}
+		names, err := se.c().ColumnNames(r.Context(), db.TableRef{Schema: o.Schema, Name: o.Name})
+		if err != nil {
+			names = []string{}
 		}
 		tables[o.Name] = names
 	}

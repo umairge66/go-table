@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, 
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
@@ -209,13 +209,21 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
           <>
             <div className="grid grid-cols-[1fr_110px] gap-3">
               <Field label="Host"><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
-              <Field label="Port"><Input inputMode="numeric" value={c.port || ''} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
+              <Field label="Port"><Input inputMode="numeric" value={c.srv ? '' : c.port || ''} disabled={c.srv} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
               <Field label="Password">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
             </div>
             <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>
+            {isMongo(c.driver) && (
+              <>
+                <Switch checked={!!c.srv} onChange={(v) => setC((x) => ({ ...x, srv: v, ssl_mode: v && x.ssl_mode === 'disable' ? 'require' : x.ssl_mode }))} label="DNS seed list (mongodb+srv://, as on MongoDB Atlas)" />
+                <Field label="Options" hint="The user is looked up in admin unless authSource says otherwise. A replica set can be listed in Host as a:27017,b:27017.">
+                  <Input mono value={c.options ?? ''} placeholder="authSource=admin&replicaSet=rs0" onChange={(e) => set('options', e.target.value)} />
+                </Field>
+              </>
+            )}
           </>
         )}
       </section>
@@ -310,7 +318,7 @@ export function UrlDialog({ onClose, onParsed }: { onClose: () => void; onParsed
     }
   }
   return (
-    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, sqlserver://, clickhouse://, sqlite:///path, duckdb:///path… (Neon, Supabase and PlanetScale are recognised by their host) — the password goes to your keyring." onClose={onClose}
+    <Modal title="Paste a connection URL" subtitle="postgres://, mysql://, sqlserver://, clickhouse://, mongodb://, sqlite:///path, duckdb:///path… (Neon, Supabase and PlanetScale are recognised by their host) — the password goes to your keyring." onClose={onClose}
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={go} disabled={!url.trim()}>Fill in</Button></>}>
       <Input autoFocus mono value={url} placeholder="postgres://user:password@localhost:5432/shop" onChange={(e) => { setUrl(e.target.value); setErr('') }}
         onKeyDown={(e) => e.key === 'Enter' && go()} />

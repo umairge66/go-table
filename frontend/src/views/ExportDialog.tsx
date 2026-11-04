@@ -5,7 +5,7 @@ import { api, type PageReq, type TableRef } from '../api'
 import { JobProgress, useJob } from '../components/Progress'
 import { Button, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, type SaveTarget } from '../lib/saveFile'
-import type { SessionInfo } from '../types'
+import { isMongo, type SessionInfo } from '../types'
 
 export type ExportSource = { table: TableRef; page: PageReq; columns: string[] }
 
@@ -19,6 +19,7 @@ const FORMATS = [
 export function ExportDialog({ session, title, source, onClose }: { session: SessionInfo; title: string; source: ExportSource; onClose: () => void }) {
   const toast = useToast()
   const [format, setFormat] = useState<'csv' | 'json' | 'sql'>('csv')
+  const formats = FORMATS.filter((f) => f.id !== 'sql' || !isMongo(session.connection.driver))
   const [allRows, setAllRows] = useState(true)
   const [header, setHeader] = useState(true)
   const [delimiter, setDelimiter] = useState(',')
@@ -75,7 +76,7 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
       ) : (
         <>
           <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Format">
-            {FORMATS.map((f) => (
+            {formats.map((f) => (
               <button key={f.id} role="radio" aria-checked={format === f.id} onClick={() => setFormat(f.id)}
                 className={clsx('flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-all',
                   format === f.id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}>
@@ -120,7 +121,7 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
 }
 
 /** saveJobAs asks for a location and saves a finished export there. */
-export async function saveJobAs(jobId: string, name: string, kind: 'sql' | 'csv' | 'json' | 'zip') {
+export async function saveJobAs(jobId: string, name: string, kind: 'sql' | 'js' | 'csv' | 'json' | 'zip') {
   const t = await chooseSaveLocation(name, kind)
   if (t) await saveJob(t, jobId)
   return t

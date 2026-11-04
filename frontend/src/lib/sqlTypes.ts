@@ -181,6 +181,8 @@ const CATALOG: PerDriver<TypeGroup[]> = {
       { name: 'BOOLEAN', hint: 'true / false (23ai)' }, { name: 'JSON', hint: 'JSON document (21c)' },
     ] },
   ],
+  // Never offered: a collection has no column types (see StructureView).
+  mongodb: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   duckdb: [
     { label: 'Numeric', types: [
       { name: 'INTEGER', hint: '4 bytes', traits: ['int'] },

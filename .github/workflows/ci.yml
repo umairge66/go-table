@@ -1,6 +1,6 @@
 # Tests on every push and pull request, as parallel jobs so the run takes as
 # long as the slowest one: frontend checks, Go vet, Go tests against real
-# PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse servers (and DuckDB,
+# PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse / MongoDB servers (and DuckDB,
 # SQLite files), Oracle in a job of its own, and the end-to-end tests.
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
@@ -99,6 +99,14 @@ jobs:
         ports: ["1433:1433"]
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P GoTable-test1 -Q 'SELECT 1'" --health-interval 3s --health-timeout 5s --health-retries 40
+      mongodb:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: gotable
+          MONGO_INITDB_ROOT_PASSWORD: gotable-test
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet -u gotable -p gotable-test --eval 'db.runCommand({ ping: 1 })'" --health-interval 2s --health-timeout 5s --health-retries 30
       clickhouse:
         image: clickhouse/clickhouse-server:24.8
         env:
@@ -135,6 +143,10 @@ jobs:
       GOTABLE_TEST_CH_USER: gotable
       GOTABLE_TEST_CH_PASSWORD: gotable-test
       GOTABLE_TEST_CH_DB: gotable
+      GOTABLE_TEST_MONGODB_HOST: 127.0.0.1
+      GOTABLE_TEST_MONGODB_PORT: "27017"
+      GOTABLE_TEST_MONGODB_USER: gotable
+      GOTABLE_TEST_MONGODB_PASSWORD: gotable-test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -149,7 +161,7 @@ jobs:
           key: go-test-${{ hashFiles('go.sum') }}
           restore-keys: go-test-
       # cmd/gotable has no tests; vet builds it (with WebKitGTK).
-      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse)
+      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse, MongoDB)
         run: go test -race -count=1 ./internal/...
 
   oracle:
@@ -209,6 +221,14 @@ jobs:
         ports: ["1433:1433"]
         options: >-
           --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P GoTable-test1 -Q 'SELECT 1'" --health-interval 3s --health-timeout 5s --health-retries 40
+      mongodb:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: gotable
+          MONGO_INITDB_ROOT_PASSWORD: gotable-test
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet -u gotable -p gotable-test --eval 'db.runCommand({ ping: 1 })'" --health-interval 2s --health-timeout 5s --health-retries 30
       clickhouse:
         image: clickhouse/clickhouse-server:24.8
         env:
@@ -250,9 +270,11 @@ jobs:
         working-directory: frontend
         env:
           GOTABLE_E2E_PG: postgres://postgres:gotable-test@127.0.0.1:5432/postgres?sslmode=disable
+          GOTABLE_E2E_MONGODB: mongodb://gotable:gotable-test@127.0.0.1:27017/gt_e2e?authSource=admin
           GOTABLE_E2E_COMPAT: >-
             sqlserver://sa:GoTable-test1@127.0.0.1:1433?database=master
             clickhouse://gotable:gotable-test@127.0.0.1:9000/gotable
+            mongodb://gotable:gotable-test@127.0.0.1:27017/gotable?authSource=admin
             duckdb:///tmp/gotable-compat.duckdb
         run: npx playwright test
       - name: Keep the end-to-end traces of a failure

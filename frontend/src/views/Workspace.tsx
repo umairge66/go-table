@@ -9,7 +9,9 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo } from '../types'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isMongo } from '../types'
+import { mongoColl } from '../lib/mongoShell'
+import { CreateCollectionDialog } from './CreateCollectionDialog'
 import { DataView } from './DataView'
 import { DeleteTablesDialog } from './DeleteTablesDialog'
 import { subtitle } from './Home'
@@ -82,6 +84,9 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const pg = features(conn.driver).schemas && !features(conn.driver).file
   const fileDb = features(conn.driver).file
   const production = conn.tag === 'production'
+  const mongo = isMongo(conn.driver)
+  const tableWord = mongo ? 'collection' : 'table'
+  const [creatingCollection, setCreatingCollection] = useState<OpenDb | null>(null)
 
   const mainSchema = session.schema || session.schemas[0] || ''
   const mainKey = dbKeyOf(session.id, mainSchema)
@@ -183,6 +188,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
 
   // newTable opens a "New table" tab for designing a table in db.
   const newTable = useCallback((db: OpenDb) => {
+    if (mongo) { setCreatingCollection(db); return } // nothing to design: fields come with the documents
     queryCounter.current += 1
     const tab: Tab = { id: `new:${db.key}:${queryCounter.current}`, kind: 'create-table', title: 'New table', dbKey: db.key }
     setTabs((ts) => [...ts, tab])
@@ -530,21 +536,21 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     setAnchor(o.name)
     menu.open(e, [
       { label: 'Open', icon: <Table2 />, onSelect: () => openTable(db, o) },
-      { label: 'New query: SELECT…', icon: <Code2 />, onSelect: () => newQuery(`SELECT *\nFROM ${quote(o.name, conn.driver)}\nLIMIT 100;`, db.key) },
+      { label: mongo ? 'New query: find…' : 'New query: SELECT…', icon: <Code2 />, onSelect: () => newQuery(mongo ? `${mongoColl(o.name)}.find({}).limit(100)` : `SELECT *\nFROM ${quote(o.name, conn.driver)}\nLIMIT 100;`, db.key) },
       { label: 'Copy name', icon: <Copy />, onSelect: () => navigator.clipboard?.writeText(o.name) },
       'sep',
       { label: 'Export…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db, preselect: [o.name] }) },
       'sep',
-      { label: o.kind === 'view' ? 'Delete view…' : 'Delete table…', icon: <Trash2 />, kbd: 'Del', danger: true, onSelect: () => setDeleting({ db, objects: [o] }) },
+      { label: o.kind === 'view' ? 'Delete view…' : `Delete ${tableWord}…`, icon: <Trash2 />, kbd: 'Del', danger: true, onSelect: () => setDeleting({ db, objects: [o] }) },
     ])
   }
 
   const dbMenu = (e: React.MouseEvent, db: OpenDb) => menu.open(e, [
     { label: 'New query here', icon: <FileCode2 />, onSelect: () => newQuery('', db.key) },
-    { label: 'New table…', icon: <Plus />, onSelect: () => newTable(db) },
+    { label: `New ${tableWord}…`, icon: <Plus />, onSelect: () => newTable(db) },
     { label: 'Refresh', icon: <RefreshCw />, onSelect: () => loadObjects(db.key) },
     { label: 'Export database…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db }) },
-    { label: 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
+    { label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
     ...(dbs.length > 1 ? ['sep' as const, { label: 'Close database', icon: <X />, onSelect: () => closeDb(db.key) }] : []),
   ])
 
@@ -560,7 +566,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     ...objectCommands(activeDb, true),
     ...dbs.filter((d) => d.key !== activeDb.key).flatMap((d) => objectCommands(d, true)),
     { id: 'new-query', label: 'New query', hint: 'Ctrl T', icon: <Code2 />, run: () => newQuery() },
-    { id: 'new-table', label: 'New table…', icon: <Plus />, run: () => newTable(activeDb) },
+    { id: 'new-table', label: `New ${tableWord}…`, icon: <Plus />, run: () => newTable(activeDb) },
     ...(!features(conn.driver).createDatabase ? [] : [{ id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) }]),
     { id: 'saved-queries', label: 'Saved queries', icon: <FileCode2 />, run: () => { setSidebarHidden(false); setSideTab('queries') } },
     { id: 'history', label: 'Query history', icon: <History />, run: () => { setSidebarHidden(false); setSideTab('history') } },
@@ -569,7 +575,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     { id: 'go-table', label: 'Go to table…', hint: 'Ctrl P', icon: <Table2 />, run: () => setPicker('tables') },
     { id: 'switch-db', label: 'Open database…', hint: 'Ctrl D', icon: <Database />, run: openDatabasePicker },
     { id: 'export-db', label: 'Export database…', icon: <Download />, run: () => setTransfer({ tab: 'export', db: activeDb }) },
-    { id: 'import-sql', label: 'Import SQL file…', icon: <Upload />, run: () => setTransfer({ tab: 'import', db: activeDb }) },
+    { id: 'import-sql', label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, run: () => setTransfer({ tab: 'import', db: activeDb }) },
     { id: 'refresh', label: 'Refresh tables', hint: 'Ctrl R', icon: <RefreshCw />, run: refresh },
     { id: 'theme', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', icon: theme === 'dark' ? <Sun /> : <Moon />, run: toggleTheme },
     { id: 'inspector', label: inspector ? 'Hide row inspector' : 'Show row inspector', hint: 'Ctrl ⇧ I', icon: <PanelRight />, run: () => setInspector((v) => !v) },
@@ -669,7 +675,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
                 if (e.key === 'Escape') setFilter('')
                 if (e.key === 'ArrowDown') { e.preventDefault(); moveInSidebar('first') }
               }} />
-            <IconButton label="New table" onClick={() => newTable(activeDb)}><Plus className="size-3.5" /></IconButton>
+            <IconButton label={`New ${tableWord}`} onClick={() => newTable(activeDb)}><Plus className="size-3.5" /></IconButton>
             <RefreshButton label="Refresh tables" iconClassName="size-3.5" busy={sidebarBusy || activeDb.objects === null} onRefresh={() => loadObjects(activeDb.key)} />
           </div>
           <nav ref={navRef} className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3 outline-none" aria-label="Tables" tabIndex={-1} onKeyDown={onSidebarKey}>
@@ -685,7 +691,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
                     <div className="px-3 py-6 text-center text-[12px] text-muted">
                       {q ? `Nothing matches “${filter}”.` : <>
                         This database has no tables yet.
-                        <div className="mt-2.5 flex justify-center"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => newTable(d)}>Create a table</Button></div>
+                        <div className="mt-2.5 flex justify-center"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => newTable(d)}>Create a {tableWord}</Button></div>
                       </>}
                     </div>
                   )}
@@ -801,6 +807,15 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
       </div>
 
 
+      {creatingCollection && (
+        <CreateCollectionDialog session={creatingCollection.info} schema={creatingCollection.schema} onClose={() => setCreatingCollection(null)}
+          onCreated={async (name) => {
+            const d = creatingCollection
+            setCreatingCollection(null)
+            await loadObjects(d.key)
+            openTable(d, { schema: d.schema, name, kind: 'table' })
+          }} />
+      )}
       {creatingDb && (
         <CreateDatabaseDialog session={activeDb.info} onClose={() => setCreatingDb(false)}
           onCreatedFile={(c) => { setCreatingDb(false); onOpenConnection(c) }}

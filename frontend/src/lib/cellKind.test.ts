@@ -34,3 +34,9 @@ test('booleans and dates of the other engines', () => {
   expect(cellKind('Date32', undefined, 'clickhouse').kind).toBe('date')
   expect(cellKind('bit', undefined, 'mysql').kind).toBe('text')
 })
+
+test('MongoDB: booleans and dates with a time', () => {
+  expect(cellKind('bool', undefined, 'mongodb').kind).toBe('choice')
+  expect(cellKind('date', undefined, 'mongodb').kind).toBe('datetime')
+  expect(cellKind('int|string', undefined, 'mongodb').kind).toBe('text')
+})

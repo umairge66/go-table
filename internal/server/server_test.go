@@ -1028,3 +1028,15 @@ func TestExpandHome(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainMongoDB(t *testing.T) {
+	for msg, title := range map[string]string{
+		"server selection error: context deadline exceeded, current topology: { Type: Unknown }": "Can't reach the server",
+		"(Unauthorized) command find requires authentication":                                    "Not allowed",
+		"write exception: (DuplicateKey) E11000 duplicate key error collection: a.b":             "A document with that key already exists",
+	} {
+		if got := Explain(errors.New(msg)).Title; got != title {
+			t.Errorf("%s: %q", msg, got)
+		}
+	}
+}

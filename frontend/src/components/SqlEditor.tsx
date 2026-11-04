@@ -1,13 +1,15 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands'
 import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, sql, type SQLDialect } from '@codemirror/lang-sql'
+import { javascript, javascriptLanguage } from '@codemirror/lang-javascript'
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { forDriver, type Driver, type PerDriver } from '../types'
+import { mongoCompletions, mongoStatementAt } from '../lib/mongoShell'
+import { forDriver, isMongo, type Driver, type PerDriver } from '../types'
 
 const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--accent)', fontWeight: '600' },
@@ -21,7 +23,12 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL }
+
+/** language: MongoDB's commands are written in the JavaScript of its shell. */
+const language = (driver: Driver, tables?: Record<string, string[]>) => isMongo(driver)
+  ? [javascript(), javascriptLanguage.data.of({ autocomplete: mongoCompletions(tables) })]
+  : sql({ dialect: forDriver(dialects, driver), schema: tables, upperCaseKeywords: true })
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */
@@ -87,8 +94,8 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
           lineNumbers(), highlightActiveLineGutter(), history(), drawSelection(), indentOnInput(), bracketMatching(),
           closeBrackets(), autocompletion({ icons: false }), highlightActiveLine(), highlightSelectionMatches(),
           syntaxHighlighting(highlight),
-          lang.current.of(sql({ dialect: forDriver(dialects, p.driver), schema: p.tables, upperCaseKeywords: true })),
-          placeholder('Write SQL…   Ctrl+↵ runs the statement under the cursor · Ctrl+Shift+↵ runs everything · Ctrl+I formats'),
+          lang.current.of(language(p.driver, p.tables)),
+          placeholder((isMongo(p.driver) ? 'db.collection.find({ … })' : 'Write SQL…') + '   Ctrl+↵ runs the statement under the cursor · Ctrl+Shift+↵ runs everything · Ctrl+I formats'),
           EditorState.readOnly.of(!!p.readOnly),
           EditorView.editable.of(!p.readOnly),
           Prec.highest(keymap.of([
@@ -109,7 +116,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
   }, [])
 
   useEffect(() => {
-    view.current?.dispatch({ effects: lang.current.reconfigure(sql({ dialect: forDriver(dialects, p.driver), schema: p.tables, upperCaseKeywords: true })) })
+    view.current?.dispatch({ effects: lang.current.reconfigure(language(p.driver, p.tables)) })
   }, [p.driver, p.tables])
 
   useEffect(() => {
@@ -124,7 +131,8 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
       const v = view.current!
       const { from, to } = v.state.selection.main
       const text = v.state.doc.toString()
-      return from !== to ? text.slice(from, to) : statementAt(text, from)
+      if (from !== to) return text.slice(from, to)
+      return isMongo(cb.current.driver) ? mongoStatementAt(text, from) : statementAt(text, from)
     },
     value: () => view.current?.state.doc.toString() ?? '',
     focus: () => view.current?.focus(),

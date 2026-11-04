@@ -32,6 +32,7 @@ const ID: PerDriver<TypeSpec> = {
   sqlite: { base: 'INTEGER', param: '', unsigned: false, array: false, custom: false },
   sqlserver: { base: 'int', param: '', unsigned: false, array: false, custom: false },
   oracle: { base: 'NUMBER', param: '', unsigned: false, array: false, custom: false },
+  mongodb: { base: 'string', param: '', unsigned: false, array: false, custom: false },
   duckdb: { base: 'BIGINT', param: '', unsigned: false, array: false, custom: false },
   clickhouse: { base: 'UInt64', param: '', unsigned: false, array: false, custom: false },
 }
@@ -42,6 +43,7 @@ const TEXT: PerDriver<TypeSpec> = {
   sqlite: { base: 'TEXT', param: '', unsigned: false, array: false, custom: false },
   sqlserver: { base: 'nvarchar', param: '255', unsigned: false, array: false, custom: false },
   oracle: { base: 'VARCHAR2', param: '255', unsigned: false, array: false, custom: false },
+  mongodb: { base: 'string', param: '', unsigned: false, array: false, custom: false },
   duckdb: { base: 'VARCHAR', param: '', unsigned: false, array: false, custom: false },
   clickhouse: { base: 'String', param: '', unsigned: false, array: false, custom: false },
 }

@@ -13,7 +13,8 @@ import { formatSQL } from '../lib/format'
 import { cellAt, emptyEdits, pendingCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
-import { family, type Cell, type Column, type QueryResult, type SessionInfo } from '../types'
+import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo } from '../types'
+import { mongoSourceTable } from '../lib/mongoShell'
 import { fmt } from './DataView'
 
 const LIMITS = [100, 1000, 10000, 0]
@@ -127,7 +128,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     try {
       editor.current?.transform((text) => formatSQL(text, session.connection.driver))
     } catch (e) {
-      toast('error', "Couldn't format this SQL", `Fix the syntax error first. ${(e as Error).message.split('\n')[0]}`)
+      toast('error', isMongo(session.connection.driver) ? "Couldn't format these commands" : "Couldn't format this SQL", `Fix the syntax error first. ${(e as Error).message.split('\n')[0]}`)
     }
   }
 
@@ -148,8 +149,9 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     setEdits(emptyEdits())
     setEditable(null)
     if (!current?.columns) return
-    const src = sourceTable(current.statement)
-    if (!src) { setEditable({ reason: 'Only the result of a plain SELECT from one table can be edited.' }); return }
+    const mongo = isMongo(session.connection.driver)
+    const src = mongo ? mongoSourceTable(current.statement) : sourceTable(current.statement)
+    if (!src) { setEditable({ reason: mongo ? 'Only the result of a plain find() of whole documents can be edited.' : 'Only the result of a plain SELECT from one table can be edited.' }); return }
     const table = { schema: src.schema || schema, name: src.name }
     const cols = current.columns
     let stale = false
@@ -222,7 +224,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     menu.open(e, [
       { label: 'Save as CSV…', onSelect: () => saveAs('result.csv', 'csv', () => toCSV(cols, rows)) },
       { label: 'Save as JSON…', onSelect: () => saveAs('result.json', 'json', () => toJSON(cols, rows)) },
-      { label: 'Save as SQL INSERTs…', onSelect: () => saveAs('result.sql', 'sql', () => toInserts('result', cols, rows)) },
+      ...(isMongo(session.connection.driver) ? [] : [{ label: 'Save as SQL INSERTs…', onSelect: () => saveAs('result.sql', 'sql', () => toInserts('result', cols, rows)) }]),
       'sep',
       { label: 'Copy as CSV', onSelect: () => { navigator.clipboard?.writeText(toCSV(cols, rows)); toast('ok', 'Copied') } },
     ])

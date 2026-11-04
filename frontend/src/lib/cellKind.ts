@@ -20,10 +20,10 @@ export function cellKind(type = '', values: string[] | undefined, driver: Driver
   // true/false; MySQL's BOOLEAN is TINYINT(1) and SQLite stores 1/0.
   const f = family(driver)
   const trueFalse = { kind: 'choice' as const, options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
-  if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse') && (t === 'boolean' || t === 'bool')) return trueFalse
+  if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse' || f === 'mongodb') && (t === 'boolean' || t === 'bool')) return trueFalse
   if (f === 'sqlserver' && t === 'bit') return trueFalse
   if (/^(tinyint\(1\)|bool|boolean)(\s+unsigned)?$/.test(t)) return { kind: 'choice', options: [{ value: '1', label: '1 (true)' }, { value: '0', label: '0 (false)' }] }
-  if (t === 'date' && f === 'oracle') return { kind: 'datetime' } // Oracle's DATE has a time of day
+  if (t === 'date' && (f === 'oracle' || f === 'mongodb')) return { kind: 'datetime' } // their dates have a time of day
   if (t === 'date' || t === 'date32') return { kind: 'date' }
   if (/^(datetime2|datetimeoffset|datetime64|datetime|timestamptz|timestamp|smalldatetime)\b/.test(t)) return { kind: 'datetime' }
   if (/^(timetz|time)\b/.test(t)) return { kind: 'time' }

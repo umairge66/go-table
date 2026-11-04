@@ -11,6 +11,7 @@
 #   mssql    SQL Server     tidb      TiDB           (MySQL protocol)
 #   oracle   Oracle 23ai Free (~1.5 GB image)
 #   ch       ClickHouse     percona   Percona Server (MySQL)
+#   mongodb  MongoDB
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
 set -euo pipefail
@@ -29,10 +30,11 @@ TS_IMAGE=${TS_IMAGE:-timescale/timescaledb:latest-pg17}
 PERCONA_IMAGE=${PERCONA_IMAGE:-percona/percona-server:8.4}
 S2_IMAGE=${S2_IMAGE:-ghcr.io/singlestore-labs/singlestoredb-dev:latest}
 ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23-slim-faststart}
+MONGODB_IMAGE=${MONGODB_IMAGE:-mongo:7}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -70,6 +72,7 @@ has yb && run yb -p 127.0.0.1::5433 "$YB_IMAGE" bash -c 'exec bin/yugabyted star
 has tidb && run tidb -p 127.0.0.1::4000 "$TIDB_IMAGE"
 has mssql && run mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$MSSQL_PW -p 127.0.0.1::1433 "$MSSQL_IMAGE"
 has ch && run ch -e CLICKHOUSE_USER=gotable -e CLICKHOUSE_PASSWORD=$PW -e CLICKHOUSE_DB=gotable -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 -p 127.0.0.1::9000 "$CH_IMAGE"
+has mongodb && run mongodb -e MONGO_INITDB_ROOT_USERNAME=gotable -e MONGO_INITDB_ROOT_PASSWORD=$PW -p 127.0.0.1::27017 "$MONGODB_IMAGE"
 has ts && run ts -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$TS_IMAGE"
 has percona && run percona -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$PERCONA_IMAGE"
 has s2 && run s2 -e ROOT_PASSWORD=$PW -p 127.0.0.1::3306 "$S2_IMAGE"
@@ -114,6 +117,10 @@ fi
 if has ch; then
 	wait_ready ch in_container ch clickhouse-client --user gotable --password $PW -q 'SELECT 1'
 	export_env CH "$(port ch 9000)" gotable $PW gotable
+fi
+if has mongodb; then
+	wait_ready mongodb in_container mongodb mongosh --quiet -u gotable -p $PW --eval 'db.runCommand({ ping: 1 })'
+	export_env MONGODB "$(port mongodb 27017)" gotable $PW gotable
 fi
 if has ts; then
 	wait_ready ts in_container ts pg_isready -U postgres -h 127.0.0.1
