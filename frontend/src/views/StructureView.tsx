@@ -1,10 +1,11 @@
 import clsx from 'clsx'
-import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, KeyRound, Link2, ListOrdered, MoreHorizontal, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2, ListOrdered, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
 import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isMongo } from '../types'
 import { ColumnDialog } from './ColumnDialog'
+import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
 
 type Dialog =
@@ -171,9 +172,12 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                 <tr key={x.name} data-testid={`index-${x.name}`} className="group border-b border-line-2 last:border-0 hover:bg-hover">
                   <td className="px-3 py-1.5 font-medium">{x.name}</td>
                   <td className="px-3 py-1.5"><IndexKind x={x} /></td>
-                  <td className="px-3 py-1.5 font-mono text-[12px]">{x.columns.join(', ')}</td>
+                  <td className="px-3 py-1.5 font-mono text-[12px]"><IndexColumns x={x} /></td>
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
+                      {mongo && !x.primary && (x.hidden
+                        ? <IconButton label={`Unhide ${x.name}`} onClick={() => alter.run([{ kind: 'unhide_index', name: x.name }], `Unhide index ${x.name}`, { done: 'Index unhidden' })}><Eye className="size-3.5" /></IconButton>
+                        : <IconButton label={`Hide ${x.name}`} onClick={() => alter.run([{ kind: 'hide_index', name: x.name }], `Hide index ${x.name}`, { done: 'Index hidden' })}><EyeOff className="size-3.5" /></IconButton>)}
                       {f.renameIndex && <IconButton label={`Rename ${x.name}`} disabled={x.primary && (mysql || sqlite)} onClick={() => setDialog({ kind: 'renameIndex', name: x.name })}><Pencil className="size-3.5" /></IconButton>}
                       <IconButton label={`Drop ${x.name}`} disabled={x.primary && !pkChangeable(true)} onClick={() => alter.run([{ kind: 'drop_index', name: x.name }], x.primary ? 'Drop the primary key' : `Drop index ${x.name}`, { danger: true, done: 'Index dropped' })}>
                         <Trash2 className="size-3.5" />
@@ -228,6 +232,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
             )}
           </Section>
         )}
+
+        {mongo && <Validation key={`${table.schema}.${table.name}`} session={session} info={info} run={alter.run} />}
 
         <TableOperations session={session} table={table} info={info} run={alter.run} onRenamed={onRenamed} />
       </>}
@@ -290,11 +296,86 @@ function IndexKind({ x }: { x: Index }) {
   const t = (x.type ?? '').toLowerCase()
   const label = x.primary ? 'PRIMARY' : t === 'fulltext' ? 'FULLTEXT' : t === 'spatial' ? 'SPATIAL' : x.unique ? 'UNIQUE' : 'INDEX'
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex flex-wrap items-center gap-1.5">
       <span className={clsx('rounded px-1.5 py-0.5 text-[11px] font-semibold',
         x.primary ? 'bg-warn/15 text-warn' : x.unique ? 'bg-accent-soft text-accent' : 'bg-hover text-fg-2')}>{label}</span>
       {t && !['btree', 'fulltext', 'spatial'].includes(t) && <span className="font-mono text-[11px] uppercase text-muted">{t}</span>}
+      {x.hidden && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[11px] font-semibold text-warn">HIDDEN</span>}
+      {x.options && <span className="text-[11.5px] text-muted" data-testid="index-options">{x.options.split(' · ').filter((o) => o !== 'hidden').join(' · ')}</span>}
     </span>
+  )
+}
+
+/** IndexColumns: the columns, and MongoDB's key for each when it isn't plain ascending. */
+function IndexColumns({ x }: { x: Index }) {
+  if (!x.orders?.some((o) => o !== '1')) return <>{x.columns.join(', ')}</>
+  return <>{x.columns.map((c, i) => (
+    <span key={c}>{i > 0 && ', '}{c} <span className="text-muted">{x.orders![i] === '-1' ? '↓' : x.orders![i] === '1' ? '↑' : x.orders![i]}</span></span>
+  ))}</>
+}
+
+/**
+ * Validation: a MongoDB collection's rules, usually a $jsonSchema, that
+ * inserted and updated documents must meet (Compass's Validation tab).
+ */
+function Validation({ session, info, run }: {
+  session: SessionInfo; info: TableInfo | null
+  run: (ops: AlterOp[], title: string, opts?: { danger?: boolean; done?: string; after?: () => void }) => Promise<void>
+}) {
+  const saved = { validator: info?.validator ?? '', level: info?.validationLevel || 'strict', action: info?.validationAction || 'error' }
+  const [v, setV] = useState(saved)
+  const [editing, setEditing] = useState(false)
+  useEffect(() => { setV(saved); setEditing(false) }, [info]) // eslint-disable-line react-hooks/exhaustive-deps
+  const example = `{
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["name"],
+    properties: {
+      name: { bsonType: "string", description: "required, text" }
+    }
+  }
+}`
+  const changed = v.validator.trim() !== saved.validator.trim() || (saved.validator !== '' && (v.level !== saved.level || v.action !== saved.action))
+  const save = (validator: string) => run([{ kind: 'set_validation', validation: { ...v, validator } }],
+    validator.trim() ? 'Change the validation rules' : 'Remove the validation rules', { done: 'Validation saved', danger: !validator.trim() })
+  return (
+    <section className="mb-6" aria-label="Validation">
+      <div className="mb-2 flex items-center">
+        <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted">Validation</h3>
+        <div className="flex-1" />
+        {!saved.validator && !editing && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => { setV({ ...v, validator: example }); setEditing(true) }}>Add rules</Button>}
+      </div>
+      <div className="overflow-hidden rounded-xl border border-line">
+        {!saved.validator && !editing ? (
+          <Empty>No rules: any document can be stored. Rules (a <code className="font-mono">$jsonSchema</code> or a query) make inserts and updates check documents.</Empty>
+        ) : (
+          <>
+            <div className="h-[220px] border-b border-line" data-testid="validator">
+              <SqlEditor key={saved.validator} value={saved.validator || v.validator} driver={session.connection.driver} onChange={(t) => { setV((x) => ({ ...x, validator: t })); setEditing(true) }} />
+            </div>
+            <div className="flex flex-wrap items-end gap-3 p-3">
+              <Field label="Level">
+                <Select value={v.level} aria-label="Validation level" onChange={(e) => setV({ ...v, level: e.target.value })}>
+                  <option value="strict">Strict — every insert and update</option>
+                  <option value="moderate">Moderate — not documents that already break the rules</option>
+                  <option value="off">Off</option>
+                </Select>
+              </Field>
+              <Field label="When a document breaks them">
+                <Select value={v.action} aria-label="Validation action" onChange={(e) => setV({ ...v, action: e.target.value })}>
+                  <option value="error">Refuse it</option>
+                  <option value="warn">Store it, and log a warning</option>
+                </Select>
+              </Field>
+              <div className="flex-1" />
+              {saved.validator && <Button variant="ghost" className="text-err" icon={<Trash2 className="size-3.5" />} onClick={() => save('')}>Remove rules</Button>}
+              {editing && !saved.validator && <Button variant="ghost" onClick={() => { setV(saved); setEditing(false) }}>Cancel</Button>}
+              <Button variant="primary" icon={<ShieldCheck className="size-3.5" />} disabled={!changed || !v.validator.trim()} onClick={() => save(v.validator)}>Save rules</Button>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -349,6 +430,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
     <section className="mb-6" aria-label="Table operations">
       <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">{isMongo(driver) ? 'Collection' : 'Table'}</h3>
       <div className="space-y-4 rounded-xl border border-line p-4">
+        {info?.options && <div className="text-[12.5px] text-fg-2" data-testid="collection-options">{info.options[0].toUpperCase() + info.options.slice(1)}.</div>}
         <div className="flex items-end gap-2">
           <Field label={isMongo(driver) ? 'Rename collection' : 'Rename table'} className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
           <Button disabled={!name.trim() || name.trim() === table.name}

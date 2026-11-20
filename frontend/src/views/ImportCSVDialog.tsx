@@ -21,15 +21,17 @@ export function autoMap(columns: string[], header: string[] | null): number[] {
 }
 
 /** ImportCSVDialog loads a CSV file into a table with a preview and column mapping. */
-export function ImportCSVDialog({ session, table, columns: tableColumns, onClose, onImported }: {
+export function ImportCSVDialog({ session, table, columns: tableColumns, initialFile, onClose, onImported }: {
   session: SessionInfo
   table: TableRef
   columns: Column[]
+  /** initialFile: already chosen (MongoDB's import picks the file first). */
+  initialFile?: PickedFile
   onClose: () => void
   onImported: () => void
 }) {
   const toast = useToast()
-  const [file, setFile] = useState<PickedFile | null>(null)
+  const [file, setFile] = useState<PickedFile | null>(initialFile ?? null)
   const [source, setSource] = useState<FileSource | null>(null)
   const [upload, setUpload] = useState<{ fraction: number; loaded: number } | null>(null)
   const [preview, setPreview] = useState<{ delimiter: string; rows: string[][] } | null>(null)

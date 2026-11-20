@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,21 +39,28 @@ var (
 )
 
 // mongoURI builds the connection string. Options come from the connection;
-// the user is looked up in admin unless authSource says otherwise.
+// the user is looked up in admin unless authSource says otherwise. With
+// mongodb+srv:// the DNS TXT record may name it (Atlas says admin), so there
+// the driver decides as the shell does: authSource in Options, then TXT, then
+// the database in the path.
 func mongoURI(cfg *model.Connection, addr, password string, tunneled bool) (string, error) {
 	q, err := url.ParseQuery(cfg.Options)
 	if err != nil {
 		return "", fmt.Errorf("options: %w", err)
 	}
-	if cfg.User != "" && !q.Has("authSource") {
+	if cfg.User != "" && !cfg.SRV && !q.Has("authSource") {
 		q.Set("authSource", "admin")
 	}
 	if tunneled && !q.Has("directConnection") {
 		q.Set("directConnection", "true") // other members aren't behind the tunnel
 	}
+	// mongodb+srv:// turns TLS on by itself; SSL mode "disable" must say no.
+	if cfg.SRV && cfg.SSLMode == "disable" && !q.Has("tls") && !q.Has("ssl") {
+		q.Set("tls", "false")
+	}
 	u := url.URL{Scheme: "mongodb", Host: addr, Path: "/", RawQuery: q.Encode()}
 	if cfg.SRV {
-		u.Scheme, u.Host = "mongodb+srv", cfg.Host
+		u.Scheme, u.Host, u.Path = "mongodb+srv", cfg.Host, "/"+cfg.DBName
 	} else if strings.Contains(cfg.Host, ",") {
 		u.Host = cfg.Host
 	}
@@ -105,8 +113,10 @@ func openMongo(ctx context.Context, cfg *model.Connection, addr, password string
 	if err != nil {
 		return fail(err)
 	}
-	opts := options.Client().ApplyURI(uri).SetAppName("GoTable").
-		SetServerSelectionTimeout(15 * time.Second).SetConnectTimeout(15 * time.Second)
+	// Defaults first: ApplyURI sets only what the URI has, so options win.
+	opts := options.Client().SetAppName("GoTable").
+		SetServerSelectionTimeout(15 * time.Second).SetConnectTimeout(15 * time.Second).
+		ApplyURI(uri)
 	t, err := mongoTLS(cfg, tunnel != nil)
 	if err != nil {
 		return fail(err)
@@ -311,15 +321,68 @@ func (mongoEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, e
 			if kd, ok := key.(bson.D); ok {
 				for _, e := range kd {
 					x.Columns = append(x.Columns, e.Key)
+					x.Orders = append(x.Orders, indexOrder(e.Value))
 					if s, ok := e.Value.(string); ok {
 						x.Type = s // text, hashed, 2dsphere…
 					}
 				}
 			}
 		}
+		if h, _ := mongoGet(spec, "hidden"); h == true {
+			x.Hidden = true
+		}
+		x.Options = indexOptionsText(spec)
 		out = append(out, x)
 	}
 	return out, nil
+}
+
+// indexOrder writes an index key's value: 1, -1, text, 2dsphere…
+func indexOrder(v any) string {
+	if n, ok := mongoInt(v); ok {
+		return strconv.FormatInt(n, 10)
+	}
+	return fmt.Sprint(v)
+}
+
+// indexOptionsText says in words what an index spec adds to its keys.
+func indexOptionsText(spec bson.D) string {
+	var parts []string
+	if v, ok := mongoGet(spec, "expireAfterSeconds"); ok {
+		if n, ok := mongoInt(v); ok {
+			parts = append(parts, "TTL "+seconds(n))
+		}
+	}
+	if v, ok := mongoGet(spec, "partialFilterExpression"); ok {
+		parts = append(parts, "partial "+compactJSON(v))
+	}
+	for _, k := range []string{"sparse", "hidden"} {
+		if v, _ := mongoGet(spec, k); v == true {
+			parts = append(parts, k)
+		}
+	}
+	if v, ok := mongoGet(spec, "collation"); ok {
+		if d, ok := v.(bson.D); ok {
+			parts = append(parts, "collation "+str(d, "locale"))
+		}
+	}
+	if v, ok := mongoGet(spec, "wildcardProjection"); ok {
+		parts = append(parts, "fields "+compactJSON(v))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// seconds writes a duration the way people say it: 30 s, 15 min, 2 h, 7 d.
+func seconds(n int64) string {
+	switch {
+	case n > 0 && n%86400 == 0:
+		return strconv.FormatInt(n/86400, 10) + " d"
+	case n > 0 && n%3600 == 0:
+		return strconv.FormatInt(n/3600, 10) + " h"
+	case n > 0 && n%60 == 0:
+		return strconv.FormatInt(n/60, 10) + " min"
+	}
+	return strconv.FormatInt(n, 10) + " s"
 }
 
 func mongoIsView(err error) bool {
@@ -348,8 +411,102 @@ func (mongoEngine) foreignKeys(context.Context, *Conn, TableRef) ([]ForeignRef, 
 	return nil, nil
 }
 
-func (mongoEngine) tableInfo(context.Context, *Conn, TableRef) (TableInfo, error) {
-	return TableInfo{}, nil
+// tableInfo reads a collection's validation rules and options.
+func (mongoEngine) tableInfo(ctx context.Context, c *Conn, t TableRef) (TableInfo, error) {
+	var info TableInfo
+	opts, _, err := c.mongoCollectionOptions(ctx, t)
+	if err != nil {
+		return info, err
+	}
+	if v, ok := mongoGet(opts, "validator"); ok {
+		if d, ok := v.(bson.D); ok && len(d) > 0 {
+			// Relaxed and indented, to be read and edited; it parses back.
+			if b, err := bson.MarshalExtJSONIndent(d, false, false, "", "  "); err == nil {
+				info.Validator = string(b)
+			}
+		}
+	}
+	info.ValidationLevel, info.ValidationAction = str(opts, "validationLevel"), str(opts, "validationAction")
+	if info.Validator != "" {
+		if info.ValidationLevel == "" {
+			info.ValidationLevel = "strict"
+		}
+		if info.ValidationAction == "" {
+			info.ValidationAction = "error"
+		}
+	}
+	info.Options = collectionOptionsText(opts)
+	return info, nil
+}
+
+// mongoCollectionOptions returns what listCollections says of one.
+func (c *Conn) mongoCollectionOptions(ctx context.Context, t TableRef) (opts bson.D, kind string, err error) {
+	cur, err := c.mongoDB(t.Schema).ListCollections(ctx, bson.D{{Key: "name", Value: t.Name}})
+	if err != nil {
+		return nil, "", err
+	}
+	defer cur.Close(ctx)
+	for cur.Next(ctx) {
+		var e struct {
+			Type    string `bson:"type"`
+			Options bson.D `bson:"options"`
+		}
+		if err := cur.Decode(&e); err != nil {
+			return nil, "", err
+		}
+		return e.Options, e.Type, nil
+	}
+	if err := cur.Err(); err != nil {
+		return nil, "", err
+	}
+	return nil, "", fmt.Errorf("%s doesn't exist", t.Name)
+}
+
+// collectionOptionsText says in words how a collection was made.
+func collectionOptionsText(opts bson.D) string {
+	var parts []string
+	if v, _ := mongoGet(opts, "capped"); v == true {
+		p := "capped"
+		if n := num(opts, "size"); n != nil {
+			p += " at " + bytesText(*n)
+		}
+		if n := num(opts, "max"); n != nil && *n > 0 {
+			p += fmt.Sprintf(", %d documents", *n)
+		}
+		parts = append(parts, p)
+	}
+	if ts := section(opts, "timeseries"); ts != nil {
+		p := "time series on " + str(ts, "timeField")
+		if m := str(ts, "metaField"); m != "" {
+			p += ", by " + m
+		}
+		if g := str(ts, "granularity"); g != "" {
+			p += ", " + g
+		}
+		parts = append(parts, p)
+	}
+	if _, ok := mongoGet(opts, "clusteredIndex"); ok {
+		parts = append(parts, "clustered by _id")
+	}
+	if n := num(opts, "expireAfterSeconds"); n != nil {
+		parts = append(parts, "documents expire after "+seconds(*n))
+	}
+	if co := section(opts, "collation"); co != nil {
+		parts = append(parts, "collation "+str(co, "locale"))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func bytesText(n int64) string {
+	switch {
+	case n >= 1<<30 && n%(1<<30) == 0:
+		return fmt.Sprintf("%d GB", n>>30)
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return fmt.Sprintf("%d MB", n>>20)
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return fmt.Sprintf("%d KB", n>>10)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 // definition writes the shell commands that make the collection or view.
@@ -796,6 +953,67 @@ func (c *Conn) mongoDrop(ctx context.Context, objs []Object) ([]string, error) {
 	return stmts, c.mongoRun(ctx, schema, stmts)
 }
 
+var mongoIndexOrders = []string{"1", "-1", "text", "2dsphere", "2d", "hashed"}
+
+// mongoIndexSpec writes an index's keys and options for createIndex.
+func mongoIndexSpec(x *IndexDef) (keys, opts bson.D, err error) {
+	keys = bson.D{}
+	for i, col := range x.Columns {
+		order := "1"
+		if i < len(x.Orders) && x.Orders[i] != "" {
+			order = x.Orders[i]
+		}
+		if !slices.Contains(mongoIndexOrders, order) {
+			return nil, nil, fmt.Errorf("%s: an index key is %s", col, strings.Join(mongoIndexOrders, ", "))
+		}
+		var v any = order
+		if n, err := strconv.Atoi(order); err == nil {
+			v = int32(n)
+		}
+		if col == "$**" || strings.HasSuffix(col, ".$**") {
+			if order != "1" && order != "-1" && order != "text" {
+				return nil, nil, errors.New("a wildcard index ($**) takes 1, -1 or text")
+			}
+		}
+		keys = append(keys, bson.E{Key: col, Value: v})
+	}
+	if x.Name != "" {
+		opts = append(opts, bson.E{Key: "name", Value: x.Name})
+	}
+	if x.Unique {
+		opts = append(opts, bson.E{Key: "unique", Value: true})
+	}
+	if m := x.Mongo; m != nil {
+		if m.ExpireAfterSeconds != nil {
+			if *m.ExpireAfterSeconds < 0 {
+				return nil, nil, errors.New("documents expire after 0 seconds or more")
+			}
+			if len(x.Columns) != 1 {
+				return nil, nil, errors.New("a TTL index has one field, a date")
+			}
+			opts = append(opts, bson.E{Key: "expireAfterSeconds", Value: *m.ExpireAfterSeconds})
+		}
+		if strings.TrimSpace(m.Partial) != "" {
+			v, err := parseMongoValue(m.Partial)
+			if err != nil {
+				return nil, nil, fmt.Errorf("the partial filter: %w", err)
+			}
+			d, ok := v.(bson.D)
+			if !ok || len(d) == 0 {
+				return nil, nil, errors.New(`the partial filter is a query document, e.g. { age: { $gt: 18 } }`)
+			}
+			opts = append(opts, bson.E{Key: "partialFilterExpression", Value: d})
+		}
+		if m.Sparse {
+			opts = append(opts, bson.E{Key: "sparse", Value: true})
+		}
+		if m.Hidden {
+			opts = append(opts, bson.E{Key: "hidden", Value: true})
+		}
+	}
+	return keys, opts, nil
+}
+
 // buildMongoAlter translates structure changes. A field exists only in
 // documents, so changing one rewrites every document that has it.
 func buildMongoAlter(t TableRef, ops []AlterOp) ([]string, error) {
@@ -822,16 +1040,9 @@ func buildMongoAlter(t TableRef, ops []AlterOp) ([]string, error) {
 			if op.Index == nil || len(op.Index.Columns) == 0 {
 				return nil, errors.New("an index needs at least one field")
 			}
-			keys := bson.D{}
-			for _, col := range op.Index.Columns {
-				keys = append(keys, bson.E{Key: col, Value: 1})
-			}
-			var opts bson.D
-			if op.Index.Name != "" {
-				opts = append(opts, bson.E{Key: "name", Value: op.Index.Name})
-			}
-			if op.Index.Unique {
-				opts = append(opts, bson.E{Key: "unique", Value: true})
+			keys, opts, err := mongoIndexSpec(op.Index)
+			if err != nil {
+				return nil, err
 			}
 			stmt := q + ".createIndex(" + mongoJSON(keys, false)
 			if len(opts) > 0 {
@@ -850,6 +1061,45 @@ func buildMongoAlter(t TableRef, ops []AlterOp) ([]string, error) {
 			out = append(out, q+".renameCollection("+jsonString(strings.TrimSpace(op.NewName))+");")
 		case AlterTruncate:
 			out = append(out, q+".deleteMany({});")
+		case AlterHideIndex, AlterUnhideIndex:
+			if op.Name == "_id_" {
+				return nil, errors.New("the _id index can't be hidden")
+			}
+			verb := map[AlterKind]string{AlterHideIndex: "hideIndex", AlterUnhideIndex: "unhideIndex"}[op.Kind]
+			out = append(out, q+"."+verb+"("+jsonString(op.Name)+");")
+		case AlterSetValidation:
+			v := op.Validation
+			if v == nil {
+				return nil, errors.New("no validation rules given")
+			}
+			validator := bson.D{}
+			if strings.TrimSpace(v.Validator) != "" {
+				val, err := parseMongoValue(v.Validator)
+				if err != nil {
+					return nil, fmt.Errorf("the validator: %w", err)
+				}
+				d, ok := val.(bson.D)
+				if !ok {
+					return nil, errors.New(`the validator is a document, e.g. { $jsonSchema: { required: ["name"] } }`)
+				}
+				validator = d
+			}
+			level, action := v.Level, v.Action
+			if level == "" {
+				level = "strict"
+			}
+			if action == "" {
+				action = "error"
+			}
+			if !slices.Contains([]string{"strict", "moderate", "off"}, level) {
+				return nil, fmt.Errorf("validation level %q: use strict, moderate or off", level)
+			}
+			if !slices.Contains([]string{"error", "warn"}, action) {
+				return nil, fmt.Errorf("validation action %q: use error or warn", action)
+			}
+			cmd := bson.D{{Key: "collMod", Value: t.Name}, {Key: "validator", Value: validator},
+				{Key: "validationLevel", Value: level}, {Key: "validationAction", Value: action}}
+			out = append(out, "db.runCommand("+mongoJSON(cmd, false)+");")
 		case AlterAddColumn:
 			return nil, errMongoNoColumns
 		default:
@@ -1086,6 +1336,12 @@ func first(args []any) any {
 }
 
 func (c *Conn) runCollectionCommand(ctx context.Context, db *mongo.Database, name string, calls []shellCall, rowCap int, r *Result) error {
+	if verbosity, rest, ok, err := explainOf(calls); ok || err != nil {
+		if err != nil {
+			return err
+		}
+		return runExplain(ctx, db, name, rest, verbosity, r)
+	}
 	coll := db.Collection(name)
 	call := calls[0]
 	chain := calls[1:]
@@ -1234,6 +1490,16 @@ func (c *Conn) runCollectionCommand(ctx context.Context, db *mongo.Database, nam
 		}
 		_, err := runCommandDoc(ctx, db, bson.D{{Key: "dropIndexes", Value: name}, {Key: "index", Value: call.args[0]}})
 		return err
+	case "hideIndex", "unhideIndex":
+		if len(call.args) != 1 {
+			return fmt.Errorf("%s takes an index name or its fields", call.name)
+		}
+		which := "name"
+		if _, ok := call.args[0].(bson.D); ok {
+			which = "keyPattern"
+		}
+		_, err := runCommandDoc(ctx, db, bson.D{{Key: "collMod", Value: name}, {Key: "index", Value: bson.D{{Key: which, Value: call.args[0]}, {Key: "hidden", Value: call.name == "hideIndex"}}}})
+		return err
 	case "dropIndexes":
 		_, err := runCommandDoc(ctx, db, bson.D{{Key: "dropIndexes", Value: name}, {Key: "index", Value: "*"}})
 		return err
@@ -1276,69 +1542,130 @@ func mongoIndexName(keys bson.D) string {
 	return strings.Join(parts, "_")
 }
 
-func runFind(ctx context.Context, coll *mongo.Collection, args []any, chain []shellCall, rowCap int, r *Result) error {
-	filter, err := docArg(args, 0, "the filter")
-	if err != nil {
-		return err
+// findSpec is a find() and the cursor methods chained to it.
+type findSpec struct {
+	filter, projection, sort bson.D
+	limit, skip              int64
+	batch                    int32
+	hint                     any
+	allowDiskUse, counting   bool
+}
+
+func parseFind(args []any, chain []shellCall) (findSpec, error) {
+	var f findSpec
+	var err error
+	if f.filter, err = docArg(args, 0, "the filter"); err != nil {
+		return f, err
 	}
-	projection, err := docArg(args, 1, "the projection")
-	if err != nil {
-		return err
+	if f.projection, err = docArg(args, 1, "the projection"); err != nil {
+		return f, err
 	}
-	o := options.Find()
-	if len(projection) > 0 {
-		o.SetProjection(projection)
-	}
-	counting := false
 	for _, ch := range chain {
 		a := first(ch.args)
 		switch ch.name {
 		case "sort":
 			d, ok := a.(bson.D)
 			if !ok {
-				return errors.New("sort takes a document, e.g. { name: 1 }")
+				return f, errors.New("sort takes a document, e.g. { name: 1 }")
 			}
-			o.SetSort(d)
+			f.sort = d
 		case "limit", "skip", "batchSize":
 			n, ok := mongoInt(a)
 			if !ok || n < 0 {
-				return fmt.Errorf("%s takes a number", ch.name)
+				return f, fmt.Errorf("%s takes a number", ch.name)
 			}
 			switch ch.name {
 			case "limit":
-				o.SetLimit(n)
+				f.limit = n
 			case "skip":
-				o.SetSkip(n)
+				f.skip = n
 			default:
-				o.SetBatchSize(int32(n))
+				f.batch = int32(n)
 			}
 		case "project", "projection":
 			d, ok := a.(bson.D)
 			if !ok {
-				return fmt.Errorf("%s takes a document", ch.name)
+				return f, fmt.Errorf("%s takes a document", ch.name)
 			}
-			o.SetProjection(d)
+			f.projection = d
 		case "hint":
-			o.SetHint(a)
+			f.hint = a
 		case "allowDiskUse":
-			o.SetAllowDiskUse(true)
+			f.allowDiskUse = true
 		case "collation":
-			return errors.New("collation isn't available in find() here: use aggregate with $match")
+			return f, errors.New("collation isn't available in find() here: use aggregate with $match")
 		case "count", "itcount", "size":
-			counting = true
+			f.counting = true
 		case "toArray", "pretty":
 		default:
-			return fmt.Errorf(".%s() isn't available after find(): try sort, limit, skip, project, hint or count", ch.name)
+			return f, fmt.Errorf(".%s() isn't available after find(): try sort, limit, skip, project, hint, count or explain", ch.name)
 		}
 	}
-	if counting {
-		n, err := coll.CountDocuments(ctx, filter)
+	return f, nil
+}
+
+// command is the find command the spec stands for, for explain.
+func (f findSpec) command(coll string) bson.D {
+	cmd := bson.D{{Key: "find", Value: coll}, {Key: "filter", Value: f.filter}}
+	if f.filter == nil {
+		cmd[1].Value = bson.D{}
+	}
+	if len(f.projection) > 0 {
+		cmd = append(cmd, bson.E{Key: "projection", Value: f.projection})
+	}
+	if len(f.sort) > 0 {
+		cmd = append(cmd, bson.E{Key: "sort", Value: f.sort})
+	}
+	if f.skip > 0 {
+		cmd = append(cmd, bson.E{Key: "skip", Value: f.skip})
+	}
+	if f.limit > 0 {
+		cmd = append(cmd, bson.E{Key: "limit", Value: f.limit})
+	}
+	if f.hint != nil {
+		cmd = append(cmd, bson.E{Key: "hint", Value: f.hint})
+	}
+	if f.allowDiskUse {
+		cmd = append(cmd, bson.E{Key: "allowDiskUse", Value: true})
+	}
+	return cmd
+}
+
+func runFind(ctx context.Context, coll *mongo.Collection, args []any, chain []shellCall, rowCap int, r *Result) error {
+	f, err := parseFind(args, chain)
+	if err != nil {
+		return err
+	}
+	if f.counting {
+		n, err := coll.CountDocuments(ctx, f.filter)
 		if err == nil {
 			valueRow(r, "count", n)
 		}
 		return err
 	}
-	cur, err := coll.Find(ctx, filter, o)
+	o := options.Find()
+	if len(f.projection) > 0 {
+		o.SetProjection(f.projection)
+	}
+	if f.sort != nil {
+		o.SetSort(f.sort)
+	}
+	if f.limit > 0 {
+		o.SetLimit(f.limit)
+	}
+	if f.skip > 0 {
+		o.SetSkip(f.skip)
+	}
+	if f.batch > 0 {
+		o.SetBatchSize(f.batch)
+	}
+	if f.hint != nil {
+		o.SetHint(f.hint)
+	}
+	if f.allowDiskUse {
+		o.SetAllowDiskUse(true)
+	}
+	cur, err := coll.Find(ctx, f.filter, o)
 	if err != nil {
 		return err
 	}
@@ -1351,30 +1678,42 @@ func runFind(ctx context.Context, coll *mongo.Collection, args []any, chain []sh
 	return nil
 }
 
-func runAggregate(ctx context.Context, coll *mongo.Collection, args []any, chain []shellCall, rowCap int, r *Result) error {
+// parseAggregate reads aggregate()'s pipeline: an array and options, or
+// stages as separate arguments.
+func parseAggregate(args []any, chain []shellCall) (pipeline bson.A, allowDiskUse bool, err error) {
 	for _, ch := range chain {
 		if ch.name != "toArray" && ch.name != "pretty" {
-			return fmt.Errorf(".%s() isn't available after aggregate(): use a pipeline stage", ch.name)
+			return nil, false, fmt.Errorf(".%s() isn't available after aggregate(): use a pipeline stage", ch.name)
 		}
 	}
-	var pipeline bson.A
-	o := options.Aggregate()
 	switch a := first(args).(type) {
 	case nil:
 	case bson.A:
 		pipeline = a
 		opts, err := docArg(args, 1, "the options")
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		if v, _ := mongoGet(opts, "allowDiskUse"); v == true {
-			o.SetAllowDiskUse(true)
+			allowDiskUse = true
 		}
 	default: // stages as separate arguments
 		pipeline = bson.A(args)
 	}
 	if pipeline == nil {
 		pipeline = bson.A{}
+	}
+	return pipeline, allowDiskUse, nil
+}
+
+func runAggregate(ctx context.Context, coll *mongo.Collection, args []any, chain []shellCall, rowCap int, r *Result) error {
+	pipeline, allowDiskUse, err := parseAggregate(args, chain)
+	if err != nil {
+		return err
+	}
+	o := options.Aggregate()
+	if allowDiskUse {
+		o.SetAllowDiskUse(true)
 	}
 	cur, err := coll.Aggregate(ctx, pipeline, o)
 	if err != nil {

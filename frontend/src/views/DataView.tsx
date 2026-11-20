@@ -16,6 +16,9 @@ import { mongoColl } from '../lib/mongoShell'
 import { ExportDialog } from './ExportDialog'
 import { FkLookup } from './FkLookup'
 import { ImportCSVDialog } from './ImportCSVDialog'
+import { ImportDocumentsDialog } from './ImportDocumentsDialog'
+import { SchemaView } from './SchemaView'
+import { PipelineView } from './PipelineView'
 import { HISTORY_EVENT, notify } from './SidebarPanels'
 import { StructureView } from './StructureView'
 
@@ -58,7 +61,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     setPageSize(n)
   })
 
-  const [mode, setMode] = useState<'data' | 'structure' | 'ddl'>(initialMode ?? 'data')
+  const [mode, setMode] = useState<'data' | 'structure' | 'schema' | 'pipeline' | 'ddl'>(initialMode ?? 'data')
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [indexes, setIndexes] = useState<Index[]>([])
   const [foreignKeys, setForeignKeys] = useState<ForeignRef[]>([])
@@ -293,7 +296,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   }
 
   return (
-    <div className="flex h-full flex-col" data-testid={`data-${object.name}`}>
+    <div className="flex h-full flex-col" data-testid={`data-${object.name}`} aria-busy={loading}>
       {mode === 'data' && (
         <>
           {/* Toolbar */}
@@ -380,7 +383,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                   </div>
                 ) : (<>
                   <Grid columns={gridColumns} rowCount={total} cell={cell} rowOffset={offset} sort={sort} onSort={toggleSort}
-                    readOnly={readOnly} onEdit={edit} onDeleteRows={deleteRows} onContextMenu={cellMenu} dataKey={dataKey} onFollow={follow} onLookup={(r, c, rect) => setLookup({ r, c, rect })}
+                    readOnly={readOnly || loading} onEdit={edit} onDeleteRows={deleteRows} onContextMenu={cellMenu} dataKey={dataKey} onFollow={follow} onLookup={(r, c, rect) => setLookup({ r, c, rect })}
                     onSelectionChange={(r, c, rs) => setSel({ r, c, rows: rs })} focus={focus} />
                   {lookup && columns?.[lookup.c]?.references && (
                     <FkLookup sid={session.id} fk={columns[lookup.c].references!} anchor={lookup.rect}
@@ -395,7 +398,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               )}
             </div>
             {inspector && columns && (
-              <Inspector columns={columns} kinds={gridColumns.map((g) => g.edit)} row={sel?.r ?? null} cell={cell} readOnly={readOnly} onEdit={edit}
+              <Inspector columns={columns} kinds={gridColumns.map((g) => g.edit)} row={sel?.r ?? null} cell={cell} readOnly={readOnly || loading} onEdit={edit}
                 onLookup={(r, c, rect) => setLookup({ r, c, rect })} />
             )}
           </div>
@@ -416,6 +419,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                   onChanged={(c) => { setNewColumn(c); load(0, true); onStructureChanged?.() }}
                   onRenamed={(name) => onRenamed?.(name)} />
               </>
+            : mode === 'schema' ? <SchemaView session={session} table={table} />
+            : mode === 'pipeline' ? <PipelineView session={session} table={table} openQuery={openQuery} />
             : <DefinitionView session={session} object={object} />}
         </div>
       )}
@@ -423,10 +428,10 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
       {/* Bottom bar */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-t border-line bg-panel-2 px-2">
         <div className="flex rounded-lg border border-line bg-panel p-0.5" role="tablist" aria-label="View">
-          {(['data', 'structure', 'ddl'] as const).map((m) => (
+          {(isMongo(session.connection.driver) ? ['data', 'structure', 'schema', 'pipeline', 'ddl'] as const : ['data', 'structure', 'ddl'] as const).map((m) => (
             <button key={m} role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
               className={clsx('h-6 rounded-md px-2.5 text-[12px] font-medium', mode === m ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg')}>
-              {m === 'data' ? 'Data' : m === 'structure' ? 'Structure' : 'Definition'}
+              {m === 'data' ? 'Data' : m === 'structure' ? 'Structure' : m === 'schema' ? 'Schema' : m === 'pipeline' ? 'Aggregations' : 'Definition'}
             </button>
           ))}
         </div>
@@ -469,7 +474,9 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         </Modal>
       )}
       {importOpen && columns && (
-        <ImportCSVDialog session={session} table={table} columns={columns} onClose={() => setImportOpen(false)} onImported={() => load(0)} />
+        isMongo(session.connection.driver)
+          ? <ImportDocumentsDialog session={session} table={table} columns={columns} onClose={() => setImportOpen(false)} onImported={() => load(0)} />
+          : <ImportCSVDialog session={session} table={table} columns={columns} onClose={() => setImportOpen(false)} onImported={() => load(0)} />
       )}
       {exportOpen && <ExportDialog session={session} title={object.name} onClose={() => setExportOpen(false)}
         source={{ table, page: pageReq(), columns: names }} />}

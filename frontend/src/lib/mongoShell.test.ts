@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { formatMongo, mongoColl, mongoSourceTable, mongoStatementAt, mongoStatements } from './mongoShell'
+import { explainStatement, formatMongo, mongoColl, mongoSourceTable, mongoStatementAt, mongoStatements } from './mongoShell'
 
 test('statements end at a semicolon or a line end outside brackets', () => {
   const text = `db.a.find({ x: "a;b",
@@ -46,4 +46,13 @@ test('formatting keeps short commands on a line and breaks long ones', () => {
   expect(long.replace(/\s/g, '')).toBe('db.people.aggregate([{$match:{age:{$gt:30},city:"Berlin",name:{$regex:"^a"}}},{$group:{_id:"$city",total:{$sum:1},oldest:{$max:"$age"}}}]);'.replace(/\s/g, ''))
   expect(formatMongo('// keep me\ndb.a.find( {x:1} )')).toContain('// keep me')
   expect(() => formatMongo('db.a.find({ x: 1')).toThrow()
+})
+
+test('explain wraps a query, and only a query', () => {
+  expect(explainStatement('db.people.find({ a: 1 }).sort({ b: -1 });')).toBe('db.people.explain("executionStats").find({ a: 1 }).sort({ b: -1 })')
+  expect(explainStatement('db.getCollection("odd-name").aggregate([{ $match: {} }])')).toBe('db.getCollection("odd-name").explain("executionStats").aggregate([{ $match: {} }])')
+  expect(explainStatement('  db.people.countDocuments({})')).toBe('db.people.explain("executionStats").countDocuments({})')
+  expect(explainStatement('db.people.find().explain("queryPlanner")')).toBe('db.people.find().explain("queryPlanner")')
+  expect(explainStatement('db.people.insertOne({})')).toBeNull()
+  expect(explainStatement('show collections')).toBeNull()
 })

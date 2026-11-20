@@ -160,7 +160,7 @@ func ParseURL(raw string) (*Connection, string, error) {
 // mongodb+srv://. It is parsed by hand as net/url refuses several hosts. In
 // such a URL the database is also where the user is defined, unless
 // authSource says otherwise; GoTable's default is admin, so that is kept as
-// an explicit option.
+// an explicit option. Not for +srv, whose TXT record usually says admin.
 func parseMongoURL(raw string) (*Connection, string, error) {
 	scheme, rest, _ := strings.Cut(raw, "://")
 	c := NewConnection(DriverMongoDB)
@@ -223,7 +223,8 @@ func parseMongoURL(raw string) (*Connection, string, error) {
 	for _, k := range []string{"tls", "ssl", "tlsInsecure", "tlsAllowInvalidCertificates"} {
 		q.Del(k)
 	}
-	if c.User != "" && c.DBName != "" && !q.Has("authSource") {
+	// With +srv the TXT record may set it, and the driver weighs both.
+	if c.User != "" && c.DBName != "" && !c.SRV && !q.Has("authSource") {
 		q.Set("authSource", c.DBName)
 	}
 	c.Options = q.Encode()

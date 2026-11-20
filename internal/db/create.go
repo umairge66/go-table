@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"gotable/internal/model"
 )
 
@@ -35,6 +37,75 @@ type NewTable struct {
 	Collation string `json:"collation"`
 	// Strict makes a SQLite STRICT table (types are enforced).
 	Strict bool `json:"strict"`
+	// Mongo: how a MongoDB collection is made.
+	Mongo *NewCollectionOptions `json:"mongo,omitempty"`
+}
+
+// NewCollectionOptions: a MongoDB collection can be capped (a fixed size,
+// oldest documents go first), a time series (5.0+), clustered by _id (5.3+),
+// and have documents expire.
+type NewCollectionOptions struct {
+	Capped    bool  `json:"capped,omitempty"`
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+	MaxDocs   int64 `json:"maxDocs,omitempty"`
+	// TimeField makes a time series; MetaField and Granularity refine it.
+	TimeField   string `json:"timeField,omitempty"`
+	MetaField   string `json:"metaField,omitempty"`
+	Granularity string `json:"granularity,omitempty"`
+	Clustered   bool   `json:"clustered,omitempty"`
+	// ExpireAfterSeconds: for a time series or a clustered collection.
+	ExpireAfterSeconds *int64 `json:"expireAfterSeconds,omitempty"`
+}
+
+// mongoCreateOptions writes createCollection's options.
+func mongoCreateOptions(o *NewCollectionOptions) (bson.D, error) {
+	var d bson.D
+	if o == nil {
+		return d, nil
+	}
+	ts := strings.TrimSpace(o.TimeField) != ""
+	switch {
+	case o.Capped && (ts || o.Clustered):
+		return nil, errors.New("a capped collection can't also be a time series or clustered")
+	case ts && o.Clustered:
+		return nil, errors.New("a time series is clustered by time already")
+	case !ts && (o.MetaField != "" || o.Granularity != ""):
+		return nil, errors.New("a time series needs its time field")
+	case o.ExpireAfterSeconds != nil && !ts && !o.Clustered:
+		return nil, errors.New("documents expire only in a time series or clustered collection; elsewhere use a TTL index")
+	}
+	if o.Capped {
+		if o.SizeBytes <= 0 {
+			return nil, errors.New("a capped collection needs its size")
+		}
+		d = append(d, bson.E{Key: "capped", Value: true}, bson.E{Key: "size", Value: o.SizeBytes})
+		if o.MaxDocs > 0 {
+			d = append(d, bson.E{Key: "max", Value: o.MaxDocs})
+		}
+	}
+	if ts {
+		t := bson.D{{Key: "timeField", Value: strings.TrimSpace(o.TimeField)}}
+		if m := strings.TrimSpace(o.MetaField); m != "" {
+			t = append(t, bson.E{Key: "metaField", Value: m})
+		}
+		if g := o.Granularity; g != "" {
+			if g != "seconds" && g != "minutes" && g != "hours" {
+				return nil, errors.New("granularity is seconds, minutes or hours")
+			}
+			t = append(t, bson.E{Key: "granularity", Value: g})
+		}
+		d = append(d, bson.E{Key: "timeseries", Value: t})
+	}
+	if o.Clustered {
+		d = append(d, bson.E{Key: "clusteredIndex", Value: bson.D{{Key: "key", Value: bson.D{{Key: "_id", Value: int32(1)}}}, {Key: "unique", Value: true}}})
+	}
+	if o.ExpireAfterSeconds != nil {
+		if *o.ExpireAfterSeconds < 0 {
+			return nil, errors.New("documents expire after 0 seconds or more")
+		}
+		d = append(d, bson.E{Key: "expireAfterSeconds", Value: *o.ExpireAfterSeconds})
+	}
+	return d, nil
 }
 
 var (
@@ -65,6 +136,13 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 		return nil, errors.New("table name is required")
 	}
 	if d.family == model.DriverMongoDB { // fields come with the documents
+		opts, err := mongoCreateOptions(t.Mongo)
+		if err != nil {
+			return nil, err
+		}
+		if len(opts) > 0 {
+			return []string{"db.createCollection(" + jsonString(name) + ", " + mongoJSON(opts, false) + ")"}, nil
+		}
 		return []string{"db.createCollection(" + jsonString(name) + ")"}, nil
 	}
 	if len(t.Columns) == 0 {

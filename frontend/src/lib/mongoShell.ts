@@ -109,10 +109,23 @@ export function mongoSourceTable(statement: string): SourceTable | null {
   return { schema: '', name: m[1] ?? m[2] ?? m[3] }
 }
 
-const COLLECTION_METHODS = ['find', 'findOne', 'aggregate', 'countDocuments', 'estimatedDocumentCount', 'distinct', 'insertOne', 'insertMany',
+/**
+ * explainStatement rewrites a find, findOne, aggregate, count or distinct as
+ * db.coll.explain("executionStats").…, or returns null for anything else. A
+ * statement that already explains is kept as it is.
+ */
+export function explainStatement(statement: string): string | null {
+  const s = statement.trim().replace(/;\s*$/, '')
+  if (/\.\s*explain\s*\(/.test(s)) return s
+  const m = /^(db\s*\.\s*(?:getCollection\(\s*(?:"[^"]*"|'[^']*')\s*\)|[A-Za-z_$][\w$]*))\s*\.\s*(find|findOne|aggregate|count|countDocuments|distinct)\s*\(/.exec(s)
+  if (!m) return null
+  return `${m[1]}.explain("executionStats").${s.slice(m[0].length - m[2].length - 1).replace(/^\s*\.?\s*/, '')}`
+}
+
+const COLLECTION_METHODS = ['explain', 'find', 'findOne', 'aggregate', 'countDocuments', 'estimatedDocumentCount', 'distinct', 'insertOne', 'insertMany',
   'updateOne', 'updateMany', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndUpdate', 'findOneAndReplace', 'findOneAndDelete',
   'createIndex', 'dropIndex', 'dropIndexes', 'getIndexes', 'renameCollection', 'stats', 'drop']
-const CHAIN_METHODS = ['sort', 'limit', 'skip', 'project', 'hint', 'count', 'toArray']
+const CHAIN_METHODS = ['sort', 'limit', 'skip', 'project', 'hint', 'count', 'toArray', 'explain']
 const DB_METHODS = ['getCollection', 'getSiblingDB', 'createCollection', 'createView', 'getCollectionNames', 'getCollectionInfos', 'runCommand', 'adminCommand', 'stats', 'dropDatabase', 'serverStatus', 'version']
 const OPERATORS = ['$eq', '$ne', '$gt', '$gte', '$lt', '$lte', '$in', '$nin', '$and', '$or', '$nor', '$not', '$exists', '$type', '$regex', '$options', '$expr', '$elemMatch', '$size', '$all',
   '$set', '$unset', '$inc', '$mul', '$rename', '$min', '$max', '$push', '$pull', '$addToSet', '$pop', '$currentDate', '$setOnInsert',

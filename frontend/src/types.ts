@@ -153,12 +153,20 @@ export interface Index {
   type?: string
   /** constraint: made by a PRIMARY KEY or UNIQUE constraint. */
   constraint?: boolean
+  /** MongoDB: each column's key (1, -1, text, 2dsphere…), the options in words, and whether the planner ignores it. */
+  orders?: string[]
+  options?: string
+  hidden?: boolean
 }
 
 export interface Check { name: string; expression: string }
 
 /** TableInfo: the comment, MySQL/MariaDB options and CHECK constraints of a table. */
-export interface TableInfo { comment: string; engine: string; collation: string; autoIncrement: number; checks: Check[] }
+export interface TableInfo {
+  comment: string; engine: string; collation: string; autoIncrement: number; checks: Check[]
+  /** MongoDB: the validator (relaxed Extended JSON), its level and action, and the collection's options in words. */
+  validator?: string; validationLevel?: string; validationAction?: string; options?: string
+}
 
 export type Cell = string | null
 
@@ -182,6 +190,35 @@ export interface QueryResult {
   ms: number
   truncated: boolean
   error?: ApiErrorBody
+  /** plan: a MongoDB explain, summarized (see internal/db/mongo_explain.go). */
+  plan?: QueryPlan
+}
+
+export interface PlanStage {
+  stage: string
+  index?: string
+  keyPattern?: string
+  direction?: string
+  filter?: string
+  shard?: string
+  nReturned?: number
+  docsExamined?: number
+  keysExamined?: number
+  ms?: number
+  children?: PlanStage[]
+}
+
+export interface QueryPlan {
+  verbosity: string
+  root: PlanStage
+  nReturned?: number
+  docsExamined?: number
+  keysExamined?: number
+  ms?: number
+  indexes: string[]
+  collScan: boolean
+  inMemorySort: boolean
+  rejectedPlans: number
 }
 
 /**

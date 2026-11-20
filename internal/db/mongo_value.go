@@ -299,7 +299,7 @@ func coerceMongoValue(text string, existing any, typeName string) (any, error) {
 		if _, ok := v.(bson.D); !ok {
 			return bad("a document")
 		}
-		return v, nil
+		return keepNumberTypes(v, existing, t), nil
 	case "array":
 		v, err := parseMongoValue(t)
 		if err != nil {
@@ -308,7 +308,7 @@ func coerceMongoValue(text string, existing any, typeName string) (any, error) {
 		if _, ok := v.(bson.A); !ok {
 			return bad("an array")
 		}
-		return v, nil
+		return keepNumberTypes(v, existing, t), nil
 	case "", "null", "undefined":
 		return guessMongoValue(text), nil
 	}
@@ -687,4 +687,65 @@ func mongoResultSet(docs []bson.D, first []string) *ResultSet {
 		rs.Rows = append(rs.Rows, row)
 	}
 	return rs
+}
+
+// explicitInt: text that names an int type on purpose.
+var explicitInt = regexp.MustCompile(`NumberInt\s*\(|Int32\s*\(|"\$numberInt"`)
+
+// keepNumberTypes gives the numbers of an edited document or array the
+// types they had. A cell shows nested values as relaxed JSON, where a long
+// is a plain number that would read back as an int: without this, saving a
+// sub-document, even unchanged, turned its longs into ints. Matched by key
+// and array position; a number where the field held a long stays a long, and
+// a whole number where it held a double stays a double, as top-level fields
+// do. Text that names an int type on purpose is taken as written.
+func keepNumberTypes(v, old any, text string) any {
+	if old == nil {
+		return v
+	}
+	keepInts := !explicitInt.MatchString(text)
+	var walk func(v, old any) any
+	walk = func(v, old any) any {
+		switch x := v.(type) {
+		case bson.D:
+			od, ok := old.(bson.D)
+			if !ok {
+				return v
+			}
+			for i, e := range x {
+				if ov, found := mongoGet(od, e.Key); found {
+					x[i].Value = walk(e.Value, ov)
+				}
+			}
+			return x
+		case bson.A:
+			oa, ok := old.(bson.A)
+			if !ok {
+				return v
+			}
+			for i := range x {
+				if i < len(oa) {
+					x[i] = walk(x[i], oa[i])
+				}
+			}
+			return x
+		case int32:
+			switch old.(type) {
+			case int64:
+				if keepInts {
+					return int64(x)
+				}
+			case float64:
+				if keepInts {
+					return float64(x)
+				}
+			}
+		case int64:
+			if _, ok := old.(float64); ok && float64(x) == float64(int64(float64(x))) {
+				return float64(x)
+			}
+		}
+		return v
+	}
+	return walk(v, old)
 }

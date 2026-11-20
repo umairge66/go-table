@@ -81,6 +81,11 @@ type Index struct {
 	// Constraint: the index belongs to a PRIMARY KEY or UNIQUE constraint
 	// (PostgreSQL, SQLite), so it is dropped through the constraint.
 	Constraint bool
+	// MongoDB: each column's key (1, -1, text, 2dsphere…), and the options
+	// in words (TTL, partial, sparse, hidden…).
+	Orders  []string
+	Options string
+	Hidden  bool
 }
 
 // Check is a CHECK constraint.
@@ -98,6 +103,12 @@ type TableInfo struct {
 	Collation     string
 	AutoIncrement int64
 	Checks        []Check
+	// MongoDB: the validator (shell text, empty for none), its level and
+	// action, and the collection's options in words (capped, time series…).
+	Validator        string
+	ValidationLevel  string
+	ValidationAction string
+	Options          string
 }
 
 // Value is a single cell. Null distinguishes SQL NULL from empty text.
@@ -136,7 +147,9 @@ type Result struct {
 	RowsAffected int64
 	Duration     time.Duration
 	Truncated    bool // row cap reached
-	Err          error
+	// Plan: a MongoDB explain, read for the plan view.
+	Plan *QueryPlan
+	Err  error
 }
 
 // SortDir is ascending or descending.

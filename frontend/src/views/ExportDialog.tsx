@@ -11,7 +11,7 @@ export type ExportSource = { table: TableRef; page: PageReq; columns: string[] }
 
 const FORMATS = [
   { id: 'csv', label: 'CSV', icon: FileSpreadsheet, desc: 'Spreadsheets & imports' },
-  { id: 'json', label: 'JSON', icon: Braces, desc: 'Array of objects' },
+  { id: 'json', label: 'JSON', icon: Braces, desc: 'Array of objects (documents)' },
   { id: 'sql', label: 'SQL', icon: Database, desc: 'INSERT statements' },
 ] as const
 
@@ -28,6 +28,8 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
   const [nullAsEmpty, setNullAsEmpty] = useState(false)
   const [batch, setBatch] = useState(100)
   const [ddl, setDdl] = useState(false)
+  const mongo = isMongo(session.connection.driver)
+  const [ejson, setEjson] = useState<'relaxed' | 'canonical'>('relaxed')
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJob(jobId)
   const target = useRef<SaveTarget | null>(null)
@@ -58,7 +60,7 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
       const j = await api.createJob(session.id, {
         kind: 'export-table', format, allRows, ...source,
         csv: { header, delimiter, quoteAlways, crlf, nullAsEmpty, decimalComma: false },
-        batchSize: batch, includeDDL: ddl,
+        batchSize: batch, includeDDL: ddl, ejson,
       })
       setJobId(j.id)
     } catch (e) {
@@ -106,6 +108,17 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
               <Switch checked={header} onChange={setHeader} label="Column names in first row" />
               <Switch checked={quoteAlways} onChange={setQuoteAlways} label="Quote every value" />
               <Switch checked={nullAsEmpty} onChange={setNullAsEmpty} label="Write NULL as empty" />
+            </div>
+          )}
+          {format === 'json' && mongo && (
+            <div className="mt-4">
+              <Field label="Extended JSON" hint={ejson === 'relaxed'
+                ? 'Reads like plain JSON; dates and ids keep their types. A small long reads back as an int.'
+                : 'Every value keeps its exact type, e.g. {"$numberInt": "1"}: for importing into MongoDB again.'}>
+                <Select value={ejson} aria-label="Extended JSON" onChange={(e) => setEjson(e.target.value as typeof ejson)}>
+                  <option value="relaxed">Relaxed</option><option value="canonical">Canonical</option>
+                </Select>
+              </Field>
             </div>
           )}
           {format === 'sql' && (

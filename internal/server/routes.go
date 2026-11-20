@@ -48,6 +48,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{sid}/objects", s.objects)
 	mux.HandleFunc("GET /api/sessions/{sid}/structure", s.structure)
 	mux.HandleFunc("GET /api/sessions/{sid}/definition", s.definition)
+	mux.HandleFunc("GET /api/sessions/{sid}/schema-analysis", s.schemaAnalysis)
 	mux.HandleFunc("POST /api/sessions/{sid}/rows", s.rows)
 	mux.HandleFunc("POST /api/sessions/{sid}/changes", s.changes)
 	mux.HandleFunc("POST /api/sessions/{sid}/columns", s.addColumn)
@@ -551,6 +552,9 @@ type indexDTO struct {
 	Primary    bool     `json:"primary"`
 	Type       string   `json:"type"`
 	Constraint bool     `json:"constraint"`
+	Orders     []string `json:"orders,omitempty"`
+	Options    string   `json:"options,omitempty"`
+	Hidden     bool     `json:"hidden,omitempty"`
 }
 
 type checkDTO struct {
@@ -564,6 +568,11 @@ type tableInfoDTO struct {
 	Collation     string     `json:"collation"`
 	AutoIncrement int64      `json:"autoIncrement"`
 	Checks        []checkDTO `json:"checks"`
+	// MongoDB
+	Validator        string `json:"validator,omitempty"`
+	ValidationLevel  string `json:"validationLevel,omitempty"`
+	ValidationAction string `json:"validationAction,omitempty"`
+	Options          string `json:"options,omitempty"`
 }
 
 func tableRef(r *http.Request) db.TableRef {
@@ -595,7 +604,7 @@ func (s *Server) structure(w http.ResponseWriter, r *http.Request) {
 	}
 	iout := make([]indexDTO, len(idx))
 	for i, x := range idx {
-		iout[i] = indexDTO{x.Name, nonNil(x.Columns), x.Unique, x.Primary, x.Type, x.Constraint}
+		iout[i] = indexDTO{x.Name, nonNil(x.Columns), x.Unique, x.Primary, x.Type, x.Constraint, x.Orders, x.Options, x.Hidden}
 	}
 	// Foreign keys and table settings are extras: missing privileges must
 	// not hide the table.
@@ -607,12 +616,32 @@ func (s *Server) structure(w http.ResponseWriter, r *http.Request) {
 	}
 	info := tableInfoDTO{Checks: []checkDTO{}}
 	if ti, err := se.c().TableInfo(r.Context(), ref); err == nil {
-		info = tableInfoDTO{ti.Comment, ti.Engine, ti.Collation, ti.AutoIncrement, []checkDTO{}}
+		info = tableInfoDTO{ti.Comment, ti.Engine, ti.Collation, ti.AutoIncrement, []checkDTO{},
+			ti.Validator, ti.ValidationLevel, ti.ValidationAction, ti.Options}
 		for _, ck := range ti.Checks {
 			info.Checks = append(info.Checks, checkDTO{ck.Name, ck.Expression})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"columns": cout, "indexes": iout, "foreignKeys": fout, "table": info})
+}
+
+// schemaAnalysis describes a MongoDB collection's fields from a sample.
+func (s *Server) schemaAnalysis(w http.ResponseWriter, r *http.Request) {
+	se, err := s.session(r)
+	if err != nil {
+		writeErr(w, 410, err)
+		return
+	}
+	n, _ := strconv.Atoi(r.URL.Query().Get("sample"))
+	if n <= 0 {
+		n = 1000 // as Compass
+	}
+	rep, err := se.c().AnalyzeSchema(r.Context(), tableRef(r), min(n, 100000))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, rep)
 }
 
 // alterTable previews (dryRun) or applies changes to a table's structure.
@@ -888,6 +917,8 @@ type resultDTO struct {
 	Ms           float64     `json:"ms"`
 	Truncated    bool        `json:"truncated"`
 	Error        *apiError   `json:"error,omitempty"`
+	// Plan: a MongoDB explain, summarized for the plan view.
+	Plan *db.QueryPlan `json:"plan,omitempty"`
 }
 
 func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
@@ -929,7 +960,7 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 	out := make([]resultDTO, len(results))
 	for i, res := range results {
 		d := resultDTO{Statement: res.Statement, RowsAffected: res.RowsAffected,
-			Ms: float64(res.Duration.Microseconds()) / 1000, Truncated: res.Truncated}
+			Ms: float64(res.Duration.Microseconds()) / 1000, Truncated: res.Truncated, Plan: res.Plan}
 		if res.Set != nil {
 			d.HasRows = true
 			d.Columns, d.Types, d.Rows = nonNil(res.Set.Columns), nonNil(res.Set.Types), rowsOut(res.Set.Rows)

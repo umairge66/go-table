@@ -11,7 +11,11 @@
 #   mssql    SQL Server     tidb      TiDB           (MySQL protocol)
 #   oracle   Oracle 23ai Free (~1.5 GB image)
 #   ch       ClickHouse     percona   Percona Server (MySQL)
-#   mongodb  MongoDB
+#   mongodb  MongoDB        mongors   MongoDB replica set (transactions)
+#            mongoshard  MongoDB sharded cluster: mongos, a config server
+#                        and two shards in one container
+#            mongotls    MongoDB that requires TLS, with a test CA and a
+#                        client certificate for X.509 login (needs openssl)
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
 set -euo pipefail
@@ -34,7 +38,7 @@ MONGODB_IMAGE=${MONGODB_IMAGE:-mongo:7}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch mongodb crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -73,6 +77,48 @@ has tidb && run tidb -p 127.0.0.1::4000 "$TIDB_IMAGE"
 has mssql && run mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=$MSSQL_PW -p 127.0.0.1::1433 "$MSSQL_IMAGE"
 has ch && run ch -e CLICKHOUSE_USER=gotable -e CLICKHOUSE_PASSWORD=$PW -e CLICKHOUSE_DB=gotable -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 -p 127.0.0.1::9000 "$CH_IMAGE"
 has mongodb && run mongodb -e MONGO_INITDB_ROOT_USERNAME=gotable -e MONGO_INITDB_ROOT_PASSWORD=$PW -p 127.0.0.1::27017 "$MONGODB_IMAGE"
+# A one-member replica set; without a user, as auth would need a key file.
+has mongors && run mongors -p 127.0.0.1::27017 "$MONGODB_IMAGE" --replSet rs0 --bind_ip_all
+# Every process listens on localhost: members only meet each other, and
+# GoTable talks to mongos alone.
+has mongoshard && run mongoshard -p 127.0.0.1::27017 --entrypoint bash "$MONGODB_IMAGE" -c '
+	set -e
+	sh=$(command -v mongosh || command -v mongo)
+	start() { mkdir -p /data/$1; mongod --dbpath /data/$1 --port $2 --replSet $1 ${3:-} --fork --logpath /data/$1.log >/dev/null; }
+	init() { until $sh --quiet --port $2 --eval "rs.initiate({ _id: \"$1\", ${3:-} members: [{ _id: 0, host: \"localhost:$2\" }] })"; do sleep 1; done; }
+	start cfg 27019 --configsvr; start sh0 27020 --shardsvr; start sh1 27021 --shardsvr
+	init cfg 27019 "configsvr: true,"; init sh0 27020; init sh1 27021
+	mongos --configdb cfg/localhost:27019 --port 27018 --bind_ip localhost --fork --logpath /data/mongos.log >/dev/null
+	until $sh --quiet --port 27018 --eval "sh.addShard(\"sh0/localhost:27020\"); sh.addShard(\"sh1/localhost:27021\")"; do sleep 1; done
+	touch /data/ready
+	# The published port: mongos again, on every address.
+	exec mongos --configdb cfg/localhost:27019 --port 27017 --bind_ip_all'
+if has mongotls; then
+	# A CA of its own, a server certificate for localhost and 127.0.0.1, and a
+	# client one whose subject is a user in $external. Copied in rather than
+	# mounted, so file ownership and SELinux labels don't matter.
+	CERTS=$(mktemp -d)
+	trap 'cleanup; [[ "${KEEP:-}" == 1 ]] || rm -rf "$CERTS"' EXIT # the files outlive KEEP=1 containers
+	(
+		cd "$CERTS"
+		ossl() { openssl "$@" 2>/dev/null; }
+		ossl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=GoTable Test CA" -keyout ca.key -out ca.pem
+		ossl req -newkey rsa:2048 -nodes -subj "/CN=localhost/O=GoTable Server" -keyout server.key -out server.csr
+		printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' >server.ext
+		ossl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 -extfile server.ext -out server.crt
+		cat server.crt server.key >server.pem
+		ossl req -newkey rsa:2048 -nodes -subj "/CN=gotable-client/O=GoTable Client" -keyout client.key -out client.csr
+		ossl x509 -req -in client.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 -out client.crt
+		cat client.crt client.key >client.pem
+		chmod 644 ./*
+		chmod 755 . # docker cp keeps the mode, and mongod is not root
+	)
+	"$DOCKER" create --name gotable-mongotls -e MONGO_INITDB_ROOT_USERNAME=gotable -e MONGO_INITDB_ROOT_PASSWORD=$PW \
+		-p 127.0.0.1::27017 "$MONGODB_IMAGE" --tlsMode requireTLS --tlsCertificateKeyFile /certs/server.pem \
+		--tlsCAFile /certs/ca.pem --tlsAllowConnectionsWithoutCertificates >/dev/null
+	"$DOCKER" cp "$CERTS/." gotable-mongotls:/certs
+	"$DOCKER" start gotable-mongotls >/dev/null
+fi
 has ts && run ts -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$TS_IMAGE"
 has percona && run percona -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$PERCONA_IMAGE"
 has s2 && run s2 -e ROOT_PASSWORD=$PW -p 127.0.0.1::3306 "$S2_IMAGE"
@@ -119,8 +165,27 @@ if has ch; then
 	export_env CH "$(port ch 9000)" gotable $PW gotable
 fi
 if has mongodb; then
-	wait_ready mongodb in_container mongodb mongosh --quiet -u gotable -p $PW --eval 'db.runCommand({ ping: 1 })'
+	# Images before 6.0 have only the legacy mongo shell.
+	mongo_ping() { in_container mongodb sh -c "\$(command -v mongosh || command -v mongo) --quiet -u gotable -p $PW --eval 'db.runCommand({ ping: 1 })'"; }
+	wait_ready mongodb mongo_ping
 	export_env MONGODB "$(port mongodb 27017)" gotable $PW gotable
+fi
+if has mongors; then
+	mongors_init() { in_container mongors sh -c "\$(command -v mongosh || command -v mongo) --quiet --eval 'try { rs.status().ok || rs.initiate() } catch (e) { rs.initiate() }; db.isMaster().ismaster || quit(1)'"; }
+	wait_ready mongors mongors_init
+	export_env MONGORS "$(port mongors 27017)" "" "" gotable
+	export GOTABLE_TEST_MONGORS_OPTIONS=directConnection=true # the member calls itself by the container's name
+fi
+if has mongoshard; then
+	wait_ready mongoshard in_container mongoshard sh -c 'test -e /data/ready && $(command -v mongosh || command -v mongo) --quiet --eval "db.adminCommand({ listShards: 1 }).shards.length == 2 || quit(1)"'
+	export_env MONGOSHARD "$(port mongoshard 27017)" "" "" gotable
+fi
+if has mongotls; then
+	mongotls_sh() { in_container mongotls sh -c "\$(command -v mongosh || command -v mongo) --quiet --tls --host localhost --tlsCAFile /certs/ca.pem -u gotable -p $PW --eval '$1'"; }
+	wait_ready mongotls mongotls_sh 'db.runCommand({ ping: 1 })'
+	mongotls_sh 'db.getSiblingDB("$external").runCommand({ createUser: "O=GoTable Client,CN=gotable-client", roles: [{ role: "root", db: "admin" }] })' >/dev/null
+	export_env MONGOTLS "$(port mongotls 27017)" gotable $PW gotable
+	export GOTABLE_TEST_MONGOTLS_CA=$CERTS/ca.pem GOTABLE_TEST_MONGOTLS_CLIENT=$CERTS/client.pem
 fi
 if has ts; then
 	wait_ready ts in_container ts pg_isready -U postgres -h 127.0.0.1

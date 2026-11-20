@@ -31,6 +31,11 @@ const (
 	AlterTableComment   AlterKind = "table_comment"
 	AlterTableOptions   AlterKind = "table_options"
 	AlterTruncate       AlterKind = "truncate"
+	// MongoDB: hide an index from the planner (Name), or show it again, and
+	// set a collection's validation rules.
+	AlterHideIndex     AlterKind = "hide_index"
+	AlterUnhideIndex   AlterKind = "unhide_index"
+	AlterSetValidation AlterKind = "set_validation"
 )
 
 // AlterOp is one change. Which fields apply depends on Kind.
@@ -51,6 +56,29 @@ type AlterOp struct {
 	Columns []string      `json:"columns,omitempty"`
 	Comment string        `json:"comment,omitempty"`
 	Options *TableOptions `json:"options,omitempty"`
+	// Validation: MongoDB's validator and how it applies.
+	Validation *ValidationDef `json:"validation,omitempty"`
+}
+
+// ValidationDef is a MongoDB collection's validation: a query document,
+// usually { $jsonSchema: … }, which documents must match.
+type ValidationDef struct {
+	// Validator is shell text; empty removes the rules.
+	Validator string `json:"validator"`
+	Level     string `json:"level"`  // strict, moderate or off
+	Action    string `json:"action"` // error or warn
+}
+
+// MongoIndexOptions are what a MongoDB index can be besides its keys.
+type MongoIndexOptions struct {
+	// ExpireAfterSeconds makes a TTL index: documents go that long after
+	// the date in the field.
+	ExpireAfterSeconds *int64 `json:"expireAfterSeconds,omitempty"`
+	Sparse             bool   `json:"sparse,omitempty"`
+	Hidden             bool   `json:"hidden,omitempty"`
+	// Partial is a query document (shell text): only matching documents
+	// are indexed.
+	Partial string `json:"partial,omitempty"`
 }
 
 // IndexDef describes an index to create.
@@ -63,6 +91,10 @@ type IndexDef struct {
 	// Method is the index method: btree or hash (MySQL/MariaDB); btree,
 	// hash, gin, gist, brin or spgist (PostgreSQL).
 	Method string `json:"method"`
+	// Orders: MongoDB's key per column, in order: 1, -1, text, 2dsphere, 2d
+	// or hashed. Missing ones are 1.
+	Orders []string           `json:"orders,omitempty"`
+	Mongo  *MongoIndexOptions `json:"mongo,omitempty"`
 }
 
 // ForeignKeyDef describes a foreign key to add.

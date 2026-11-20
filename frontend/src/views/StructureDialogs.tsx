@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight, Plus, X } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
-import { Button, Field, IconButton, Input, Modal, Select, errorParts, useToast } from '../components/ui'
+import { Button, Field, IconButton, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
 import { driverInfo, family, features, isMongo, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
@@ -157,22 +157,38 @@ function ColumnPicker({ columns, value, onChange, label }: { columns: Column[]; 
 }
 
 
+const MONGO_ORDERS: [string, string][] = [['1', 'Ascending'], ['-1', 'Descending'], ['text', 'Text'], ['2dsphere', '2dsphere (geo)'], ['2d', '2d (flat)'], ['hashed', 'Hashed']]
+
 export function IndexDialog({ session, table, columns, initial, onClose, onDone }: {
   session: SessionInfo; table: TableRef; columns: Column[]
   initial?: { columns: string[]; kind?: 'index' | 'unique' | 'fulltext' }
   onClose: () => void; onDone: () => void
 }) {
   const driver = session.connection.driver
+  const mongo = isMongo(driver)
   const [name, setName] = useState('')
   const [kind, setKind] = useState<'index' | 'unique' | 'fulltext' | 'spatial'>(initial?.kind ?? 'index')
   const [method, setMethod] = useState('')
   const [cols, setCols] = useState<string[]>(initial?.columns ?? [])
+  // MongoDB: a key per field, and the index options.
+  const [orders, setOrders] = useState<Record<string, string>>({})
+  const [ttl, setTtl] = useState('')
+  const [partial, setPartial] = useState('')
+  const [sparse, setSparse] = useState(false)
+  const [hidden, setHidden] = useState(false)
   const special = kind === 'fulltext' || kind === 'spatial'
   const ops: AlterOp[] | null = cols.length ? [{ kind: 'add_index', index: {
-    name: name.trim(), columns: cols, unique: kind === 'unique', kind: special ? kind : '', method: special ? '' : method } }] : null
+    name: name.trim(), columns: cols, unique: kind === 'unique', kind: special ? kind : '', method: special ? '' : method,
+    ...(mongo ? {
+      orders: cols.map((c) => orders[c] ?? '1'),
+      mongo: { expireAfterSeconds: ttl.trim() === '' ? undefined : Number(ttl), partial: partial.trim() || undefined, sparse, hidden },
+    } : {}),
+  } }] : null
+  // A wildcard index covers every field, or every field under one.
+  const pickable = mongo ? [...columns, { name: '$**' } as Column] : columns
   return (
-    <AlterDialog session={session} table={table} title="Add index" submitLabel="Add index" done="Index added" ops={ops} incomplete="Choose the columns to index." onClose={onClose} onDone={onDone}>
-      <div className="grid grid-cols-[1fr_150px_130px] gap-3">
+    <AlterDialog session={session} table={table} title="Add index" submitLabel="Add index" done="Index added" ops={ops} incomplete="Choose the columns to index." onClose={onClose} onDone={onDone} width={mongo ? 680 : 620}>
+      <div className={clsx('grid gap-3', mongo ? 'grid-cols-[1fr_150px]' : 'grid-cols-[1fr_150px_130px]')}>
         <Field label="Name"><Input autoFocus value={name} placeholder="automatic" aria-label="Index name" onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="Kind">
           <Select value={kind} aria-label="Index kind" onChange={(e) => setKind(e.target.value as typeof kind)}>
@@ -191,7 +207,36 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
           </Field>
         )}
       </div>
-      <Field label="Columns (in order)"><ColumnPicker columns={columns} value={cols} onChange={setCols} label="Index columns" /></Field>
+      <Field label={mongo ? 'Fields (in order; $** is every field)' : 'Columns (in order)'}><ColumnPicker columns={pickable} value={cols} onChange={setCols} label="Index columns" /></Field>
+      {mongo && cols.length > 0 && (
+        <Field label="Keys">
+          <div className="space-y-1.5" role="group" aria-label="Index keys">
+            {cols.map((c, i) => (
+              <div key={c} className="flex items-center gap-2">
+                <span className="w-5 text-right text-[12px] text-faint">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{c}</span>
+                <Select className="w-44" value={orders[c] ?? '1'} aria-label={`Key of ${c}`} onChange={(e) => setOrders((o) => ({ ...o, [c]: e.target.value }))}>
+                  {MONGO_ORDERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </Select>
+              </div>
+            ))}
+          </div>
+        </Field>
+      )}
+      {mongo && (
+        <div className="grid grid-cols-[160px_1fr] gap-3">
+          <Field label="Expire after (seconds)" hint="A TTL index: on one date field.">
+            <Input inputMode="numeric" value={ttl} placeholder="never" aria-label="Expire after seconds" onChange={(e) => setTtl(e.target.value.replace(/\D/g, ''))} />
+          </Field>
+          <Field label="Only documents matching" hint="A partial index, e.g. { age: { $gte: 18 } }.">
+            <Input mono value={partial} placeholder="all documents" aria-label="Partial filter" onChange={(e) => setPartial(e.target.value)} />
+          </Field>
+          <div className="col-span-2 flex gap-6">
+            <Switch checked={sparse} onChange={setSparse} label={<span className="text-[12.5px]">Sparse <span className="text-muted">— skip documents without the field</span></span>} />
+            <Switch checked={hidden} onChange={setHidden} label={<span className="text-[12.5px]">Hidden <span className="text-muted">— built, but not used by queries yet</span></span>} />
+          </div>
+        </div>
+      )}
     </AlterDialog>
   )
 }

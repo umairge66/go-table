@@ -273,6 +273,12 @@ func TestMongoDBDriver(t *testing.T) {
 	if err != nil || !c.SRV || c.Host != "cluster0.example.net" || c.Port != 0 || c.SSLMode != "require" {
 		t.Fatalf("%+v %v", c, err)
 	}
+	// Atlas's form: its TXT record says authSource=admin, which a database
+	// in the path must not override.
+	c, _, err = ParseURL("mongodb+srv://u:p@cluster0.example.net/shop?retryWrites=true")
+	if err != nil || c.DBName != "shop" || c.Options != "retryWrites=true" {
+		t.Fatalf("%+v %v", c, err)
+	}
 	c, _, err = ParseURL("mongodb://localhost")
 	if err != nil || c.Host != "localhost" || c.Port != 27017 || c.User != "" || c.Options != "" {
 		t.Fatalf("%+v %v", c, err)

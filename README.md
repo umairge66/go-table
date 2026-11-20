@@ -35,7 +35,7 @@ inspector and a Data / Structure / Definition switch.
 | SQL Server (2017+, Azure SQL) | schemas of the connected database; other databases open next to it. Comments are `MS_Description` properties |
 | DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
-| MongoDB (4.4+, Atlas; tested on 7) | a document database: see [below](#mongodb) |
+| MongoDB (4.4+, Atlas; tested on 4.4–8.0) | a document database: see [below](#mongodb) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -50,7 +50,7 @@ A collection opens like a table, with each top-level field as a column:
 - **Columns** come from the collection's first 500 documents, and a page of
   rows adds any field they missed. A field's type is shown as MongoDB names
   it, or as `int|string` when documents differ. Nested documents and arrays
-  are one cell of JSON.
+  are one cell of JSON; editing one keeps the types of the values inside it.
 - **Editing** keeps types: text typed into a cell is read as the type the
   field holds, and text that doesn't fit is refused (spell out another type
   with `NumberLong("5")`, `ISODate("2024-03-15")`…). Review & commit shows
@@ -69,16 +69,36 @@ A collection opens like a table, with each top-level field as a column:
   `show collections` and `use`. Results of a plain `find()` can be edited in
   place. Only literal values are read: GoTable doesn't run JavaScript, so
   variables, functions and loops aren't available.
-- **Structure**: rename a field or remove it from every document, add and drop
-  indexes, rename or empty the collection. There are no foreign keys, CHECKs
-  or column definitions.
-- **Export and import**: a table as CSV or JSON; a database as a script of
+- **Explain**: the Explain button (or `.explain()` / `db.coll.explain()…`)
+  draws the query plan of a `find`, `aggregate`, `count` or `distinct`: the
+  stages, the indexes used, documents and keys examined, time, and warnings
+  for collection scans and in-memory sorts, per shard on a sharded cluster.
+- **Structure**: rename a field or remove it from every document, rename or
+  empty the collection. Indexes take a key per field (ascending, descending,
+  text, 2dsphere, 2d, hashed, or `$**` for every field) and can be TTL,
+  partial, sparse or hidden; a hidden index can be shown to the planner
+  again. **Validation** rules (a `$jsonSchema` or a query) are edited with
+  their level and action. There are no foreign keys, CHECKs or column
+  definitions.
+- **New collection**: regular, capped (a fixed size), time series (5.0+) or
+  clustered (5.3+), with documents that expire.
+- **Schema**: from a random sample, every field (nested ones and array
+  elements too) with its types, how often it is there, its range, and its
+  most common values.
+- **Aggregations**: build a pipeline stage by stage, each showing the first
+  documents it passes on; `$out` and `$merge` aren't previewed. Open it in
+  the query editor to run, explain or save it.
+- **Export and import**: a table as CSV, or as JSON documents in relaxed or
+  canonical Extended JSON (as Compass exports); a database as a script of
   shell commands (collections, indexes, views and documents, every value
-  keeping its exact type) that imports into any database. CSV imports take the
-  file's own headers as new fields.
+  keeping its exact type) that imports into any database. Imports take JSON
+  documents (an array, or one a line as `mongoexport` writes) keeping their
+  types, optionally skipping the ones the server refuses, or CSV, whose own
+  headers become new fields.
 - **Connecting**: no user is needed on a server without authentication; a user
-  is looked up in `admin` unless `authSource` says otherwise. `mongodb://` and
-  `mongodb+srv://` URLs can be pasted; the Options field takes driver options
+  is looked up in `admin` unless `authSource` says otherwise (with
+  `mongodb+srv://`, as in the shell: `authSource`, then the DNS TXT record,
+  then the database). `mongodb://` and `mongodb+srv://` URLs can be pasted; the Options field takes driver options
   such as `replicaSet=rs0`, and Host a list such as `a:27017,b:27017`. Over an
   SSH tunnel GoTable talks to that one member. A database appears with its first
   collection: run `use mydb`, then `db.createCollection("first")`.
@@ -298,6 +318,11 @@ make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
 ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
+ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
+                                  # MongoDB standalone, replica set, sharded cluster, TLS + X.509
+scripts/test-mongo-srv.sh         # mongodb+srv:// with SRV/TXT records from a DNS container
+GOTABLE_TEST_MONGOATLAS_URL='mongodb+srv://user:pw@cluster0.….mongodb.net' go test -run TestMongoDB ./internal/db/
+                                  # the same MongoDB tests on Atlas (uses, then drops, gt_test and gt_copy)
 make e2e        # Playwright drives the real binary in headless Chrome
 GOTABLE_E2E_PG=postgres://user:pw@host/db make e2e   # adds a Postgres scenario
 GOTABLE_E2E_COMPAT="sqlserver://… clickhouse://… duckdb:///tmp/x.duckdb" make e2e  # one UI scenario per URL
@@ -321,7 +346,8 @@ GitHub Actions (`.github/workflows/`):
 - **CI** — on every push and pull request, as parallel jobs: TypeScript
   and unit tests; `go vet`; the Go tests against real PostgreSQL 15, MySQL
   8.4, MariaDB 11, SQL Server 2022, ClickHouse, MongoDB 7 and Oracle 23ai (service containers) and
-  DuckDB/SQLite files; and the end-to-end tests in Chrome, including the
+  DuckDB/SQLite files; MongoDB 4.4 and 8.0 as a standalone server, a replica
+  set, a sharded cluster, with TLS and by `mongodb+srv://`; and the end-to-end tests in Chrome, including the
   PostgreSQL scenario (`scripts/e2e-demo.sql`), MongoDB's, and one per SQL
   Server, ClickHouse, MongoDB and DuckDB. Each job keeps its own Go build cache.
 - **Build** — on every push to `main`: the `.deb`, `.rpm`, AppImage,

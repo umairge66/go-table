@@ -393,6 +393,8 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		j, err = s.importSQLJob(se, in)
 	case "import-csv":
 		j, err = s.importCSVJob(se, in)
+	case "import-json":
+		j, err = s.importJSONJob(se, in)
 	default:
 		err = fmt.Errorf("unknown job kind %q", in.Kind)
 	}
@@ -419,8 +421,10 @@ type jobRequest struct {
 		NullAsEmpty  bool   `json:"nullAsEmpty"`
 		DecimalComma bool   `json:"decimalComma"`
 	} `json:"csv"`
-	BatchSize  int  `json:"batchSize"`
-	IncludeDDL bool `json:"includeDDL"`
+	// EJSON: a MongoDB JSON export's Extended JSON, relaxed (default) or canonical.
+	EJSON      string `json:"ejson"`
+	BatchSize  int    `json:"batchSize"`
+	IncludeDDL bool   `json:"includeDDL"`
 	// Database export.
 	Schema    string      `json:"schema"`
 	Objects   []objectDTO `json:"objects"`
@@ -493,6 +497,15 @@ func (s *Server) exportTableJob(se *session, in jobRequest) (*Job, error) {
 		}
 		defer f.Close()
 		cw := &countingWriter{w: f}
+		// MongoDB's JSON is the documents themselves, as Compass exports them.
+		if in.Format == "json" && c.Config.Driver.Family() == model.DriverMongoDB {
+			j.update(func(j *Job) { j.Phase, j.Total = "Exporting "+ref.Name, total })
+			if err := c.ExportJSON(ctx, cw, ref, page, in.Columns, in.EJSON == "canonical", func() { j.done.Add(1) }); err != nil {
+				return err
+			}
+			j.update(func(j *Job) { j.Rows, j.Size, j.Phase = j.done.Load(), cw.n, "Finished" })
+			return nil
+		}
 		var wr export.Writer
 		switch in.Format {
 		case "csv":
@@ -703,6 +716,39 @@ func (s *Server) importCSVJob(se *session, in jobRequest) (*Job, error) {
 		if err != nil {
 			j.update(func(j *Job) { j.Rows = 0 }) // rolled back
 		}
+		return err
+	})
+	if in.Source.UploadID != "" {
+		up := s.uploadPath(in.Source.UploadID)
+		j.update(func(j *Job) { j.cleanup = append(j.cleanup, up) })
+	}
+	return j, nil
+}
+
+// importJSONJob reads a JSON file of documents into a MongoDB collection.
+func (s *Server) importJSONJob(se *session, in jobRequest) (*Job, error) {
+	if in.Table == nil {
+		return nil, errors.New("no collection given")
+	}
+	if se.c().Config.Driver.Family() != model.DriverMongoDB {
+		return nil, errors.New("JSON documents import into MongoDB; for other databases import CSV or SQL")
+	}
+	f, size, name, err := s.open(in.Source)
+	if err != nil {
+		return nil, err
+	}
+	ref := db.TableRef{Schema: in.Table.Schema, Name: in.Table.Name}
+	o := db.JSONImportOptions{Truncate: in.Truncate, ContinueOnError: in.ContinueOnError}
+	j := s.startJob(se, in.Schema, "import-json", "Import "+name+" into "+ref.Name, "bytes", func(ctx context.Context, c *db.Conn, j *Job) error {
+		defer f.Close()
+		j.update(func(j *Job) { j.Phase, j.Total = "Inserting documents into "+ref.Name, size })
+		res, err := c.ImportJSON(ctx, countingReader{f, &j.done}, ref, o, func(r db.JSONImportResult) {
+			j.update(func(j *Job) { j.Rows = r.Inserted })
+		})
+		j.update(func(j *Job) {
+			j.Rows = res.Inserted
+			j.Failed, j.Errors = res.Failed, append(j.Errors[:0], res.Errors...)
+		})
 		return err
 	})
 	if in.Source.UploadID != "" {

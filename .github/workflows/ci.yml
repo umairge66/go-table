@@ -201,6 +201,40 @@ jobs:
       - name: Go tests (Oracle)
         run: go test -race -count=1 -run 'Oracle' ./internal/db/
 
+  mongodb:
+    name: MongoDB ${{ matrix.version }} topologies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The oldest and newest supported servers, each as a standalone server,
+    # a replica set, a sharded cluster and with TLS; then mongodb+srv:// with
+    # its own DNS server. MongoDB 7 standalone also runs in the main job.
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["4.4", "8.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-mongodb-${{ hashFiles('go.sum') }}
+          restore-keys: go-mongodb-
+      - name: Go tests (standalone, replica set, sharded, TLS, SSH)
+        env:
+          MONGODB_IMAGE: mongo:${{ matrix.version }}
+          ENGINES: mongodb mongors mongoshard mongotls
+        run: scripts/test-dbs.sh -race -run 'Mongo' ./internal/db/ ./internal/sshtunnel/
+      - name: Go tests (mongodb+srv://)
+        env:
+          MONGODB_IMAGE: mongo:${{ matrix.version }}
+        run: scripts/test-mongo-srv.sh
+
   e2e:
     name: End-to-end tests
     runs-on: ubuntu-24.04

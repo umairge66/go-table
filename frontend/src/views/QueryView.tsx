@@ -1,9 +1,10 @@
 import clsx from 'clsx'
-import { AlertCircle, Bookmark, CheckCircle2, Copy, Download, FolderOpen, Lock, Pencil, Play, Save, Sparkles, Square, StepForward, Trash2, Undo2 } from 'lucide-react'
+import { AlertCircle, Bookmark, CheckCircle2, Copy, Download, FolderOpen, Gauge, Lock, Pencil, Play, Save, Sparkles, Square, StepForward, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type TableRef } from '../api'
 import { useConfirm } from '../components/Confirm'
 import { Grid } from '../components/Grid'
+import { PlanView } from '../components/PlanView'
 import { SqlEditor, type SqlEditorHandle } from '../components/SqlEditor'
 import { Button, DragHandle, IconButton, Modal, Select, errorParts, useMenu, useResizable, useToast } from '../components/ui'
 import { HISTORY_EVENT, notify } from './SidebarPanels'
@@ -14,7 +15,7 @@ import { cellAt, emptyEdits, pendingCount, setCell, toChanges, toggleDelete, typ
 import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
 import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo } from '../types'
-import { mongoSourceTable } from '../lib/mongoShell'
+import { explainStatement, mongoSourceTable } from '../lib/mongoShell'
 import { fmt } from './DataView'
 
 const LIMITS = [100, 1000, 10000, 0]
@@ -114,6 +115,14 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   }, [autoRun]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runCurrent = () => run(editor.current?.current() ?? '')
+  const mongo = isMongo(session.connection.driver)
+  // Explain runs the statement under the cursor through explain("executionStats").
+  const explain = () => {
+    const text = editor.current?.current() ?? ''
+    const q = explainStatement(text)
+    if (q) run(q)
+    else toast('error', 'Nothing to explain here', 'Put the cursor in a find, aggregate, count or distinct command.')
+  }
   const runAll = () => run(editor.current?.value() ?? '')
   const stop = () => { if (running) api.cancel(session.id, running) }
   const saveAs = async (name: string, kind: 'sql' | 'csv' | 'json', text: () => string) => {
@@ -134,6 +143,10 @@ export function QueryView({ session, schema, active, initialSql, completions, on
 
   const sets = useMemo(() => (results ?? []).map((r, i) => ({ r, i })).filter((x) => x.r.hasRows), [results])
   const current = tab > 0 ? sets[tab - 1]?.r : undefined
+  // A plan is drawn; Documents shows explain's own output instead.
+  const [raw, setRaw] = useState(false)
+  useEffect(() => setRaw(false), [current])
+  const plan = current?.plan && !raw ? current.plan : undefined
   const failed = results?.find((r) => r.error)
 
   // A result of a plain SELECT from one table (with its primary key) can be
@@ -235,6 +248,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-line px-2">
         <Button size="sm" variant="primary" icon={<Play className="size-3.5" />} onClick={runCurrent} disabled={!!running} kbd="Ctrl ↵">Run</Button>
         <Button size="sm" variant="ghost" icon={<StepForward className="size-3.5" />} onClick={runAll} disabled={!!running} title="Run all (Ctrl+Shift+Enter)">Run all</Button>
+        {mongo && <Button size="sm" variant="ghost" icon={<Gauge className="size-3.5" />} onClick={explain} disabled={!!running} title="Show how the server runs the command under the cursor: indexes, documents examined, time">Explain</Button>}
         <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={beautify} title="Beautify the selection, or everything (Ctrl+I)">Format</Button>
         {running && <Button size="sm" variant="danger" icon={<Square className="size-3 fill-current" />} onClick={stop}>Stop · {(elapsed / 1000).toFixed(1)}s</Button>}
         <div className="flex-1" />
@@ -269,11 +283,19 @@ export function QueryView({ session, schema, active, initialSql, completions, on
           </ResultTab>
           {sets.map((s, n) => (
             <ResultTab key={s.i} active={tab === n + 1} onClick={() => showTab(n + 1)}>
-              Result {n + 1} <span className="text-faint">{fmt(s.r.rows?.length ?? 0)}</span>
+              {s.r.plan ? <><Gauge className="size-3.5" /> Plan {sets.filter((x) => x.r.plan).length > 1 ? n + 1 : ''}</> : <>Result {n + 1} <span className="text-faint">{fmt(s.r.rows?.length ?? 0)}</span></>}
             </ResultTab>
           ))}
           <div className="flex-1" />
-          {current && (
+          {current?.plan && (
+            <div className="mr-1 flex rounded-md border border-line text-[12px]" role="group" aria-label="Plan or documents">
+              {(['Plan', 'Raw output'] as const).map((l, i) => (
+                <button key={l} aria-pressed={raw === (i === 1)} onClick={() => setRaw(i === 1)}
+                  className={clsx('h-6 px-2', raw === (i === 1) ? 'bg-panel font-medium text-fg' : 'text-muted hover:text-fg')}>{l}</button>
+              ))}
+            </div>
+          )}
+          {current && !plan && (
             <>
               {editable && (target
                 ? <span className="flex items-center gap-1 text-[12px] text-muted" data-testid="result-editable"><Pencil className="size-3" /> Editable · {target.table.name}</span>
@@ -294,7 +316,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
           </div>
         )}
         <div className="min-h-0 flex-1">
-          {current?.columns ? (
+          {plan ? <PlanView plan={plan} /> : current?.columns ? (
             <Grid key={`${runKey}-${tab}`} columns={current.columns.map((c, i) => {
               const col = target?.cols[i]
               return { name: c, type: col?.type ?? current.types?.[i], pk: target?.pk.includes(i), edit: col && cellKind(col.type, col.values, session.connection.driver), nullable: col?.nullable }

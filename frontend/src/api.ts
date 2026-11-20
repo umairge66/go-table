@@ -85,11 +85,22 @@ export type AlterOp =
   | { kind: 'table_comment'; comment: string }
   | { kind: 'table_options'; options: { engine: string; collation: string; autoIncrement: number; convert: boolean } }
   | { kind: 'truncate' }
-export interface IndexDef { name: string; columns: string[]; unique: boolean; kind: '' | 'fulltext' | 'spatial'; method: string }
+  | { kind: 'hide_index' | 'unhide_index'; name: string }
+  | { kind: 'set_validation'; validation: { validator: string; level: string; action: string } }
+export interface IndexDef {
+  name: string; columns: string[]; unique: boolean; kind: '' | 'fulltext' | 'spatial'; method: string
+  /** MongoDB: each column's key (1, -1, text, 2dsphere, 2d, hashed) and the index options. */
+  orders?: string[]
+  mongo?: { expireAfterSeconds?: number; sparse?: boolean; hidden?: boolean; partial?: string }
+}
 export interface ForeignKeyDef { name: string; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
 
 export interface NewColumn extends ColumnDef { primaryKey: boolean; autoIncrement: boolean; index?: '' | 'unique' | 'index' | 'fulltext' }
-export interface NewTable { name: string; columns: NewColumn[]; comment: string; engine?: string; charset?: string; collation?: string; strict?: boolean }
+export interface NewTable {
+  name: string; columns: NewColumn[]; comment: string; engine?: string; charset?: string; collation?: string; strict?: boolean
+  /** mongo: how a MongoDB collection is made (see NewCollectionOptions in internal/db/create.go). */
+  mongo?: { capped?: boolean; sizeBytes?: number; maxDocs?: number; timeField?: string; metaField?: string; granularity?: string; clustered?: boolean; expireAfterSeconds?: number }
+}
 export interface TypeInfo {
   customTypes: string[]; collations: string[]; charsets: string[]; engines: string[]
   defaultEngine: string; defaultCharset: string; defaultCollation: string; strict: boolean
@@ -127,6 +138,7 @@ export const api = {
   useSchema: (sid: string, schema: string) => call<{ schema: string }>('POST', `/api/sessions/${sid}/schema`, { schema }),
   objects: (sid: string, schema: string) => call<DbObject[]>('GET', `/api/sessions/${sid}/objects?${q({ schema })}`),
   structure: (sid: string, t: TableRef) => call<{ columns: Column[]; indexes: Index[]; foreignKeys: ForeignRef[]; table: TableInfo }>('GET', `/api/sessions/${sid}/structure?${q({ schema: t.schema, table: t.name })}`),
+  schemaAnalysis: (sid: string, t: TableRef, sample: number) => call<SchemaReport>('GET', `/api/sessions/${sid}/schema-analysis?${q({ schema: t.schema, table: t.name, sample: String(sample) })}`),
   definition: (sid: string, t: TableRef, kind: string) => call<{ ddl: string }>('GET', `/api/sessions/${sid}/definition?${q({ schema: t.schema, table: t.name, kind })}`),
   rows: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal) =>
     call<RowsResult>('POST', `/api/sessions/${sid}/rows`, { table, page, columns }, signal),
@@ -177,4 +189,14 @@ export const api = {
     })
   },
 
+}
+
+/** SchemaReport: a MongoDB collection's fields, from a sample (see internal/db/mongo_schema.go). */
+export interface SchemaReport { sampled: number; total: number; fields: FieldReport[] }
+export interface FieldReport {
+  path: string; count: number; of: number
+  types: { type: string; count: number }[]
+  min?: string; max?: string
+  top?: { value: string; count: number }[]
+  distinct: number; unique: boolean
 }
