@@ -37,7 +37,9 @@ jobs:
           - target: windows
             os: ubuntu-22.04
           - target: macos
-            os: macos-14
+            # GitHub retires old macOS images (macos-14 was refused); the app
+            # still targets macOS 11+ (MACOSX_DEPLOYMENT_TARGET in package.sh).
+            os: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
