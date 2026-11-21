@@ -296,7 +296,9 @@ func TestApplyFilesAndApps(t *testing.T) {
 	os.WriteFile(exe, []byte("old"), 0o755)
 	os.Chmod(ro, 0o555)
 	defer os.Chmod(ro, 0o755)
-	if os.Getuid() != 0 {
+	// Root writes anywhere; Windows ignores a folder's read-only attribute
+	// (and the AppImage is Linux's).
+	if os.Getuid() != 0 && runtime.GOOS != "windows" {
 		dl := filepath.Join(dir, "AppImage-download")
 		if _, err := Apply(Install{Kind: KindAppImage, Path: exe}, dl, "v0.7.0"); err == nil || !strings.Contains(err.Error(), "can't write to") {
 			t.Fatal(err)
