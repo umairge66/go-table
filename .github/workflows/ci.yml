@@ -116,10 +116,11 @@ jobs:
       - name: Run them
         shell: pwsh
         run: |
+          # Options are quoted: PowerShell splits a bare -test.v at the dot.
           $failed = @()
           foreach ($t in Get-ChildItem tests\*.test.exe) {
             Write-Host "== $($t.Name)"
-            $out = & $t.FullName -test.v -test.timeout 10m 2>&1 | ForEach-Object { "$_" }
+            $out = & $t.FullName '-test.v' '-test.timeout=10m' 2>&1 | ForEach-Object { "$_" }
             $code = $LASTEXITCODE
             $out | Where-Object { $_ -match '^\s*--- (PASS|FAIL|SKIP)' } | ForEach-Object { Write-Host $_ }
             if ($code -ne 0) {
@@ -133,7 +134,7 @@ jobs:
           }
           if ($failed) { Write-Error "failed: $($failed -join ', ')"; exit 1 }
           # DuckDB must have run, not been left out of the build.
-          $out = & tests\db.test.exe -test.run '^TestDuckDB$' -test.v
+          $out = & tests\db.test.exe '-test.run=^TestDuckDB$' '-test.v'
           if (-not ($out -match '^--- PASS: TestDuckDB ')) { $out; Write-Error "TestDuckDB didn't run on Windows"; exit 1 }
 
   go:
