@@ -14,7 +14,7 @@ import { formatSQL } from '../lib/format'
 import { cellAt, emptyEdits, pendingCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
-import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo } from '../types'
+import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
 import { explainStatement, mongoSourceTable } from '../lib/mongoShell'
 import { FONT_SIZES, getSettings, useSettings } from '../lib/settings'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
@@ -171,7 +171,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     try {
       editor.current?.transform((text) => formatSQL(text, session.connection.driver))
     } catch (e) {
-      toast('error', isMongo(session.connection.driver) ? "Couldn't format these commands" : "Couldn't format this SQL", `Fix the syntax error first. ${(e as Error).message.split('\n')[0]}`)
+      toast('error', usesCommands(session.connection.driver) ? "Couldn't format these commands" : "Couldn't format this SQL", `Fix the syntax error first. ${(e as Error).message.split('\n')[0]}`)
     }
   }
 
@@ -198,6 +198,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     if (!current?.columns) return
     const mongo = isMongo(session.connection.driver)
     const src = mongo ? mongoSourceTable(current.statement) : sourceTable(current.statement)
+    if (isRedis(session.connection.driver)) { setEditable({ reason: 'Command results are read-only: edit keys from the sidebar.' }); return }
     if (!src) { setEditable({ reason: mongo ? 'Only the result of a plain find() of whole documents can be edited.' : 'Only the result of a plain SELECT from one table can be edited.' }); return }
     const table = { schema: src.schema || schema, name: src.name }
     const cols = current.columns
@@ -271,7 +272,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     menu.open(e, [
       { label: 'Save as CSV…', onSelect: () => saveAs('result.csv', 'csv', () => toCSV(cols, rows)) },
       { label: 'Save as JSON…', onSelect: () => saveAs('result.json', 'json', () => toJSON(cols, rows)) },
-      ...(isMongo(session.connection.driver) ? [] : [{ label: 'Save as SQL INSERTs…', onSelect: () => saveAs('result.sql', 'sql', () => toInserts('result', cols, rows)) }]),
+      ...(usesCommands(session.connection.driver) ? [] : [{ label: 'Save as SQL INSERTs…', onSelect: () => saveAs('result.sql', 'sql', () => toInserts('result', cols, rows)) }]),
       'sep',
       { label: 'Copy as CSV', onSelect: () => { navigator.clipboard?.writeText(toCSV(cols, rows)); toast('ok', 'Copied') } },
     ])

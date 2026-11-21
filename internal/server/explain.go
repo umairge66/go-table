@@ -23,6 +23,14 @@ func Explain(err error) Friendly {
 		return false
 	}
 	switch {
+	case has("wrongpass", "invalid username-password pair"):
+		return Friendly{"Wrong user name or password", "The Redis server rejected them. Leave the user empty for the default user."}
+	case has("noauth authentication required"):
+		return Friendly{"The server needs a password", "Enter the Redis password (and the user, if it isn't the default one) in the connection settings."}
+	case has("wrongtype operation"):
+		return Friendly{"Wrong type of key", "That command doesn't work on this key's type (a hash, list, set…). TYPE <key> tells which it is."}
+	case has("noperm"):
+		return Friendly{"Not allowed", "This Redis user's ACL doesn't permit that command or key."}
 	case has("server selection error", "server selection timeout") && !has("authentication failed", "unable to authenticate"):
 		return Friendly{"Can't reach the server", "No MongoDB server answered. Check the host and port, that it is running, and for a replica set that its members' addresses can be reached from here (directConnection=true in Options connects to just this one)."}
 	case has("requires authentication", "unauthorized", "not authorized on"):

@@ -384,6 +384,9 @@ func BuildCreateTable(d Dialect, schema string, t NewTable) ([]string, error) {
 
 // CreateTable creates a table (in one transaction where the database allows).
 func (c *Conn) CreateTable(ctx context.Context, schema string, t NewTable) ([]string, error) {
+	if c.redis != nil {
+		return nil, errRedisNoSQL
+	}
 	stmts, err := BuildCreateTable(c.Dialect, schema, t)
 	if err != nil {
 		return nil, err
@@ -454,6 +457,9 @@ func BuildCreateDatabase(d Dialect, nd NewDatabase) (string, error) {
 // CreateDatabase creates a database or schema. CREATE DATABASE can't run
 // inside a transaction on PostgreSQL, so it runs on its own.
 func (c *Conn) CreateDatabase(ctx context.Context, nd NewDatabase) (string, error) {
+	if c.redis != nil {
+		return "", errors.New("Redis has a fixed set of numbered databases (db0, db1…): there is none to create")
+	}
 	if c.mongo != nil {
 		return "", errMongoNoCreateDatabase
 	}
@@ -487,6 +493,9 @@ type TypeInfo struct {
 
 // TypeInfo reads the type-related options of schema from the server.
 func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
+	if c.redis != nil {
+		return &TypeInfo{CustomTypes: []string{}, Collations: []string{}, Charsets: []string{}, Engines: []string{}}, nil
+	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err
 	}

@@ -11,7 +11,8 @@ import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, error
 import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
 import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
-import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isMongo } from '../types'
+import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isMongo, isRedis, usesCommands } from '../types'
+import { escapeKey, isPattern, keyLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { ExportDialog } from './ExportDialog'
@@ -32,7 +33,7 @@ const PAGE_SIZES = [100, 300, 500, 1000, 5000]
 const PAGE_SIZE_KEY = 'gotable:pageSize'
 const savedPageSize = () => { try { return Number(localStorage.getItem(PAGE_SIZE_KEY)) || 0 } catch { return 0 } }
 
-export function DataView({ session, object, active, tabId, inspector, onDirty, openQuery, onOpenReference, focusFilter, onRenamed, onStructureChanged, initialMode }: {
+export function DataView({ session, object, active, tabId, inspector, onDirty, openQuery, onOpenReference, onOpenObject, focusFilter, onRenamed, onStructureChanged, initialMode }: {
   session: SessionInfo
   object: DbObject
   active: boolean
@@ -42,6 +43,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   openQuery: (sql: string) => void
   /** onOpenReference opens the row a foreign key value points to. */
   onOpenReference?: (ref: ForeignRef, values: Cell[]) => void
+  /** onOpenObject opens another table: on Redis, the key a key list's row names. */
+  onOpenObject?: (o: DbObject) => void
   /** focusFilter shows only rows matching the pairs (a followed foreign key); key re-applies it. */
   focusFilter?: { pairs: { column: string; value: Cell }[]; key: number }
   /** onRenamed: the table was renamed in the Structure tab. */
@@ -96,6 +99,9 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   const names = useMemo(() => columns?.map((c) => c.name) ?? [], [columns])
   const pk = useMemo(() => (columns ?? []).map((c, i) => (c.primaryKey ? i : -1)).filter((i) => i >= 0), [columns])
   const mongo = isMongo(session.connection.driver)
+  // Redis: the object is a key pattern (a key list) or one key (its contents).
+  const redis = isRedis(session.connection.driver)
+  const keyList = redis && isPattern(object.name)
   const pending = pendingCount(edits)
   const onDirtyRef = useRef(onDirty)
   onDirtyRef.current = onDirty
@@ -259,7 +265,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     menu.open(e, [
       { label: 'Copy value', icon: <Copy />, kbd: 'Ctrl C', onSelect: () => navigator.clipboard?.writeText(v ?? 'NULL') },
       { label: rs.length > 1 ? `Copy ${rs.length} rows as JSON` : 'Copy row as JSON', onSelect: () => navigator.clipboard?.writeText(JSON.stringify(rs.length > 1 ? rs.map(rowObject) : rowObject(r), null, 2)) },
-      ...(mongo ? [] : [{ label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) }]),
+      ...(mongo || redis ? [] : [{ label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) }]),
       'sep',
       ...(columns?.[c]?.references && v !== null && onOpenReference ? (() => {
         const fk = columns[c].references!
@@ -285,16 +291,29 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     ])
   }
 
+  // redisQuery: the command that reads what this view shows.
+  const redisQuery = () => {
+    if (keyList) return `SCAN 0 MATCH ${quoteArg(object.name)} COUNT 1000`
+    const k = quoteArg(unescapeKey(object.name))
+    const first = columns?.[0]?.name
+    return first === 'field' ? `HGETALL ${k}` : first === 'index' ? `LRANGE ${k} 0 -1` : first === 'member' ? (columns?.length === 2 ? `ZRANGE ${k} 0 -1 WITHSCORES` : `SMEMBERS ${k}`)
+      : first === 'id' ? `XRANGE ${k} - + COUNT 100` : `TYPE ${k}\nGET ${k}`
+  }
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
   const page = Math.floor(offset / pageSize)
   const refName = (f: ForeignRef) => `${f.schema && f.schema !== object.schema ? f.schema + '.' : ''}${f.table}`
   const gridColumns = useMemo(() => (columns ?? []).map((c) => ({ name: c.name, type: c.type, pk: c.primaryKey,
     edit: cellKind(c.type, c.values, session.connection.driver), nullable: c.nullable,
-    ref: c.references ? (c.references.columns.length > 1 ? `${refName(c.references)}(${c.references.columns.join(', ')})` : `${refName(c.references)}.${c.references.columns[0]}`) : undefined,
-  })), [columns, object.schema]) // eslint-disable-line react-hooks/exhaustive-deps
+    ref: keyList && c.name === 'key' ? 'key' : c.references ? (c.references.columns.length > 1 ? `${refName(c.references)}(${c.references.columns.join(', ')})` : `${refName(c.references)}.${c.references.columns[0]}`) : undefined,
+  })), [columns, object.schema, keyList]) // eslint-disable-line react-hooks/exhaustive-deps
   // The values of a row's foreign key columns (in key order).
   const refValues = (r: number, fk: ForeignRef) => fk.from.map((f) => cell(r, names.indexOf(f)).value)
   const follow = (r: number, c: number) => {
+    if (keyList && columns?.[c]?.name === 'key') {
+      const k = cell(r, c).value
+      if (k !== null) onOpenObject?.({ schema: object.schema, name: escapeKey(String(k)), kind: 'table' })
+      return
+    }
     const fk = columns?.[c]?.references
     if (!fk) return
     const vs = refValues(r, fk)
@@ -320,7 +339,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               onClick={() => { setShowFilters(!showFilters); if (!filters.length) setFilters([newFilter()]) }}>
               Filter{activeFilterCount ? ` · ${activeFilterCount}` : ''}
             </Button>
-            <Input ref={quickRef} icon={<Search />} className="w-64" value={quick} placeholder={`Search ${object.name}…`} aria-label="Quick search"
+            <Input ref={quickRef} icon={<Search />} className="w-64" value={quick} placeholder={`Search ${redis ? keyLabel(object.name) : object.name}…`} aria-label="Quick search"
               onChange={(e) => setQuick(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') apply(); if (e.key === 'Escape' && quick) { setQuick(''); guard(() => setApplied({ ...applied, quick: '' })) } }} />
             {applied.quick && <button className="text-[12px] text-accent hover:underline" onClick={() => { setQuick(''); guard(() => setApplied({ ...applied, quick: '' })) }}>clear</button>}
             <div className="flex-1" />
@@ -356,13 +375,17 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                   <IconButton label="Add filter" onClick={() => setFilters([...filters.slice(0, i + 1), newFilter(), ...filters.slice(i + 1)])}><Plus className="size-3.5" /></IconButton>
                 </div>
               ))}
-              <div className="flex items-center gap-1.5">
+              {!redis && <div className="flex items-center gap-1.5">
                 <span className="w-[13px]" />
                 <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">{mongo ? 'Query filter (optional)' : 'WHERE (raw SQL, optional)'}</span>
                 <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder={mongo ? '{ age: { $gt: 30 } }' : "created_at > now() - interval '7 days'"} onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
                 <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
                 <Button size="sm" variant="primary" onClick={apply} kbd={applyKeys}>Apply</Button>
-              </div>
+              </div>}
+              {redis && <div className="flex justify-end gap-1.5">
+                <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
+                <Button size="sm" variant="primary" onClick={apply} kbd={applyKeys}>Apply</Button>
+              </div>}
             </div>
           )}
 
@@ -388,17 +411,17 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                 total === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted">
                     <Rows3 className="size-8 text-faint" />
-                    <div className="text-[13px] font-medium text-fg-2">{activeFilterCount || applied.quick ? 'No rows match your filter' : mongo ? 'This collection is empty' : 'This table is empty'}</div>
+                    <div className="text-[13px] font-medium text-fg-2">{activeFilterCount || applied.quick ? 'No rows match your filter' : keyList ? 'No keys match this pattern' : redis ? 'This key is empty' : mongo ? 'This collection is empty' : 'This table is empty'}</div>
                     <div className="flex gap-2">
                       {(activeFilterCount > 0 || applied.quick) && <Button size="sm" onClick={clearFilters}>Clear filter</Button>}
                       {/* Without documents there are no fields to fill in, so a command writes the first one. */}
                       {!readOnly && mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => openQuery(`${mongoColl(object.name)}.insertOne({\n  name: "",\n})`)}>Add a document</Button>}
-                      {!readOnly && !mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
+                      {!readOnly && !mongo && !(redis && !keyList) && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
                     </div>
                   </div>
                 ) : (<>
                   <Grid columns={gridColumns} rowCount={total} cell={cell} rowOffset={offset} sort={sort} onSort={toggleSort}
-                    readOnly={readOnly || loading} onEdit={edit} onDeleteRows={deleteRows} onContextMenu={cellMenu} dataKey={dataKey} onFollow={follow} onLookup={(r, c, rect) => setLookup({ r, c, rect })}
+                    readOnly={readOnly || loading} onEdit={edit} onDeleteRows={deleteRows} onContextMenu={cellMenu} dataKey={dataKey} onFollow={follow} onLookup={keyList ? undefined : (r, c, rect) => setLookup({ r, c, rect })}
                     onSelectionChange={(r, c, rs) => setSel({ r, c, rows: rs })} focus={focus} />
                   {lookup && columns?.[lookup.c]?.references && (
                     <FkLookup sid={session.id} fk={columns[lookup.c].references!} anchor={lookup.rect}
@@ -443,10 +466,10 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
       {/* Bottom bar */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-t border-line bg-panel-2 px-2">
         <div className="flex rounded-lg border border-line bg-panel p-0.5" role="tablist" aria-label="View">
-          {(isMongo(session.connection.driver) ? ['data', 'structure', 'schema', 'pipeline', 'ddl'] as const : ['data', 'structure', 'ddl'] as const).map((m) => (
+          {(mongo ? ['data', 'structure', 'schema', 'pipeline', 'ddl'] as const : redis ? ['data', 'ddl'] as const : ['data', 'structure', 'ddl'] as const).map((m) => (
             <button key={m} role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
               className={clsx('h-6 rounded-md px-2.5 text-[12px] font-medium', mode === m ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg')}>
-              {m === 'data' ? 'Data' : m === 'structure' ? 'Structure' : m === 'schema' ? 'Schema' : m === 'pipeline' ? 'Aggregations' : 'Definition'}
+              {m === 'data' ? 'Data' : m === 'structure' ? 'Structure' : m === 'schema' ? 'Schema' : m === 'pipeline' ? 'Aggregations' : redis ? 'Commands' : 'Definition'}
             </button>
           ))}
         </div>
@@ -470,11 +493,11 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
           </>
         )}
         {mode !== 'data' && <div className="flex-1" />}
-        <Button size="sm" variant="ghost" onClick={() => openQuery(mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{mongo ? 'Open in query' : 'Open in SQL'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => openQuery(redis ? redisQuery() : mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{usesCommands(session.connection.driver) ? 'Open in query' : 'Open in SQL'}</Button>
       </div>
 
       {review && (
-        <Modal width={720} title="Review changes" subtitle={mongo ? `${review.length} command${review.length === 1 ? '' : 's'} will run on ${object.name}, in one transaction on a replica set and one by one on a single server.`
+        <Modal width={720} title="Review changes" subtitle={redis ? `${review.length} command${review.length === 1 ? '' : 's'} will run together (MULTI/EXEC), and only if the keys haven't changed meanwhile.` : mongo ? `${review.length} command${review.length === 1 ? '' : 's'} will run on ${object.name}, in one transaction on a replica set and one by one on a single server.`
           : `${review.length} statement${review.length === 1 ? '' : 's'} will run in one transaction on ${object.name}.`}
           onClose={() => setReview(null)}
           footer={<>

@@ -5,11 +5,12 @@
 
 import { nativeDialogs } from './native'
 
-export type FileKind = 'sql' | 'js' | 'csv' | 'json' | 'zip' | 'sqlite'
+export type FileKind = 'sql' | 'js' | 'redis' | 'csv' | 'json' | 'zip' | 'sqlite'
 
 const TYPES: Record<FileKind, { description: string; accept: Record<string, string[]> }> = {
   sql: { description: 'SQL file', accept: { 'application/sql': ['.sql'] } },
   js: { description: 'MongoDB shell script', accept: { 'text/javascript': ['.js'] } },
+  redis: { description: 'Redis commands', accept: { 'text/plain': ['.redis'] } },
   csv: { description: 'CSV file', accept: { 'text/csv': ['.csv'] } },
   json: { description: 'JSON file', accept: { 'application/json': ['.json'] } },
   zip: { description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } },

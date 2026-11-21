@@ -41,6 +41,11 @@ func ParseURL(raw string) (*Connection, string, error) {
 	if l := strings.ToLower(raw); strings.HasPrefix(l, "mongodb://") || strings.HasPrefix(l, "mongodb+srv://") {
 		return parseMongoURL(raw)
 	}
+	for _, s := range []string{"redis://", "rediss://", "valkey://", "valkeys://"} {
+		if strings.HasPrefix(strings.ToLower(raw), s) {
+			return parseRedisURL(raw)
+		}
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid URL: %w", err)
@@ -261,4 +266,51 @@ func byHost(d Driver, host string) Driver {
 		}
 	}
 	return d
+}
+
+// parseRedisURL reads redis://[user[:password]@]host[:port][/db], as
+// redis-cli takes it; rediss:// (and valkeys://) mean TLS. A password alone
+// (redis://:secret@host) is the default user's.
+func parseRedisURL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	d := DriverRedis
+	if strings.HasPrefix(scheme, "valkey") {
+		d = DriverValkey
+	}
+	c := NewConnection(d)
+	if u.Hostname() == "" {
+		return nil, "", fmt.Errorf("the URL has no host")
+	}
+	c.Host = u.Hostname()
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 || n > 65535 {
+			return nil, "", fmt.Errorf("invalid port %q", p)
+		}
+		c.Port = n
+	}
+	password := ""
+	if u.User != nil {
+		c.User = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	if db := strings.Trim(u.Path, "/"); db != "" {
+		if _, err := strconv.Atoi(db); err != nil {
+			return nil, "", fmt.Errorf("the database in a Redis URL is a number, e.g. /0")
+		}
+		c.DBName = db
+	}
+	if q := u.Query(); q.Get("db") != "" && c.DBName == "" {
+		c.DBName = q.Get("db")
+	}
+	c.SSLMode = "disable"
+	if scheme == "rediss" || scheme == "valkeys" {
+		c.SSLMode = "require"
+	}
+	c.Name = c.Host
+	return c, password, nil
 }

@@ -29,8 +29,15 @@ package-macos: web
 	scripts/package.sh macos $(VERSION)
 
 # Windows (WebView2, built into Windows 10/11); cross-compiles from Linux too.
+# With DuckDB when a UCRT MinGW is installed (Fedora: ucrt64-gcc-c++).
 build-windows: web
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o bin/gotable.exe ./cmd/gotable
+	if command -v x86_64-w64-mingw32ucrt-gcc >/dev/null; then \
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32ucrt-gcc CXX=x86_64-w64-mingw32ucrt-g++ \
+			go build -tags desktop,production -ldflags "-s -w -H windowsgui -extldflags=-static" -o bin/gotable.exe ./cmd/gotable; \
+	else \
+		echo "x86_64-w64-mingw32ucrt-gcc not found: building without DuckDB"; \
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o bin/gotable.exe ./cmd/gotable; \
+	fi
 
 web:
 	cd frontend && npm ci && npm run build

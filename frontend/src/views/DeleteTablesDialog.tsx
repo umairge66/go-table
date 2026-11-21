@@ -2,7 +2,7 @@ import { AlertTriangle, Eye, Table2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, family, features, type DbObject, type SessionInfo, isMongo } from '../types'
+import { driverInfo, family, features, type DbObject, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
 
 /** DeleteTablesDialog drops tables/views after showing exactly what will run. */
 export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
@@ -21,7 +21,7 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
   const production = session.connection.tag === 'production'
   const tables = objects.filter((o) => o.kind === 'table').length
   const views = objects.length - tables
-  const noun = isMongo(driver) ? 'collection' : 'table'
+  const noun = isMongo(driver) ? 'collection' : isRedis(driver) ? 'key' : 'table'
   const what = [tables && `${tables} ${noun}${tables === 1 ? '' : 's'}`, views && `${views} view${views === 1 ? '' : 's'}`].filter(Boolean).join(' and ')
 
   useEffect(() => {
@@ -73,7 +73,7 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
           </div>
         )}
         <div>
-          <div className="mb-1 text-[11.5px] font-medium text-muted">{isMongo(driver) ? 'Commands that will run' : 'SQL that will run'}</div>
+          <div className="mb-1 text-[11.5px] font-medium text-muted">{usesCommands(driver) ? 'Commands that will run' : 'SQL that will run'}</div>
           <pre data-testid="drop-sql" className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-panel-2 px-3 py-2.5 font-mono text-[12px] text-fg-2">{sql.join('\n')}</pre>
           <div className="mt-1 text-[12px] text-muted">
             {family(driver) === 'mysql' || family(driver) === 'oracle' || !features(driver).transactions ? `${driverInfo(driver).label} can’t undo a DROP: there is no way back without a backup.` : 'Runs in one transaction: either everything is deleted or nothing.'}

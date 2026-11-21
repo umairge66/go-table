@@ -52,6 +52,8 @@ func BuildDropDatabase(d Dialect, dd DropDatabase) (string, error) {
 		return "db.getSiblingDB(" + jsonString(name) + ").dropDatabase()", nil
 	case model.DriverSQLite:
 		return "", errors.New("a SQLite database is a file: delete the file, or remove the connection")
+	case model.DriverRedis:
+		return "", errors.New("Redis's numbered databases can't be deleted: empty one with FLUSHDB in the query editor")
 	case model.DriverOracle:
 		return "", errors.New("on Oracle a schema is a user: drop it with DROP USER … CASCADE in the SQL editor (it needs the privilege to)")
 	case model.DriverDuckDB:

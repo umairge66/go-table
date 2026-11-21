@@ -6,7 +6,7 @@ import { FilePicker, pickedName, type PickedFile } from '../components/FilePicke
 import { JobProgress, UploadProgress, useJob } from '../components/Progress'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, timestamp, type SaveTarget } from '../lib/saveFile'
-import { family, features, type DbObject, type FileSource, type SessionInfo, isMongo } from '../types'
+import { family, features, type DbObject, type FileSource, type SessionInfo, isMongo, isRedis } from '../types'
 import { saveJobAs } from './ExportDialog'
 
 type Tab = 'export' | 'import'
@@ -46,6 +46,7 @@ export function TransferDialog({ session, schema, objects, initialTab = 'export'
 
 function ExportDatabase({ session, schema, objects, preselect, onBusy }: { session: SessionInfo; schema: string; objects: DbObject[]; preselect?: string[]; onBusy: (b: boolean) => void }) {
   const mongo = isMongo(session.connection.driver)
+  const redis = isRedis(session.connection.driver)
   const toast = useToast()
   const [selected, setSelected] = useState<Set<string>>(() => new Set(preselect ?? objects.map((o) => o.name)))
   const [filter, setFilter] = useState('')
@@ -77,7 +78,7 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
   const start = async () => {
     try {
       // Ask where to save first, like any desktop app.
-      const ext = format === 'sql' ? (mongo ? 'js' : 'sql') : 'zip'
+      const ext = format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : 'sql') : 'zip'
       const t = await chooseSaveLocation(`${session.connection.name.replace(/[^\w.-]+/g, '_')}-${timestamp()}.${ext}`, ext)
       if (!t) return
       target.current = t
@@ -98,7 +99,7 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
     return (
       <div className="space-y-4">
         <JobProgress job={job} label={savedTo ? `Saved to ${savedTo}` : undefined} onCancel={() => api.cancelJob(job.id)}
-          onDownload={() => saveJobAs(job.id, target.current?.name ?? job.file ?? 'export', format === 'sql' ? (mongo ? 'js' : 'sql') : 'zip')} />
+          onDownload={() => saveJobAs(job.id, target.current?.name ?? job.file ?? 'export', format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : 'sql') : 'zip')} />
         {job.status !== 'running' && (
           <div className="flex justify-end"><Button size="sm" onClick={() => { setJobId(null); onBusy(false) }}>Export again</Button></div>
         )}
@@ -109,8 +110,9 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Export format">
-        {([['sql', FileCode2, mongo ? 'Shell script' : 'SQL dump', mongo ? 'Collections, indexes, documents and views, each value keeping its type' : 'Tables, data and views — load it into any database of this kind'],
-          ['csv-zip', FileArchive, 'CSV files (ZIP)', 'One spreadsheet-friendly CSV per table']] as const).map(([id, Icon, label, desc]) => (
+        {([['sql', FileCode2, mongo ? 'Shell script' : redis ? 'Redis commands' : 'SQL dump', mongo ? 'Collections, indexes, documents and views, each value keeping its type'
+            : redis ? 'Every key with its value and expiry, as commands (redis-cli < file)' : 'Tables, data and views — load it into any database of this kind'],
+          ['csv-zip', FileArchive, 'CSV files (ZIP)', redis ? 'One CSV per key pattern: key, type, TTL and value' : 'One spreadsheet-friendly CSV per table']] as const).map(([id, Icon, label, desc]) => (
           <button key={id} role="radio" aria-checked={format === id} onClick={() => setFormat(id)}
             className={clsx('flex gap-3 rounded-xl border p-3 text-left transition-all', format === id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}>
             <Icon className={clsx('mt-0.5 size-5 shrink-0', format === id ? 'text-accent' : 'text-muted')} />
@@ -120,14 +122,14 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
       </div>
       {format === 'sql' && (
         <div className="flex flex-wrap gap-x-5 gap-y-2">
-          <Switch checked={structure} onChange={setStructure} label="Structure" />
-          <Switch checked={data} onChange={setData} label="Data" />
-          <Switch checked={drop} onChange={setDrop} label={mongo ? 'Drop existing collections first' : 'DROP existing tables first'} />
+          {!redis && <Switch checked={structure} onChange={setStructure} label="Structure" />}
+          {!redis && <Switch checked={data} onChange={setData} label="Data" />}
+          <Switch checked={drop} onChange={setDrop} label={mongo ? 'Drop existing collections first' : redis ? 'Delete existing keys first' : 'DROP existing tables first'} />
         </div>
       )}
       <div className="rounded-xl border border-line">
         <div className="flex items-center gap-2 border-b border-line-2 p-2">
-          <Input icon={<Search />} className="flex-1" value={filter} placeholder="Filter tables" onChange={(e) => setFilter(e.target.value)} aria-label="Filter export tables" />
+          <Input icon={<Search />} className="flex-1" value={filter} placeholder={redis ? 'Filter patterns' : 'Filter tables'} onChange={(e) => setFilter(e.target.value)} aria-label="Filter export tables" />
           <button className="text-[12px] font-medium text-accent hover:underline" onClick={() => setSelected(new Set(objects.map((o) => o.name)))}>All</button>
           <button className="text-[12px] font-medium text-accent hover:underline" onClick={() => setSelected(new Set())}>None</button>
         </div>
@@ -221,7 +223,8 @@ function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionIn
   }
   return (
     <div className="space-y-4">
-      <FilePicker accept={isMongo(session.connection.driver) ? '.js,.mongodb,.txt' : '.sql,.txt,.dump'} hint={isMongo(session.connection.driver) ? 'Shell commands, such as an export from GoTable — any size' : 'SQL scripts and dumps (pg_dump plain format, mysqldump, sqlite .dump) — any size'} value={file} onChange={setFile} />
+      <FilePicker accept={isMongo(session.connection.driver) ? '.js,.mongodb,.txt' : isRedis(session.connection.driver) ? '.redis,.txt' : '.sql,.txt,.dump'} hint={isMongo(session.connection.driver) ? 'Shell commands, such as an export from GoTable — any size'
+        : isRedis(session.connection.driver) ? 'Redis commands, one a line, such as an export from GoTable — any size' : 'SQL scripts and dumps (pg_dump plain format, mysqldump, sqlite .dump) — any size'} value={file} onChange={setFile} />
       <div className="space-y-2" role="radiogroup" aria-label="If a statement fails">
         <div className="text-[11.5px] font-medium text-muted">If a statement fails</div>
         {([['transaction', 'Stop and undo everything', mysql

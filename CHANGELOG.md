@@ -3,6 +3,25 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## Unreleased
+
+### Added
+
+- **Redis and Valkey.** Connect with a host or a `redis://` / `rediss://`
+  URL (with TLS, an ACL user, or over SSH). Numbered databases are listed;
+  the sidebar shows all keys and the namespaces in them (`user:*`). A key
+  list shows each key's type, TTL and value, and opens any key to its
+  contents: hash fields, list items, set and sorted-set members, stream
+  entries, strings and JSON. Keys, values, TTLs and a key's contents can be
+  edited; the changes run as one watched `MULTI/EXEC`, so nothing is saved
+  over a key that changed meanwhile. The query editor runs redis-cli style
+  commands with completion and shows replies as tables. Export writes keys
+  as commands with their expiry; Import script runs such a file.
+- **DuckDB on Windows.** The Windows build now opens DuckDB files: it is
+  built with cgo against DuckDB's Windows libraries (the `.exe` is bigger,
+  about 120 MB). CI runs the DuckDB, SQLite, updater and export tests on a
+  Windows machine.
+
 ## v0.7.0 — 2026-11-21
 
 ### Added

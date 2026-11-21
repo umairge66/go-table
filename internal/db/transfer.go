@@ -20,6 +20,9 @@ func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
 	if c.mongo != nil {
 		return c.mongoExec(ctx, stmt)
 	}
+	if c.redis != nil {
+		return c.redisExec(ctx, stmt)
+	}
 	if err := c.lock(ctx); err != nil {
 		return 0, err
 	}
@@ -59,6 +62,9 @@ func (c *Conn) CopyFrom(ctx context.Context, stmt string, r io.Reader) (int64, e
 func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []string, fn func(cols, types []string, row []Value) error) error {
 	if c.mongo != nil {
 		return c.mongoStreamRows(ctx, t, p, columns, fn)
+	}
+	if c.redis != nil {
+		return c.redisStreamRows(ctx, t, p, fn)
 	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
@@ -153,6 +159,9 @@ func snippet(s string) string {
 func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, progress func(*ImportResult)) (*ImportResult, error) {
 	if c.mongo != nil {
 		return c.mongoImportScript(ctx, r, o, progress)
+	}
+	if c.redis != nil {
+		return c.redisImportScript(ctx, r, o, progress)
 	}
 	if o.MaxErrors <= 0 {
 		o.MaxErrors = 200
@@ -323,6 +332,9 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	if c.mongo != nil {
 		return c.mongoImportCSV(ctx, r, t, o, progress)
 	}
+	if c.redis != nil {
+		return 0, errors.New("CSV has rows, Redis has keys: import a script of commands instead")
+	}
 	if len(o.Columns) == 0 || len(o.Columns) != len(o.Mapping) {
 		return 0, errors.New("choose at least one column to import")
 	}
@@ -460,6 +472,9 @@ func (s *sqlWriter) printf(format string, a ...any) {
 func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress func(DumpProgress)) error {
 	if c.mongo != nil {
 		return c.mongoDump(ctx, w, o, progress)
+	}
+	if c.redis != nil {
+		return c.redisDump(ctx, w, o, progress)
 	}
 	if o.BatchSize <= 0 {
 		o.BatchSize = 200

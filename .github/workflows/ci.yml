@@ -1,7 +1,8 @@
 # Tests on every push and pull request, as parallel jobs so the run takes as
 # long as the slowest one: frontend checks, Go vet, Go tests against real
 # PostgreSQL / MySQL / MariaDB / SQL Server / ClickHouse / MongoDB servers (and DuckDB,
-# SQLite files), Oracle in a job of its own, and the end-to-end tests.
+# SQLite files), Oracle in a job of its own, the end-to-end tests, and the
+# tests that need no server on Windows (DuckDB, SQLite, the updater).
 name: CI
 # Shown in the Actions list, so the test run is told apart from Build's.
 run-name: "Tests · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.number) || github.ref_name }}"
@@ -63,6 +64,69 @@ jobs:
           go vet -tags desktop,production,webkit2_41 ./...
           go vet -tags browser ./cmd/...
 
+  # Windows: the release .exe is cross-built with cgo (for DuckDB) in Fedora,
+  # whose MinGW targets the UCRT (see scripts/package.sh). The tests are built
+  # the same way, then run on a real Windows machine: DuckDB and SQLite files,
+  # the updater, exports, and the rest that needs no server.
+  windows-build-tests:
+    name: Windows tests (build)
+    runs-on: ubuntu-latest
+    container: fedora:44
+    timeout-minutes: 30
+    steps:
+      - name: Install the cross compiler
+        run: dnf install -y -q git tar gzip ucrt64-gcc-c++
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-windows-tests-${{ hashFiles('go.sum') }}
+          restore-keys: go-windows-tests-
+      - name: Build the test programs
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "1"
+          CC: x86_64-w64-mingw32ucrt-gcc
+          CXX: x86_64-w64-mingw32ucrt-g++
+          GOFLAGS: -buildvcs=false
+        run: go test -c -ldflags=-extldflags=-static -o tests/ ./internal/db ./internal/model ./internal/update ./internal/export
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-tests
+          path: tests/
+          retention-days: 1
+
+  windows-tests:
+    name: Windows tests
+    needs: windows-build-tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-tests
+          path: tests
+      - name: Run them
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($t in Get-ChildItem tests\*.test.exe) {
+            Write-Host "== $($t.Name)"
+            & $t.FullName -test.v -test.timeout 10m 2>&1 | Select-String -Pattern '^(--- |ok|PASS|FAIL|panic)|_test\.go:\d+' | ForEach-Object { $_.Line }
+            if ($LASTEXITCODE -ne 0) { $failed += $t.Name }
+          }
+          if ($failed) { Write-Error "failed: $($failed -join ', ')"; exit 1 }
+          # DuckDB must have run, not been left out of the build.
+          $out = & tests\db.test.exe -test.run '^TestDuckDB$' -test.v
+          if (-not ($out -match '^--- PASS: TestDuckDB ')) { $out; Write-Error "TestDuckDB didn't run on Windows"; exit 1 }
+
   go:
     name: Go tests
     runs-on: ubuntu-24.04
@@ -107,6 +171,16 @@ jobs:
         ports: ["27017:27017"]
         options: >-
           --health-cmd "mongosh --quiet -u gotable -p gotable-test --eval 'db.runCommand({ ping: 1 })'" --health-interval 2s --health-timeout 5s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 30
+        ports: ["6379:6379"]
+      valkey:
+        image: valkey/valkey:8-alpine
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 5s --health-retries 30
+        ports: ["6380:6379"]
       clickhouse:
         image: clickhouse/clickhouse-server:24.8
         env:
@@ -147,6 +221,10 @@ jobs:
       GOTABLE_TEST_MONGODB_PORT: "27017"
       GOTABLE_TEST_MONGODB_USER: gotable
       GOTABLE_TEST_MONGODB_PASSWORD: gotable-test
+      GOTABLE_TEST_REDIS_HOST: 127.0.0.1
+      GOTABLE_TEST_REDIS_PORT: "6379"
+      GOTABLE_TEST_VALKEY_HOST: 127.0.0.1
+      GOTABLE_TEST_VALKEY_PORT: "6380"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -161,7 +239,7 @@ jobs:
           key: go-test-${{ hashFiles('go.sum') }}
           restore-keys: go-test-
       # cmd/gotable has no tests; vet builds it (with WebKitGTK).
-      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse, MongoDB)
+      - name: Go tests (SQLite, DuckDB, PostgreSQL, MySQL, MariaDB, SQL Server, ClickHouse, MongoDB, Redis, Valkey)
         run: go test -race -count=1 ./internal/...
 
   oracle:
@@ -263,6 +341,11 @@ jobs:
         ports: ["27017:27017"]
         options: >-
           --health-cmd "mongosh --quiet -u gotable -p gotable-test --eval 'db.runCommand({ ping: 1 })'" --health-interval 2s --health-timeout 5s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 30
+        ports: ["6379:6379"]
       clickhouse:
         image: clickhouse/clickhouse-server:24.8
         env:
@@ -305,6 +388,7 @@ jobs:
         env:
           GOTABLE_E2E_PG: postgres://postgres:gotable-test@127.0.0.1:5432/postgres?sslmode=disable
           GOTABLE_E2E_MONGODB: mongodb://gotable:gotable-test@127.0.0.1:27017/gt_e2e?authSource=admin
+          GOTABLE_E2E_REDIS: redis://127.0.0.1:6379/3
           GOTABLE_E2E_COMPAT: >-
             sqlserver://sa:GoTable-test1@127.0.0.1:1433?database=master
             clickhouse://gotable:gotable-test@127.0.0.1:9000/gotable

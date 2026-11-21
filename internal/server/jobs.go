@@ -474,6 +474,9 @@ func (s *Server) exportTableJob(se *session, in jobRequest) (*Job, error) {
 	if in.Format != "csv" && in.Format != "json" && in.Format != "sql" {
 		return nil, fmt.Errorf("unknown format %q", in.Format)
 	}
+	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverRedis {
+		return nil, errors.New("Redis has no SQL: export CSV or JSON, or the database as a script of commands")
+	}
 	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverMongoDB {
 		return nil, errors.New("MongoDB has no SQL: export CSV or JSON, or the whole database as a script")
 	}
@@ -569,6 +572,9 @@ func (s *Server) exportDatabaseJob(se *session, in jobRequest) (*Job, error) {
 			ext := ".sql"
 			if c.Config.Driver.Family() == model.DriverMongoDB {
 				ext = ".js" // a script of shell commands
+			}
+			if c.Config.Driver.Family() == model.DriverRedis {
+				ext = ".redis" // commands, a line each (redis-cli < file)
 			}
 			f, err := s.resultFile(j, base+ext)
 			if err != nil {

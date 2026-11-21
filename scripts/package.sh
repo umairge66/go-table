@@ -2,7 +2,7 @@
 # Builds release files into dist/. Build the web UI first (make web).
 #
 #   scripts/package.sh linux   [VERSION]   .tar.gz, .deb, .rpm and .AppImage
-#   scripts/package.sh windows [VERSION]   gotable.exe, and a .zip with it
+#   scripts/package.sh windows [VERSION]   gotable.exe, a .zip with it, and the setup .exe
 #   scripts/package.sh macos   [VERSION]   GoTable.app (Apple silicon and Intel) in a .dmg and a .zip
 #
 # VERSION is a tag such as v1.2.0; without one, a dev version is used.
@@ -106,8 +106,24 @@ windows)
 	go run "$WINRES" simply --icon packaging/gotable.png --manifest gui --product-name GoTable \
 		--original-filename gotable.exe --out cmd/gotable/rsrc
 	trap 'rm -f cmd/gotable/rsrc_windows_*.syso' EXIT
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -tags desktop,production \
-		-ldflags "$ldflags -H windowsgui" -o build/windows/gotable.exe ./cmd/gotable
+	# DuckDB is C++: its Windows libraries are built with MinGW against the
+	# UCRT, so the cross compiler must be a UCRT one (Fedora's ucrt64-gcc-c++;
+	# Debian's and Ubuntu's MinGW use the older msvcrt and fail to link).
+	# Everything is linked statically: the .exe needs only Windows 10+ DLLs.
+	# Without that compiler the .exe is built without DuckDB, if NO_DUCKDB=1.
+	wincc=${WINDOWS_CC:-x86_64-w64-mingw32ucrt-gcc}
+	if command -v "$wincc" >/dev/null; then
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="$wincc" CXX="${WINDOWS_CXX:-${wincc%gcc}g++}" \
+			go build -trimpath -tags desktop,production \
+			-ldflags "$ldflags -H windowsgui -extldflags=-static" -o build/windows/gotable.exe ./cmd/gotable
+	elif [[ ${NO_DUCKDB:-} == 1 ]]; then
+		echo "warning: $wincc not found; building without DuckDB" >&2
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -tags desktop,production \
+			-ldflags "$ldflags -H windowsgui" -o build/windows/gotable.exe ./cmd/gotable
+	else
+		echo "$wincc not found: install a UCRT MinGW (Fedora: dnf install ucrt64-gcc-c++), or set NO_DUCKDB=1" >&2
+		exit 1
+	fi
 	cp LICENSE README.md build/windows/
 	(cd build/windows && zip -q -r "../../dist/gotable-$pkgver-windows-amd64.zip" gotable.exe LICENSE README.md)
 	# The bare .exe too, for people who just want to run it.

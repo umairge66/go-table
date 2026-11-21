@@ -1,13 +1,17 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis'
   | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
-  | 'tidb' | 'percona' | 'singlestore' | 'planetscale'
+  | 'tidb' | 'percona' | 'singlestore' | 'planetscale' | 'valkey'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis'
 
 /** family maps compatible servers and services to the engine they follow. */
 export const family = (d: Driver): Family => driverInfo(d).family
 /** isMongo: a document database, with collections and shell commands instead of tables and SQL. */
 export const isMongo = (d: Driver) => family(d) === 'mongodb'
+/** isRedis: a key-value store: keys (by pattern) instead of tables, commands instead of SQL. */
+export const isRedis = (d: Driver) => family(d) === 'redis'
+/** usesCommands: the query editor takes the server's own commands, not SQL. */
+export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d)
 
 /** PerDriver: a value for each family, optionally overridden for one driver. */
 export type PerDriver<T> = Record<Family, T> & Partial<Record<Driver, T>>
@@ -61,6 +65,9 @@ export const FEATURES: Record<Family, Features> = {
   // commit is one transaction only on a replica set (the server decides).
   mongodb: { ...BASE, transactions: false, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, autoIncrement: false,
     comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
+  // Keys, not tables: a key list or a key's contents is what a "table" shows.
+  redis: { ...BASE, transactions: true, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
+    autoIncrement: false, comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
 }
 /** DRIVER_FEATURES: where a server differs from its family's engine. */
 const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions?: boolean }>> = {
@@ -237,6 +244,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'duckdb', label: 'DuckDB', family: 'duckdb', port: 0, color: '#8a6d00', user: '' },
   { id: 'clickhouse', label: 'ClickHouse', family: 'clickhouse', port: 9000, color: '#9a8a00', user: 'default' },
   { id: 'mongodb', label: 'MongoDB', family: 'mongodb', port: 27017, color: '#00684a', user: 'optional' },
+  { id: 'redis', label: 'Redis', family: 'redis', port: 6379, color: '#d82c20', user: 'optional', database: 'number, e.g. 0' },
   { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
   { id: 'yugabytedb', label: 'YugabyteDB', family: 'postgres', port: 5433, color: '#c4471f', user: 'yugabyte' },
   { id: 'timescaledb', label: 'TimescaleDB', family: 'postgres', port: 5432, color: '#a3610b', user: 'postgres' },
@@ -246,10 +254,11 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'percona', label: 'Percona Server', family: 'mysql', port: 3306, color: '#b5341a', user: 'root' },
   { id: 'singlestore', label: 'SingleStore', family: 'mysql', port: 3306, color: '#7a1fa2', user: 'root' },
   { id: 'planetscale', label: 'PlanetScale', family: 'mysql', port: 3306, color: '#1f2328', user: '', hosted: true, host: 'aws.connect.psdb.cloud' },
+  { id: 'valkey', label: 'Valkey', family: 'redis', port: 6379, color: '#4f46b8', user: 'optional', database: 'number, e.g. 0' },
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
-export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb']
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb', 'redis']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -275,6 +284,7 @@ export const SSL_MODES: PerDriver<string[]> = {
   clickhouse: ['disable', 'require', 'skip-verify'],
   oracle: ['disable', 'require', 'skip-verify'],
   mongodb: ['disable', 'require', 'skip-verify'],
+  redis: ['disable', 'require', 'skip-verify'],
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],

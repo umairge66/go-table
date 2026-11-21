@@ -9,7 +9,8 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isMongo } from '../types'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isMongo, isRedis } from '../types'
+import { isPattern, keyLabel as redisLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
 import { binding, hit, label as keyLabel } from '../lib/shortcuts'
@@ -94,7 +95,8 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const fileDb = features(conn.driver).file
   const production = conn.tag === 'production'
   const mongo = isMongo(conn.driver)
-  const tableWord = mongo ? 'collection' : 'table'
+  const redis = isRedis(conn.driver)
+  const tableWord = mongo ? 'collection' : redis ? 'key' : 'table'
   const [creatingCollection, setCreatingCollection] = useState<OpenDb | null>(null)
 
   const mainSchema = session.schema || session.schemas[0] || ''
@@ -185,10 +187,10 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const openTable = useCallback((db: OpenDb, o: DbObject, focusFilter?: Tab['focusFilter']) => {
     // Tables of another schema than the database's get their own id.
     const id = `t:${db.key}:${o.schema && o.schema !== db.schema ? `${o.schema}.` : ''}${o.name}`
-    const tab: Tab = { id, kind: 'table', title: o.name, object: o, dbKey: db.key, focusFilter }
+    const tab: Tab = { id, kind: 'table', title: redis ? redisLabel(o.name) : o.name, object: o, dbKey: db.key, focusFilter }
     setTabs((ts) => (ts.some((t) => t.id === id) ? (focusFilter ? ts.map((t) => (t.id === id ? { ...t, focusFilter } : t)) : ts) : [...ts, tab]))
     selectTab(tab)
-  }, [selectTab])
+  }, [selectTab, redis])
 
   // openReference follows a foreign key: the referenced table, filtered to
   // the row, in the open database of that schema (or the current one).
@@ -201,6 +203,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   // newTable opens a "New table" tab for designing a table in db.
   const newTable = useCallback((db: OpenDb) => {
     if (mongo) { setCreatingCollection(db); return } // nothing to design: fields come with the documents
+    if (redis) { newQuery('# A key is made by the command that writes it:\nSET greeting "hello"\n# HSET user:1 name Alice  ·  RPUSH queue a b  ·  SADD tags x  ·  ZADD scores 10 alice\n', db.key); return }
     queryCounter.current += 1
     const tab: Tab = { id: `new:${db.key}:${queryCounter.current}`, kind: 'create-table', title: 'New table', dbKey: db.key }
     setTabs((ts) => [...ts, tab])
@@ -613,8 +616,8 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     setAnchor(o.name)
     menu.open(e, [
       { label: 'Open', icon: <Table2 />, onSelect: () => openTable(db, o) },
-      { label: mongo ? 'New query: find…' : 'New query: SELECT…', icon: <Code2 />, onSelect: () => newQuery(mongo ? `${mongoColl(o.name)}.find({}).limit(100)` : `SELECT *\nFROM ${quote(o.name, conn.driver)}\nLIMIT 100;`, db.key) },
-      { label: 'Copy name', icon: <Copy />, onSelect: () => navigator.clipboard?.writeText(o.name) },
+      { label: mongo ? 'New query: find…' : redis ? 'New query' : 'New query: SELECT…', icon: <Code2 />, onSelect: () => newQuery(redis ? (isPattern(o.name) ? `SCAN 0 MATCH ${quoteArg(o.name)} COUNT 1000` : `TYPE ${quoteArg(unescapeKey(o.name))}`) : mongo ? `${mongoColl(o.name)}.find({}).limit(100)` : `SELECT *\nFROM ${quote(o.name, conn.driver)}\nLIMIT 100;`, db.key) },
+      { label: 'Copy name', icon: <Copy />, onSelect: () => navigator.clipboard?.writeText(redis && !isPattern(o.name) ? unescapeKey(o.name) : o.name) },
       'sep',
       { label: 'Export…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db, preselect: [o.name] }) },
       'sep',
@@ -627,7 +630,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     { label: `New ${tableWord}…`, icon: <Plus />, onSelect: () => newTable(db) },
     { label: 'Refresh', icon: <RefreshCw />, onSelect: () => loadObjects(db.key) },
     { label: 'Export database…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db }) },
-    { label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
+    { label: mongo || redis ? 'Import script…' : 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
     'sep',
     ...(pg
       ? [{ label: 'Copy database name', icon: <Copy />, onSelect: () => copy(db.info.database) }, ...(db.schema ? [{ label: 'Copy schema name', icon: <Copy />, onSelect: () => copy(db.schema) }] : [])]
@@ -648,7 +651,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   // ---------------------------------------------------------------- pickers
 
   const objectCommands = (d: OpenDb, withDb: boolean): Command[] => (d.objects ?? []).map((o) => ({
-    id: `open:${d.key}:${o.name}`, label: o.name, icon: o.kind === 'view' ? <Eye /> : <Table2 />,
+    id: `open:${d.key}:${o.name}`, label: redis ? redisLabel(o.name) : o.name, icon: o.kind === 'view' ? <Eye /> : <Table2 />,
     hint: withDb && dbs.length > 1 ? label(d) : o.kind === 'view' ? 'View' : 'Table',
     active: activeTab === `t:${d.key}:${o.name}`, run: () => openTable(d, o),
   }))
@@ -678,7 +681,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
       ] })
     } }] : []),
     { id: 'export-db', label: 'Export database…', icon: <Download />, run: () => setTransfer({ tab: 'export', db: activeDb }) },
-    { id: 'import-sql', label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, run: () => setTransfer({ tab: 'import', db: activeDb }) },
+    { id: 'import-sql', label: mongo || redis ? 'Import script…' : 'Import SQL file…', icon: <Upload />, run: () => setTransfer({ tab: 'import', db: activeDb }) },
     { id: 'refresh', label: 'Refresh tables', hint: keyHint('app.refresh'), icon: <RefreshCw />, run: refresh },
     { id: 'theme', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', hint: keyHint('app.theme'), icon: theme === 'dark' ? <Sun /> : <Moon />, run: toggleTheme },
     { id: 'settings', label: 'Settings…', hint: keyHint('app.settings'), icon: <Settings />, run: onOpenSettings },
@@ -775,7 +778,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
           {sideTab === 'history' && <div className="flex min-h-0 flex-1 flex-col pt-2"><HistoryPanel connectionId={conn.id} dbLabel={dbLabelOf} onOpen={openHistory} /></div>}
           {sideTab === 'items' && <>
           <div className="flex items-center gap-1 p-2.5">
-            <Input ref={filterRef} className="min-w-0 flex-1" icon={<Search />} value={filter} placeholder="Filter tables" aria-label="Filter tables" onChange={(e) => setFilter(e.target.value)}
+            <Input ref={filterRef} className="min-w-0 flex-1" icon={<Search />} value={filter} placeholder={redis ? 'Filter keys' : 'Filter tables'} aria-label="Filter tables" onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
                 const first = shownOf(activeDb)[0]
                 if (e.key === 'Enter' && first) openTable(activeDb, first)
@@ -792,7 +795,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
               return (
                 <>
                   {d.objects === null && <div className="space-y-1.5 p-2">{Array.from({ length: 6 }, (_, i) => <div key={i} className="h-4 animate-pulse rounded bg-hover" style={{ width: `${55 + ((i * 37) % 40)}%` }} />)}</div>}
-                  <Section title="Tables" items={shown.filter((o) => o.kind === 'table')} db={d} activeId={activeTab} selected={selDb === d.key ? selected : EMPTY} onClick={onItemClick} onMenu={objectMenu} />
+                  <Section title={redis ? 'Keys' : 'Tables'} labelOf={redis ? redisLabel : undefined} items={shown.filter((o) => o.kind === 'table')} db={d} activeId={activeTab} selected={selDb === d.key ? selected : EMPTY} onClick={onItemClick} onMenu={objectMenu} />
                   <Section title="Views" items={shown.filter((o) => o.kind === 'view')} db={d} activeId={activeTab} selected={selDb === d.key ? selected : EMPTY} onClick={onItemClick} onMenu={objectMenu} />
                   {d.objects !== null && shown.length === 0 && (
                     <div className="px-3 py-6 text-center text-[12px] text-muted">
@@ -892,7 +895,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
                     : t.kind === 'table' && t.object
                     ? <DataView session={tdb.info} object={t.object} active={active && t.id === activeTab} tabId={t.id} inspector={inspector}
                         onDirty={(d) => updateTab(t.id, { dirty: d })} openQuery={(sql) => newQuery(sql, tdb.key)}
-                        onOpenReference={(ref, vs) => openReference(tdb, ref, vs)} focusFilter={t.focusFilter} initialMode={t.structure ? 'structure' : undefined}
+                        onOpenReference={(ref, vs) => openReference(tdb, ref, vs)} onOpenObject={(o) => openTable(tdb, o)} focusFilter={t.focusFilter} initialMode={t.structure ? 'structure' : undefined}
                         onStructureChanged={() => loadObjects(tdb.key)}
                         onRenamed={(name) => {
                           // The tab follows the table to its new name.
@@ -1031,8 +1034,10 @@ export function quote(name: string, driver: Driver) {
   return '"' + name.replace(/"/g, '""') + '"'
 }
 
-function Section({ title, items, db, activeId, selected, onClick, onMenu }: {
+function Section({ title, labelOf, items, db, activeId, selected, onClick, onMenu }: {
   title: string
+  /** labelOf: how an item is named, when not by its name (Redis's "All keys"). */
+  labelOf?: (name: string) => string
   items: DbObject[]
   db: OpenDb
   activeId: string | null
@@ -1056,7 +1061,7 @@ function Section({ title, items, db, activeId, selected, onClick, onMenu }: {
             className={clsx('flex h-7 w-full scroll-my-1 select-none items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60',
               isSel ? 'bg-selected font-medium text-fg' : active ? 'bg-active font-medium text-accent' : 'text-fg-2 hover:bg-hover')}>
             {o.kind === 'view' ? <Eye className="size-3.5 shrink-0 text-muted" /> : <Table2 className={clsx('size-3.5 shrink-0', active ? 'text-accent' : 'text-muted')} />}
-            <span className="truncate">{o.name}</span>
+            <span className="truncate">{labelOf ? labelOf(o.name) : o.name}</span>
           </button>
         )
       })}

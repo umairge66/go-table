@@ -1,3 +1,4 @@
+import { formatRedis } from './redisShell'
 import { formatMongo } from './mongoShell'
 import { format, type SqlLanguage } from 'sql-formatter'
 import { family, forDriver, type Driver, type PerDriver } from '../types'
@@ -12,6 +13,7 @@ const languages: PerDriver<SqlLanguage> = {
   sqlserver: 'transactsql',
   oracle: 'plsql',
   mongodb: 'sql', // never used: see formatSQL
+  redis: 'sql', // never used: see formatSQL
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
 }
@@ -23,6 +25,7 @@ const languages: PerDriver<SqlLanguage> = {
  */
 export function formatSQL(sql: string, driver: Driver): string {
   if (family(driver) === 'mongodb') return formatMongo(sql)
+  if (family(driver) === 'redis') return formatRedis(sql)
   const out = format(sql, {
     language: forDriver(languages, driver),
     keywordCase: 'upper',

@@ -183,6 +183,7 @@ const CATALOG: PerDriver<TypeGroup[]> = {
   ],
   // Never offered: a collection has no column types (see StructureView).
   mongodb: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
+  redis: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   duckdb: [
     { label: 'Numeric', types: [
       { name: 'INTEGER', hint: '4 bytes', traits: ['int'] },

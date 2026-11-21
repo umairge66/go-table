@@ -57,6 +57,9 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	if cfg.Driver.Family() == model.DriverMongoDB { // not a database/sql driver
 		return openMongo(ctx, cfg, addr, cred.Password, tunnel)
 	}
+	if cfg.Driver.Family() == model.DriverRedis {
+		return openRedis(ctx, cfg, addr, cred.Password, tunnel)
+	}
 	var (
 		sqlDB *sql.DB
 		eng   engine
@@ -109,7 +112,7 @@ var openers = map[model.Driver]func(cfg *model.Connection, addr, password string
 // Supported reports whether this build can open connections of driver d.
 func Supported(d model.Driver) bool {
 	switch d.Family() {
-	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB:
+	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis:
 		return true
 	}
 	_, ok := openers[d.Family()]

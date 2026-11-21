@@ -58,6 +58,8 @@ type Conn struct {
 	// mongoTxn: the server takes transactions (a replica set or mongos).
 	mongoTxn    bool
 	mongoClosed bool
+	// redis replaces db and conn on a Redis connection (redis*.go).
+	redis *redisState
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -101,6 +103,9 @@ func (c *Conn) Close() error {
 	if c.mongo != nil {
 		return c.closeMongo()
 	}
+	if c.redis != nil {
+		return c.closeRedis()
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -123,6 +128,13 @@ func (c *Conn) lock(ctx context.Context) error {
 	c.mu.Lock()
 	if c.mongo != nil { // the client reconnects by itself
 		if c.mongoClosed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		return nil
+	}
+	if c.redis != nil { // so does Redis's
+		if c.redis.closed {
 			c.mu.Unlock()
 			return ErrClosed
 		}
@@ -168,6 +180,13 @@ func (c *Conn) Ping(ctx context.Context) error {
 	defer c.mu.Unlock()
 	if c.mongo != nil {
 		return c.mongo.Ping(ctx, nil)
+	}
+	if c.redis != nil {
+		cl, err := c.redisFor("")
+		if err != nil {
+			return err
+		}
+		return cl.Ping(ctx).Err()
 	}
 	return c.conn.PingContext(ctx)
 }
@@ -261,6 +280,9 @@ func (c *Conn) ColumnNames(ctx context.Context, t TableRef) ([]string, error) {
 	if c.mongo != nil {
 		return c.mongoQuickFields(ctx, t)
 	}
+	if c.redis != nil {
+		return nil, nil
+	}
 	cols, err := c.Columns(ctx, t)
 	if err != nil {
 		return nil, err
@@ -339,6 +361,9 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.mongo != nil {
 		return c.mongoFetchRows(ctx, t, p, columns)
 	}
+	if c.redis != nil {
+		return c.redisFetchRows(ctx, t, p)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -360,6 +385,9 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.mongo != nil {
 		return c.mongoCountRows(ctx, t, p, columns)
 	}
+	if c.redis != nil {
+		return c.redisCountRows(ctx, t, p)
+	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
 		return 0, err
@@ -378,6 +406,9 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, hasPK bool) error {
 	if c.mongo != nil {
 		return c.mongoApplyChanges(ctx, t, changes)
+	}
+	if c.redis != nil {
+		return c.redisApplyChanges(ctx, t, changes)
 	}
 	stmts := make([]Statement, 0, len(changes))
 	for _, ch := range changes {
@@ -417,6 +448,9 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	if c.mongo != nil {
 		return c.mongoPreviewChanges(ctx, t, changes)
 	}
+	if c.redis != nil {
+		return c.redisPreviewChanges(ctx, t, changes)
+	}
 	out := make([]string, 0, len(changes))
 	for _, ch := range changes {
 		s, err := BuildChange(c.Dialect, t, ch, hasPK)
@@ -441,6 +475,9 @@ func (c *Conn) Execute(ctx context.Context, script string, rowCap int) ([]Result
 func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int) ([]Result, error) {
 	if c.mongo != nil {
 		return c.mongoExecuteIn(ctx, schema, script, rowCap)
+	}
+	if c.redis != nil {
+		return c.redisExecuteIn(ctx, schema, script, rowCap)
 	}
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {

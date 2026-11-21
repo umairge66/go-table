@@ -9,7 +9,8 @@ import { Decoration, EditorView, GutterMarker, drawSelection, gutterLineClass, h
 import { tags as t } from '@lezer/highlight'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { mongoCompletions, mongoStatementAt, mongoStatementRange, pickStatement, trimRange } from '../lib/mongoShell'
-import { forDriver, isMongo, type Driver, type PerDriver } from '../types'
+import { forDriver, isMongo, isRedis, type Driver, type PerDriver } from '../types'
+import { redisCompletions, redisLanguage, redisStatementAt, redisStatementRange } from '../lib/redisShell'
 import { useSettings } from '../lib/settings'
 import { codemirrorKey, combosFor, label } from '../lib/shortcuts'
 
@@ -25,12 +26,17 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL }
 
-/** language: MongoDB's commands are written in the JavaScript of its shell. */
+/** language: MongoDB's commands are written in the JavaScript of its shell; Redis's are command lines. */
 const language = (driver: Driver, tables?: Record<string, string[]>) => isMongo(driver)
   ? [javascript(), javascriptLanguage.data.of({ autocomplete: mongoCompletions(tables) })]
+  : isRedis(driver) ? [redisLanguage, redisLanguage.data.of({ autocomplete: redisCompletions })]
   : sql({ dialect: forDriver(dialects, driver), schema: tables, upperCaseKeywords: true })
+
+/** rangeAt: the statement the cursor is at, the way the driver's commands are written. */
+const rangeAt = (driver: Driver, text: string, pos: number, withSemicolon = false) =>
+  isMongo(driver) ? mongoStatementRange(text, pos) : isRedis(driver) ? redisStatementRange(text, pos) : statementRange(text, pos, withSemicolon)
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */
@@ -95,7 +101,7 @@ function statementHighlight(driver: () => Driver) {
     const sel = state.selection.main
     if (!sel.empty || state.doc.length === 0 || state.doc.length > HIGHLIGHT_LIMIT) return null
     const text = state.doc.toString()
-    const r = isMongo(driver()) ? mongoStatementRange(text, sel.head) : statementRange(text, sel.head, true)
+    const r = rangeAt(driver(), text, sel.head, true)
     if (!r || r[0] >= r[1]) return null
     return { first: state.doc.lineAt(r[0]).number, last: state.doc.lineAt(r[1]).number }
   }
@@ -192,6 +198,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
       const { from, to } = v.state.selection.main
       const text = v.state.doc.toString()
       if (from !== to) return text.slice(from, to)
+      if (isRedis(cb.current.driver)) return redisStatementAt(text, from)
       return isMongo(cb.current.driver) ? mongoStatementAt(text, from) : statementAt(text, from)
     },
     value: () => view.current?.state.doc.toString() ?? '',
@@ -227,7 +234,7 @@ function editorKeys(overrides: Record<string, string>, driver: Driver, cb: Callb
   const hint = (id: string, what: string) => { const k = label(combosFor(id, overrides)[0] ?? ''); return k ? `${k.replace(/ /g, '+')} ${what}` : '' }
   const tips = [hint('editor.runCurrent', 'runs the statement under the cursor'), hint('editor.runAll', 'runs everything'), hint('editor.format', 'formats')].filter(Boolean)
   return [
-    placeholder((isMongo(driver) ? 'db.collection.find({ … })' : 'Write SQL…') + (tips.length ? '   ' + tips.join(' · ') : '')),
+    placeholder((isMongo(driver) ? 'db.collection.find({ … })' : isRedis(driver) ? 'GET key   ·   HGETALL key   ·   one command a line' : 'Write SQL…') + (tips.length ? '   ' + tips.join(' · ') : '')),
     Prec.highest(keymap.of([
       ...bind('editor.runCurrent', () => call(cb.current.onRunCurrent)()),
       ...bind('editor.runAll', () => call(cb.current.onRunAll)()),

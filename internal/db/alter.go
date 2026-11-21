@@ -888,6 +888,9 @@ func (c *Conn) loadTableState(ctx context.Context, t TableRef) (TableState, erro
 
 // Alter previews (dryRun) or applies changes to a table's structure.
 func (c *Conn) Alter(ctx context.Context, t TableRef, ops []AlterOp, dryRun bool) ([]string, error) {
+	if c.redis != nil {
+		return nil, errRedisNoSQL
+	}
 	if c.mongo != nil {
 		stmts, err := buildMongoAlter(t, ops)
 		if err != nil || dryRun {

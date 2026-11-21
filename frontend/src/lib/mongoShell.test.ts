@@ -56,3 +56,17 @@ test('explain wraps a query, and only a query', () => {
   expect(explainStatement('db.people.insertOne({})')).toBeNull()
   expect(explainStatement('show collections')).toBeNull()
 })
+
+test('Redis: one command a line; patterns and keys', async () => {
+  const { redisStatementAt, isPattern, escapeKey, unescapeKey, quoteArg, keyLabel, formatRedis } = await import('./redisShell')
+  const text = '# setup\nSET a 1\n\nHGETALL "my hash"\n'
+  expect(redisStatementAt(text, text.indexOf('HGETALL') + 3)).toBe('HGETALL "my hash"')
+  expect(redisStatementAt(text, text.indexOf('\n\n') + 1)).toBe('') // a blank line
+  expect(redisStatementAt(text, 3)).toBe('') // a comment
+  expect([isPattern('user:*'), isPattern('user:1'), isPattern('a\\*b'), isPattern('[ab]')]).toEqual([true, false, false, true])
+  expect(escapeKey('a*b?')).toBe('a\\*b\\?')
+  expect(unescapeKey(escapeKey('x[1]\\y'))).toBe('x[1]\\y')
+  expect([quoteArg('plain'), quoteArg('two words'), quoteArg('')]).toEqual(['plain', '"two words"', '""'])
+  expect([keyLabel('*'), keyLabel('user:*'), keyLabel('a\\*b')]).toEqual(['All keys', 'user:*', 'a*b'])
+  expect(formatRedis('  SET a 1  \n\n\n\nGET a')).toBe('SET a 1\n\nGET a\n')
+})

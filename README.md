@@ -1,9 +1,9 @@
 # GoTable
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB, ClickHouse and MongoDB, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse, MongoDB and Redis, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, TiDB, Percona
-Server, SingleStore, PlanetScale). A Go backend with a web UI, shipped as one binary that opens in a native window
+Server, SingleStore, PlanetScale, Valkey). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -33,9 +33,10 @@ inspector and a Data / Structure / Definition switch.
 | PostgreSQL, MySQL, MariaDB, SQLite | everything below |
 | Oracle (12c+; tested on 23ai Free) | pure-Go driver, no Oracle client needed. The Database field is the service name (e.g. `FREEPDB1`); schemas are users. DDL commits as it runs (no ON UPDATE for foreign keys); PL/SQL blocks in the editor end with a `/` line |
 | SQL Server (2017+, Azure SQL) | schemas of the connected database; other databases open next to it. Comments are `MS_Description` properties |
-| DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement. Not in the Windows build (it needs cgo) |
+| DuckDB | one file, like SQLite. Foreign keys and CHECKs only in CREATE TABLE; schema changes apply statement by statement |
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
 | MongoDB (4.4+, Atlas; tested on 4.4–8.0) | a document database: see [below](#mongodb) |
+| Redis, Valkey (tested on Redis 7, Valkey 8) | a key-value store: see [below](#redis) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -289,9 +290,13 @@ go build -tags desktop,production -ldflags "-s -w -H windowsgui" -o bin\gotable.
 .\bin\gotable.exe
 ```
 
-From Linux, `make build-windows` cross-compiles the same `bin/gotable.exe`.
-It is built without cgo, so it can't open DuckDB files; every other
-database works.
+That build has no cgo, so it can't open DuckDB files. With DuckDB, the
+release `.exe` is cross-compiled from Linux with a MinGW that targets the
+UCRT, which is how DuckDB's Windows libraries are built: Fedora's
+`ucrt64-gcc-c++` (Debian's and Ubuntu's MinGW use the older msvcrt and fail
+to link). `make build-windows` uses it when it's installed, and builds
+without DuckDB otherwise. CI builds the tests the same way and runs them on
+Windows.
 On Windows GoTable keeps the system title bar; shortcuts, the native
 Save/Open dialogs and saved passwords (Credential Manager) work as on Linux.
 
@@ -326,10 +331,36 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 
 ## Tests
 
+### Redis
+
+Keys are shown the way tables are (`redis://` and `rediss://` URLs paste in;
+Valkey, KeyDB and Dragonfly speak the same protocol):
+
+- **Databases** are Redis's numbered ones, `db0`, `db1`…; the Database
+  field takes the number to start in.
+- **The sidebar** lists *All keys* and the namespaces found in the keys
+  (`user:*`, `session:*`). A pattern opens as a list of keys, with each one's
+  type, TTL (seconds) and value — short strings whole, other types by size.
+  The arrow on a key opens it: a hash's fields, a list's items, a set's
+  members, a sorted set's members and scores, a stream's entries, a string or
+  JSON value. Filters and search work on every column.
+- **Editing**: rename a key, change a string, set or clear a TTL, add a
+  string key, delete keys; in an opened key, change its fields, items,
+  members, scores or entries. Review shows the exact commands (`RENAME`,
+  `SET … KEEPTTL`, `HSET`, `LSET`, `ZADD`…). They run together in one
+  `MULTI/EXEC`, watched, so if a key changed meanwhile nothing is saved.
+- **The query editor** runs commands as redis-cli takes them, one a line
+  (`#` starts a comment): replies are tables (`HGETALL` as field/value,
+  `ZRANGE … WITHSCORES` as member/score, `INFO` by section, `SCAN` with the
+  next cursor). `MULTI…EXEC` and `SELECT` work across lines; `SUBSCRIBE` and
+  `MONITOR`, which never return, are refused.
+- **Export** writes the keys as commands with their expiry (`.redis`, for
+  `redis-cli < file` or Import script); keys can also go to CSV or JSON.
+
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
-ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, CockroachDB,
+ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, Redis, Valkey, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
 ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
                                   # MongoDB standalone, replica set, sharded cluster, TLS + X.509
@@ -427,7 +458,7 @@ goes into `key.go`, and copies with the old key take no more updates).
 
 ## Not implemented yet
 
-Other engines (Redis, IBM Db2, …), DuckDB in the Windows build, ER
+Other engines (IBM Db2, Cassandra, …), ER
 diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 

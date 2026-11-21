@@ -305,3 +305,31 @@ func TestMongoDBDriver(t *testing.T) {
 		t.Fatal("expected SRV over a tunnel to fail")
 	}
 }
+
+func TestRedisURLs(t *testing.T) {
+	c, pw, err := ParseURL("redis://default:s3cret@cache.example:6380/2")
+	if err != nil || c.Driver != DriverRedis || c.Host != "cache.example" || c.Port != 6380 || c.User != "default" || pw != "s3cret" || c.DBName != "2" || c.SSLMode != "disable" {
+		t.Fatalf("%+v %q %v", c, pw, err)
+	}
+	// A password alone; TLS; the default port; Valkey's schemes.
+	c, pw, err = ParseURL("rediss://:only-pw@managed.example")
+	if err != nil || c.User != "" || pw != "only-pw" || c.SSLMode != "require" || c.Port != 6379 || c.DBName != "" {
+		t.Fatalf("%+v %q %v", c, pw, err)
+	}
+	if c, _, err := ParseURL("valkeys://v.example/1"); err != nil || c.Driver != DriverValkey || c.SSLMode != "require" || c.DBName != "1" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, _, err := ParseURL("redis://h/cache"); err == nil {
+		t.Fatal("a database name isn't a Redis database")
+	}
+	// No user is needed; the database is a number.
+	c = NewConnection(DriverRedis)
+	c.Name, c.Host = "r", "localhost"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.DBName = "two"
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected a number")
+	}
+}

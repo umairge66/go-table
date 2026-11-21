@@ -34,8 +34,6 @@ jobs:
         include:
           - target: linux
             os: ubuntu-22.04
-          - target: windows
-            os: ubuntu-22.04
           - target: macos
             # GitHub retires old macOS images (macos-14 was refused); the app
             # still targets macOS 11+ (MACOSX_DEPLOYMENT_TARGET in package.sh).
@@ -70,9 +68,6 @@ jobs:
       - name: Install WebKitGTK
         if: matrix.target == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
-      - name: Install NSIS (the Windows installer)
-        if: matrix.target == 'windows'
-        run: sudo apt-get update && sudo apt-get install -y nsis
       - name: Build the web UI
         working-directory: frontend
         run: npm ci && npm run build
@@ -86,10 +81,52 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Windows: cross-built on Linux with cgo, for DuckDB. Its libraries need a
+  # MinGW that targets the UCRT, which Fedora packages and Ubuntu doesn't.
+  package-windows:
+    name: Package (windows)
+    runs-on: ubuntu-latest
+    container: fedora:44
+    timeout-minutes: 30
+    steps:
+      - name: Install the build tools
+        run: dnf install -y -q git tar gzip zip findutils which ucrt64-gcc-c++ mingw32-nsis
+      - uses: actions/checkout@v4
+      # The checkout belongs to another user than the container's root.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-package-windows-cgo-${{ hashFiles('go.sum') }}
+          restore-keys: go-package-windows-cgo-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the web UI
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Package
+        run: scripts/package.sh windows "$VERSION"
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gotable-windows
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Release
     if: github.ref_type == 'tag'
-    needs: package
+    needs: [package, package-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

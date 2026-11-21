@@ -202,6 +202,9 @@ func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 // AddColumn adds a column. On PostgreSQL and SQLite the statements run in a
 // transaction; MySQL commits DDL implicitly.
 func (c *Conn) AddColumn(ctx context.Context, t TableRef, def ColumnDef) ([]string, error) {
+	if c.redis != nil {
+		return nil, errRedisNoSQL
+	}
 	if c.mongo != nil {
 		return nil, errMongoNoColumns
 	}
@@ -262,6 +265,9 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 	}
 	if d.family == model.DriverMongoDB {
 		return buildMongoDrop(objs)
+	}
+	if d.family == model.DriverRedis {
+		return buildRedisDrop(objs)
 	}
 	var views, tables []string
 	for _, o := range objs {
@@ -347,6 +353,9 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string, error) {
 	if c.mongo != nil {
 		return c.mongoDrop(ctx, objs)
+	}
+	if c.redis != nil {
+		return c.redisDrop(ctx, objs)
 	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err

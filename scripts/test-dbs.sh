@@ -16,6 +16,7 @@
 #                        and two shards in one container
 #            mongotls    MongoDB that requires TLS, with a test CA and a
 #                        client certificate for X.509 login (needs openssl)
+#   redis    Redis          valkey    Valkey (the Redis fork)
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
 set -euo pipefail
@@ -35,10 +36,12 @@ PERCONA_IMAGE=${PERCONA_IMAGE:-percona/percona-server:8.4}
 S2_IMAGE=${S2_IMAGE:-ghcr.io/singlestore-labs/singlestoredb-dev:latest}
 ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23-slim-faststart}
 MONGODB_IMAGE=${MONGODB_IMAGE:-mongo:7}
+REDIS_IMAGE=${REDIS_IMAGE:-redis:7-alpine}
+VALKEY_IMAGE=${VALKEY_IMAGE:-valkey/valkey:8-alpine}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -119,6 +122,9 @@ if has mongotls; then
 	"$DOCKER" cp "$CERTS/." gotable-mongotls:/certs
 	"$DOCKER" start gotable-mongotls >/dev/null
 fi
+# With a password, as a server reachable from elsewhere should have.
+has redis && run redis -p 127.0.0.1::6379 "$REDIS_IMAGE" redis-server --requirepass "$PW"
+has valkey && run valkey -p 127.0.0.1::6379 "$VALKEY_IMAGE" valkey-server --requirepass "$PW"
 has ts && run ts -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$TS_IMAGE"
 has percona && run percona -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$PERCONA_IMAGE"
 has s2 && run s2 -e ROOT_PASSWORD=$PW -p 127.0.0.1::3306 "$S2_IMAGE"
@@ -186,6 +192,14 @@ if has mongotls; then
 	mongotls_sh 'db.getSiblingDB("$external").runCommand({ createUser: "O=GoTable Client,CN=gotable-client", roles: [{ role: "root", db: "admin" }] })' >/dev/null
 	export_env MONGOTLS "$(port mongotls 27017)" gotable $PW gotable
 	export GOTABLE_TEST_MONGOTLS_CA=$CERTS/ca.pem GOTABLE_TEST_MONGOTLS_CLIENT=$CERTS/client.pem
+fi
+if has redis; then
+	wait_ready redis in_container redis redis-cli -a "$PW" --no-auth-warning ping
+	export_env REDIS "$(port redis 6379)" "" "$PW" 0
+fi
+if has valkey; then
+	wait_ready valkey in_container valkey valkey-cli -a "$PW" --no-auth-warning ping
+	export_env VALKEY "$(port valkey 6379)" "" "$PW" 0
 fi
 if has ts; then
 	wait_ready ts in_container ts pg_isready -U postgres -h 127.0.0.1
