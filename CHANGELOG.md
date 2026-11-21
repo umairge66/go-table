@@ -3,6 +3,69 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## v0.7.0 — 2026-11-21
+
+### Added
+
+- **A Windows installer** (`…-windows-amd64-setup.exe`): installs GoTable
+  for the current user in `%LOCALAPPDATA%\Programs\GoTable` without an
+  administrator, with a Start menu shortcut (a desktop one if ticked), an
+  entry in Settings → Apps to uninstall it (keeping the saved connections),
+  and *Start GoTable* at the end. The plain `.exe` and `.zip` stay, as the
+  portable version.
+- **Updates from GitHub.** Once a day GoTable checks for a newer release
+  (Settings → Updates: on by default, *Check now*, or off) and offers it
+  with its notes: *Update*, *Later* or *Skip this version*. The AppImage,
+  the Linux `.tar.gz`, the Windows `.exe` and the macOS app replace
+  themselves and restart; a `.deb` or `.rpm` is downloaded and opened with
+  the system's installer. Releases are signed (`SHA256SUMS.sig`), and
+  nothing whose signature or checksum doesn't match is installed. Copies
+  from before this version must be updated by hand once.
+
+- **Settings** (a gear on the home screen and in the workspace, the command
+  palette, or Ctrl+,), saved in `settings.json` next to the connections:
+  - theme: system, light or dark;
+  - accent colour: eleven presets with their own dark-mode shades, or any
+    colour; text on it stays readable;
+  - the query editor's default text size;
+  - keyboard shortcuts: every one can be given other keys, reset or removed,
+    with clashes pointed out; keys the system needs (copy, undo…) are kept.
+    Hints on buttons and in the command palette show the keys as set.
+  - panels: whether the database rail, the sidebar and the row inspector
+    start open, closed, or as they were last left (kept across restarts).
+- Databases can be copied by name and deleted: right-click one in the
+  rail (*Copy name*; on PostgreSQL and SQL Server the database's or the
+  schema's), or *Delete a database…* in the Ctrl+D list and the command
+  palette. The command is shown first, the name must be typed, and a schema
+  can go with everything in it (CASCADE). The database GoTable is connected
+  to, and the server's own (mysql, master, admin…), can't be deleted; on
+  SQLite a database is a file and on Oracle a schema is a user, so neither
+  is offered.
+- Opening a table selects its first row and gives it the keyboard: arrow
+  keys, Enter and typing work without clicking into the grid first (not
+  while you are typing somewhere else, such as the table filter).
+- The query editor's text can be made larger or smaller per tab: Ctrl+= /
+  Ctrl+− / Ctrl+0, or the A− A+ buttons in its toolbar.
+- The query editor highlights the whole statement that Run would run, not
+  just the cursor's line, and follows the cursor to the next statement.
+  Only a statement's own lines count: on a blank line (above, below or
+  between statements) nothing is highlighted, and Run says so instead of
+  running the statement below (as it used to).
+
+### Fixed
+
+- On Linux, the task bar showed a generic (Wayland) icon instead of
+  GoTable's when it ran without being installed (the .tar.gz, the AppImage,
+  a build from source): the shell finds an app's icon through its
+  `.desktop` file, and there was none. GoTable now registers itself in
+  `~/.local/share/applications` when no `gotable.desktop` exists, and gives
+  way to the one a package installs (`GOTABLE_NO_DESKTOP_ENTRY=1` turns
+  this off).
+- The light or dark choice, and whether the sidebar, the database rail and
+  the row inspector were shown, were forgotten when the desktop app
+  restarted: the window's storage is tied to its address, which changes with
+  every launch.
+
 ## v0.6.0 — 2026-11-20
 
 MongoDB catches up with Compass, is tested on every supported version and

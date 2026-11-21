@@ -4,12 +4,14 @@ import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, sql, type SQLDialect } from '@
 import { javascript, javascriptLanguage } from '@codemirror/lang-javascript'
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
-import { Compartment, EditorState, Prec } from '@codemirror/state'
-import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view'
+import { Compartment, EditorState, Prec, RangeSetBuilder, StateField } from '@codemirror/state'
+import { Decoration, EditorView, GutterMarker, drawSelection, gutterLineClass, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { mongoCompletions, mongoStatementAt } from '../lib/mongoShell'
+import { mongoCompletions, mongoStatementAt, mongoStatementRange, pickStatement, trimRange } from '../lib/mongoShell'
 import { forDriver, isMongo, type Driver, type PerDriver } from '../types'
+import { useSettings } from '../lib/settings'
+import { codemirrorKey, combosFor, label } from '../lib/shortcuts'
 
 const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--accent)', fontWeight: '600' },
@@ -43,6 +45,16 @@ export interface SqlEditorHandle {
 
 /** statementAt finds the ;-separated statement around pos (quotes and comments aware). */
 export function statementAt(text: string, pos: number): string {
+  const r = statementRange(text, pos)
+  return r ? text.slice(r[0], r[1]) : ''
+}
+
+/**
+ * statementRange: where the statement that runs for the cursor at pos starts
+ * and ends, without surrounding space; null when the cursor isn't at one
+ * (see pickStatement).
+ */
+export function statementRange(text: string, pos: number, withSemicolon = false): [number, number] | null {
   const bounds: [number, number][] = []
   let start = 0
   let q: string | null = null
@@ -63,8 +75,52 @@ export function statementAt(text: string, pos: number): string {
   }
   bounds.push([start, text.length])
   const nonEmpty = bounds.filter(([a, b]) => text.slice(a, b).trim())
-  const hit = nonEmpty.find(([a, b]) => pos >= a && pos <= b + 1) ?? nonEmpty.filter(([, b]) => b < pos).pop() ?? nonEmpty[0]
-  return hit ? text.slice(hit[0], hit[1]).trim() : ''
+  const hit = pickStatement(text, nonEmpty.map((r) => trimRange(text, r)), pos)
+  // Run leaves out the closing ;, the highlight takes it in.
+  return hit && withSemicolon && text[hit[1]] === ';' ? [hit[0], hit[1] + 1] : hit
+}
+
+/** Statements in very long scripts aren't tracked as the cursor moves: scanning would lag. */
+const HIGHLIGHT_LIMIT = 300_000
+
+/**
+ * statementHighlight marks every line of the statement that Run would run
+ * for the cursor: a tinted block with an accent bar, and accent line numbers.
+ * With a selection, the selection is what runs, so nothing is marked.
+ */
+function statementHighlight(driver: () => Driver) {
+  const line = Decoration.line({ class: 'cm-statement-highlight' })
+  const marker = new (class extends GutterMarker { elementClass = 'cm-statement-gutter' })()
+  const compute = (state: EditorState) => {
+    const sel = state.selection.main
+    if (!sel.empty || state.doc.length === 0 || state.doc.length > HIGHLIGHT_LIMIT) return null
+    const text = state.doc.toString()
+    const r = isMongo(driver()) ? mongoStatementRange(text, sel.head) : statementRange(text, sel.head, true)
+    if (!r || r[0] >= r[1]) return null
+    return { first: state.doc.lineAt(r[0]).number, last: state.doc.lineAt(r[1]).number }
+  }
+  const field = StateField.define<{ first: number; last: number } | null>({
+    create: compute,
+    update: (v, tr) => (tr.docChanged || tr.selection ? compute(tr.state) : v),
+  })
+  const lines = (state: EditorState, build: (from: number) => void) => {
+    const r = state.field(field)
+    if (!r) return
+    for (let n = r.first; n <= r.last; n++) build(state.doc.line(n).from)
+  }
+  return [
+    field,
+    EditorView.decorations.compute([field], (state) => {
+      const b = new RangeSetBuilder<Decoration>()
+      lines(state, (from) => b.add(from, from, line))
+      return b.finish()
+    }),
+    gutterLineClass.compute([field], (state) => {
+      const b = new RangeSetBuilder<GutterMarker>()
+      lines(state, (from) => b.add(from, from, marker))
+      return b.finish()
+    }),
+  ]
 }
 
 export const SqlEditor = forwardRef<SqlEditorHandle, {
@@ -76,34 +132,33 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
   onRunCurrent?: () => void
   onRunAll?: () => void
   onFormat?: () => void
+  /** fontSize: this editor's text size; the default from Settings otherwise. */
+  fontSize?: number
   autoFocus?: boolean
 }>(function SqlEditor(p, ref) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const lang = useRef(new Compartment())
+  const keys = useRef(new Compartment())
+  const shortcuts = useSettings().shortcuts
   const cb = useRef(p)
   cb.current = p
 
   useEffect(() => {
-    const run = (all: boolean) => () => { (all ? cb.current.onRunAll : cb.current.onRunCurrent)?.(); return true }
     const v = new EditorView({
       parent: host.current!,
       state: EditorState.create({
         doc: p.value,
         extensions: [
           lineNumbers(), highlightActiveLineGutter(), history(), drawSelection(), indentOnInput(), bracketMatching(),
-          closeBrackets(), autocompletion({ icons: false }), highlightActiveLine(), highlightSelectionMatches(),
+          closeBrackets(), autocompletion({ icons: false }), highlightSelectionMatches(),
+          // The statement that runs, rather than just the cursor's line.
+          p.readOnly ? [] : statementHighlight(() => cb.current.driver),
           syntaxHighlighting(highlight),
           lang.current.of(language(p.driver, p.tables)),
-          placeholder((isMongo(p.driver) ? 'db.collection.find({ … })' : 'Write SQL…') + '   Ctrl+↵ runs the statement under the cursor · Ctrl+Shift+↵ runs everything · Ctrl+I formats'),
           EditorState.readOnly.of(!!p.readOnly),
           EditorView.editable.of(!p.readOnly),
-          Prec.highest(keymap.of([
-            { key: 'Mod-Enter', run: run(false) },
-            { key: 'Mod-Shift-Enter', run: run(true) },
-            { key: 'Mod-/', run: toggleComment },
-            { key: 'Mod-i', run: () => { cb.current.onFormat?.(); return true } },
-          ])),
+          keys.current.of(editorKeys(shortcuts, p.driver, cb)),
           keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
           EditorView.updateListener.of((u) => { if (u.docChanged) cb.current.onChange?.(u.state.doc.toString()) }),
         ],
@@ -118,6 +173,11 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
   useEffect(() => {
     view.current?.dispatch({ effects: lang.current.reconfigure(language(p.driver, p.tables)) })
   }, [p.driver, p.tables])
+
+  // Shortcuts changed in Settings apply to open editors at once.
+  useEffect(() => {
+    view.current?.dispatch({ effects: keys.current.reconfigure(editorKeys(shortcuts, p.driver, cb)) })
+  }, [shortcuts, p.driver])
 
   useEffect(() => {
     const v = view.current
@@ -150,5 +210,29 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
     },
   }))
 
-  return <div ref={host} className="h-full overflow-hidden" data-testid="sql-editor" />
+  return <div ref={host} className="h-full overflow-hidden" data-testid="sql-editor"
+    style={p.fontSize ? { '--editor-font-size': `${p.fontSize}px` } as React.CSSProperties : undefined} />
 })
+
+type Callbacks = { current: { onRunCurrent?: () => void; onRunAll?: () => void; onFormat?: () => void } }
+
+/**
+ * editorKeys: the editor's own shortcuts, from the settings, and the hint
+ * shown in an empty editor. They come first so that the defaults (Ctrl+I,
+ * Ctrl+/) don't take them.
+ */
+function editorKeys(overrides: Record<string, string>, driver: Driver, cb: Callbacks) {
+  const bind = (id: string, run: (v: EditorView) => boolean) => combosFor(id, overrides).map((c) => ({ key: codemirrorKey(c), run }))
+  const call = (f: (() => void) | undefined) => () => { f?.(); return true }
+  const hint = (id: string, what: string) => { const k = label(combosFor(id, overrides)[0] ?? ''); return k ? `${k.replace(/ /g, '+')} ${what}` : '' }
+  const tips = [hint('editor.runCurrent', 'runs the statement under the cursor'), hint('editor.runAll', 'runs everything'), hint('editor.format', 'formats')].filter(Boolean)
+  return [
+    placeholder((isMongo(driver) ? 'db.collection.find({ … })' : 'Write SQL…') + (tips.length ? '   ' + tips.join(' · ') : '')),
+    Prec.highest(keymap.of([
+      ...bind('editor.runCurrent', () => call(cb.current.onRunCurrent)()),
+      ...bind('editor.runAll', () => call(cb.current.onRunAll)()),
+      ...bind('editor.comment', toggleComment),
+      ...bind('editor.format', () => call(cb.current.onFormat)()),
+    ])),
+  ]
+}

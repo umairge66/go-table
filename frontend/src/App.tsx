@@ -6,18 +6,33 @@ import { Spinner, ToastProvider, errorParts, useToast } from './components/ui'
 import type { Connection, Group, SessionInfo } from './types'
 import { Home } from './views/Home'
 import { Workspace } from './views/Workspace'
+import { SettingsDialog } from './views/SettingsDialog'
+import { applyAppearance, loadSettings, resolvedTheme, updateSettings, useSettings } from './lib/settings'
+import { hit } from './lib/shortcuts'
+import { initUpdates } from './lib/updates'
+import { UpdateNotice } from './components/UpdateNotice'
 
-type Theme = 'light' | 'dark'
+const darkQuery = () => window.matchMedia?.('(prefers-color-scheme: dark)')
 
-function initialTheme(): Theme {
-  const saved = localStorage.getItem('gotable:theme')
-  if (saved === 'light' || saved === 'dark') return saved
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+/** useSystemDark follows the system's light or dark mode, for the "System" theme. */
+function useSystemDark() {
+  const [dark, setDark] = useState(() => !!darkQuery()?.matches)
+  useEffect(() => {
+    const q = darkQuery()
+    if (!q) return
+    const on = (e: MediaQueryListEvent) => setDark(e.matches)
+    q.addEventListener('change', on)
+    return () => q.removeEventListener('change', on)
+  }, [])
+  return dark
 }
 
 function Shell() {
   const toast = useToast()
-  const [theme, setTheme] = useState<Theme>(initialTheme)
+  const settings = useSettings()
+  const systemDark = useSystemDark()
+  const theme = resolvedTheme(settings, systemDark)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [connections, setConnections] = useState<Connection[] | null>(null)
   const [groups, setGroups] = useState<Group[]>([])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
@@ -28,18 +43,18 @@ function Shell() {
   const opening = useRef(new Set<string>())
   const ownTitleBar = useOwnTitleBar()
 
+  // Settings first: the daily update check reads when it last ran.
+  useEffect(() => { loadSettings().then(() => initUpdates()) }, [])
+  useEffect(() => { applyAppearance(settings, theme) }, [settings, theme])
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
     // In the desktop window, GTK draws <select> lists and file dialogs; tell
     // it the theme so they match (a no-op in a browser).
     fetch('/api/native/theme', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dark: theme === 'dark' }) })
       .catch(() => {})
   }, [theme])
-  const toggleTheme = useCallback(() => setTheme((t) => {
-    const next = t === 'dark' ? 'light' : 'dark'
-    localStorage.setItem('gotable:theme', next)
-    return next
-  }), [])
+  // The toggle picks the other theme outright (leaving "System").
+  const toggleTheme = useCallback(() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' }), [theme])
+  const openSettings = useCallback(() => setSettingsOpen(true), [])
 
   const reload = useCallback(async () => {
     try {
@@ -77,10 +92,11 @@ function Shell() {
     setView('home')
   }, [])
 
-  // Ctrl+Shift+L toggles the theme everywhere.
+  // Ctrl+Shift+L toggles the theme and Ctrl+, opens the settings, everywhere.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') { e.preventDefault(); toggleTheme() }
+      if (hit(e, 'app.theme')) { e.preventDefault(); toggleTheme() }
+      else if (hit(e, 'app.settings')) { e.preventDefault(); setSettingsOpen(true) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -92,13 +108,15 @@ function Shell() {
     <>
       {ownTitleBar && <ResizeEdges />}
       {view === 'home' && (
-        <Home connections={connections} groups={groups} reload={reload} onConnect={connect} connecting={connecting} theme={theme} toggleTheme={toggleTheme} />
+        <Home connections={connections} groups={groups} reload={reload} onConnect={connect} connecting={connecting} theme={theme} toggleTheme={toggleTheme} onOpenSettings={openSettings} />
       )}
       {sessions.map((s) => (
         <Workspace key={s.id} session={s} sessions={sessions} active={view === s.id} onHome={() => setView('home')} onSwitch={setView}
-          onDisconnect={() => disconnect(s.id)} theme={theme} toggleTheme={toggleTheme}
+          onDisconnect={() => disconnect(s.id)} theme={theme} toggleTheme={toggleTheme} onOpenSettings={openSettings}
           onOpenConnection={(c) => { reload(); connect(c) }} />
       ))}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <UpdateNotice />
     </>
   )
 }

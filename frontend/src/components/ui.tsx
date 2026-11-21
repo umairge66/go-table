@@ -144,7 +144,7 @@ export function Switch({ checked, onChange, label, id }: { checked: boolean; onC
 }
 
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
-  return <kbd className={clsx('rounded border border-line bg-panel-2 px-1 font-sans text-[10.5px] font-medium text-muted', className)}>{typeof children === 'string' ? keys(children) : children}</kbd>
+  return <kbd className={clsx('whitespace-nowrap rounded border border-line bg-panel-2 px-1 font-sans text-[10.5px] font-medium text-muted', className)}>{typeof children === 'string' ? keys(children) : children}</kbd>
 }
 
 export function Spinner({ className }: { className?: string }) {
@@ -206,7 +206,10 @@ export function Modal({ title, label, subtitle, onClose, children, footer, width
   title: ReactNode; label?: string; subtitle?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number
 }) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    // A field that records keys (a shortcut) uses Esc itself.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !(e.target instanceof Element && e.target.closest('[data-captures-keys]'))) { e.stopPropagation(); onClose() }
+    }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])

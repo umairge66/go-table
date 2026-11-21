@@ -112,6 +112,13 @@ windows)
 	(cd build/windows && zip -q -r "../../dist/gotable-$pkgver-windows-amd64.zip" gotable.exe LICENSE README.md)
 	# The bare .exe too, for people who just want to run it.
 	cp build/windows/gotable.exe "dist/gotable-$pkgver-windows-amd64.exe"
+
+	# The installer: for the current user (no administrator), Start menu,
+	# an entry in Settings -> Apps (packaging/windows/gotable.nsi).
+	command -v makensis >/dev/null || { echo "makensis (NSIS) is needed for the installer: apt install nsis / dnf install mingw32-nsis" >&2; exit 1; }
+	numver=$(grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$pkgver").0
+	makensis -V2 -DVERSION="$pkgver" -DNUMVER="$numver" -DSRC="$PWD/build/windows" \
+		-DOUT="$PWD/dist/gotable-$pkgver-windows-amd64-setup.exe" packaging/windows/gotable.nsi
 	;;
 macos)
 	# Runs on a Mac (Xcode command line tools). One app for both Apple

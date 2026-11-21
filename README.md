@@ -12,7 +12,7 @@ on macOS).
 </p>
 <p align="center">
   <b>Linux:</b> <code>.deb</code> (Ubuntu/Debian) · <code>.rpm</code> (Fedora) · <code>.AppImage</code> (any distro)
-  &nbsp;|&nbsp; <b>Windows:</b> <code>.exe</code>
+  &nbsp;|&nbsp; <b>Windows:</b> <code>-setup.exe</code> (installer) · <code>.exe</code> (portable)
   &nbsp;—&nbsp; <a href="#install">which file do I need?</a>
 </p>
 
@@ -165,8 +165,20 @@ A collection opens like a table, with each top-level field as a column:
   new queries and import/export act on. Tabs show their database, query tabs
   always run in the database they were opened in, and the open databases
   are remembered per connection. **Ctrl+K** searches everything.
+  Right-click a database in the rail to copy its name or delete it (also
+  *Delete a database…* in the Ctrl+D list): the DROP command is shown and
+  the name must be typed first.
 - **Everywhere**: command palette (Ctrl+K), toasts, light/dark (Ctrl+Shift+L),
   several connections open at once.
+- **Settings** (the gear, or Ctrl+,): theme (system, light or dark), the
+  accent colour (eleven presets, each with its own dark-mode shade, or any
+  colour), whether the database rail, the sidebar and the row inspector
+  start open, closed or as last left, the query editor's default text size,
+  and every keyboard
+  shortcut listed in this README (record new keys, reset, or remove them;
+  clashes are pointed out). They are saved in `settings.json` next to the
+  connections. A query tab can zoom its own text: Ctrl+= / Ctrl+− / Ctrl+0
+  or the A− A+ buttons. The shortcuts here are the defaults.
 - **Feels like a desktop app**: a native window; exports and saved results
   use the system *Save As* dialog and Go writes the file directly; imports
   use the system *Open* dialog and read the file in place (no copy, any
@@ -221,7 +233,8 @@ Download the file for your system from the [latest release](https://github.com/u
 | Ubuntu 22.04+, Debian 12+ | `gotable_<version>_amd64.deb` | `sudo apt install ./gotable_*_amd64.deb` |
 | Fedora 36+ | `gotable-<version>-1.x86_64.rpm` | `sudo dnf install ./gotable-*.x86_64.rpm` |
 | Any Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it — self-contained (WebKitGTK included) |
-| Windows 10 / 11 | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | run it |
+| Windows 10 / 11 | `gotable-<version>-windows-amd64-setup.exe` | run it: installs GoTable for your account (no administrator needed), with a Start menu shortcut and an entry in Settings → Apps to uninstall it |
+| Windows, portable | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | run it: nothing is installed |
 | macOS 11+ (Apple silicon and Intel) | `GoTable-<version>-macos-universal.dmg` (or the `.zip`) | open it and drag GoTable to Applications |
 
 The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.
@@ -371,6 +384,28 @@ git push origin v0.1.0
 The packaging is `scripts/package.sh` (`make package-linux` /
 `make package-windows`), so it runs the same way locally.
 
+### Updates
+
+GoTable keeps itself up to date from these releases (`internal/update`).
+Once a day (Settings → Updates; never for a development build) it asks
+GitHub for the latest release; nothing about the user or their databases is
+sent. A newer one shows a notice with its notes, and *Update* installs it:
+
+| Installed as | Update |
+|---|---|
+| AppImage, `.tar.gz`, Windows `.exe` | replaced in place, then *Restart now* |
+| macOS app | `GoTable.app` replaced in place, then *Restart now* |
+| `.deb` / `.rpm` | downloaded and opened with the system's installer |
+
+Nothing is installed unless it matches `SHA256SUMS` and that file's
+Ed25519 signature checks out with the key built into GoTable
+(`internal/update/key.go`). The release job signs with the private key in
+the **`GOTABLE_RELEASE_KEY`** secret (`cmd/release-sign`) and stops if the
+secret is missing or doesn't match. Keep a copy of that key: without it,
+copies already installed can't be sent signed updates. A new key pair:
+`go run ./cmd/release-sign -genkey key.txt` (then the printed public key
+goes into `key.go`, and copies with the old key take no more updates).
+
 ## Layout
 
 | Path | Responsibility |
@@ -381,6 +416,9 @@ The packaging is `scripts/package.sh` (`make package-linux` /
 | `internal/export` | CSV / SQL / JSON writers |
 | `internal/server` | local JSON API, auth, background jobs, uploads, plain-language errors |
 | `internal/webui` | embeds the built UI |
+| `internal/update` | GoTable's own updates: GitHub releases, signatures, installing |
+| `internal/desktopentry` | registers a portable Linux copy with the desktop (its icon) |
+| `cmd/release-sign` | signs a release's files (`SHA256SUMS`, `SHA256SUMS.sig`) |
 | `frontend/` | React + TypeScript + Tailwind UI, Vitest and Playwright tests |
 | `cmd/gotable` | starts the server and the window (`window_wails.go`; `window_browser.go` with `-tags browser`) |
 | `packaging/` | app icon, desktop entry, `.deb`/`.rpm` definition (nfpm) |

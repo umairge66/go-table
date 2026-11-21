@@ -43,8 +43,10 @@ type Server struct {
 	uploads  map[string]*upload
 	tmpDir   string // uploads and export results; removed by Close
 
-	queries *model.QueryStore   // saved queries
-	history *model.HistoryStore // executed statements
+	queries  *model.QueryStore    // saved queries
+	history  *model.HistoryStore  // executed statements
+	settings *model.SettingsStore // the UI's preferences
+	updates  *updater             // GoTable's own updates (SetVersion)
 
 	dialogs     Dialogs            // native file dialogs (desktop window only)
 	themeHook   func(dark bool)    // native widgets follow the page theme
@@ -101,6 +103,7 @@ func New(store *model.Store, secrets model.Secrets, static fs.FS) *Server {
 	}
 	return &Server{store: store, secrets: secrets, token: randomID(24), static: static, sessions: map[string]*session{},
 		jobs: map[string]*Job{}, uploads: map[string]*upload{}, tmpDir: tmp, queries: queries, history: history,
+		settings:    model.OpenSettingsStore(filepath.Join(dir, "settings.json")),
 		saveTargets: map[string]string{}}
 }
 

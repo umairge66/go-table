@@ -61,9 +61,41 @@ export function mongoStatements(text: string): [number, number][] {
 
 /** mongoStatementAt finds the statement around pos. */
 export function mongoStatementAt(text: string, pos: number): string {
+  const r = mongoStatementRange(text, pos)
+  return r ? text.slice(r[0], r[1]) : ''
+}
+
+/** mongoStatementRange: where the command that runs for the cursor at pos starts and ends, without surrounding space. */
+export function mongoStatementRange(text: string, pos: number): [number, number] | null {
   const nonEmpty = mongoStatements(text).filter(([a, b]) => text.slice(a, b).replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '').trim())
-  const hit = nonEmpty.find(([a, b]) => pos >= a && pos <= b + 1) ?? nonEmpty.filter(([, b]) => b < pos).pop() ?? nonEmpty[0]
-  return hit ? text.slice(hit[0], hit[1]).trim() : ''
+  return pickStatement(text, nonEmpty.map((r) => trimRange(text, r)), pos)
+}
+
+const lineOf = (text: string, i: number) => { let n = 0; for (let j = text.indexOf('\n'); j >= 0 && j < i; j = text.indexOf('\n', j + 1)) n++; return n }
+
+/**
+ * pickStatement: which statement (given as trimmed ranges, in order) is
+ * under the cursor at pos, the one Run runs and the editor highlights:
+ * - the one the cursor is in, or right after (just past its ;);
+ * - else the one on the cursor's line (the nearest before it);
+ * - else none: on a line of no statement (a blank one above, below or
+ *   between) nothing is guessed.
+ */
+export function pickStatement(text: string, ranges: [number, number][], pos: number): [number, number] | null {
+  const inside = ranges.find(([a, b]) => pos >= a && pos <= b) ?? ranges.find(([, b]) => pos === b + 1 && text[b] === ';')
+  if (inside) return inside
+  const line = lineOf(text, pos)
+  const spans = ranges.map((r) => ({ r, first: lineOf(text, r[0]), last: lineOf(text, r[1]) }))
+  const onLine = spans.filter((s) => s.first <= line && line <= s.last)
+  if (onLine.length) return (onLine.filter((s) => s.r[1] <= pos).pop() ?? onLine[0]).r
+  return null
+}
+
+/** trimRange narrows [from, to) to leave out surrounding white space. */
+export function trimRange(text: string, [from, to]: [number, number]): [number, number] {
+  while (from < to && /\s/.test(text[from])) from++
+  while (to > from && /\s/.test(text[to - 1])) to--
+  return [from, to]
 }
 
 /** closing returns the index of the bracket that closes the one at open, or -1. */

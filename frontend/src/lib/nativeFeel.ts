@@ -1,6 +1,7 @@
 // Makes the app window behave like a desktop application rather than a web
 // page: browser shortcuts, the browser context menu and file-drop navigation
 // are switched off.
+import { hit } from './shortcuts'
 
 /** Browser shortcuts with no meaning in GoTable (checked after the app had its turn). */
 const BROWSER_KEYS = new Set([
@@ -33,8 +34,9 @@ export function installNativeFeel() {
   // their shortcuts first; whatever is left must not reach the browser.
   window.addEventListener('keydown', (e) => {
     const combo = comboOf(e)
-    // F5 / Ctrl+R refresh the data in the app instead of reloading the page.
-    if (combo === 'f5' || combo === 'ctrl+r' || combo === 'ctrl+shift+r' || combo === 'ctrl+f5' || combo === 'shift+f5') {
+    // F5 / Ctrl+R (or its replacement) refresh the data in the app instead of reloading the page.
+    if (combo === 'f5' || combo === 'ctrl+r' || combo === 'ctrl+shift+r' || combo === 'ctrl+f5' || combo === 'shift+f5' || hit(e, 'app.refresh')) {
+      if (combo === 'ctrl+r' && !hit(e, 'app.refresh')) { e.preventDefault(); return } // rebound: still no page reload
       e.preventDefault()
       window.dispatchEvent(new CustomEvent('gotable:refresh-shortcut'))
       return

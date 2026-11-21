@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { AlertCircle, Bookmark, CheckCircle2, Copy, Download, FolderOpen, Gauge, Lock, Pencil, Play, Save, Sparkles, Square, StepForward, Trash2, Undo2 } from 'lucide-react'
+import { AArrowDown, AArrowUp, AlertCircle, Bookmark, CheckCircle2, Copy, Download, FolderOpen, Gauge, Lock, Pencil, Play, Save, Sparkles, Square, StepForward, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type TableRef } from '../api'
 import { useConfirm } from '../components/Confirm'
@@ -16,6 +16,9 @@ import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
 import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo } from '../types'
 import { explainStatement, mongoSourceTable } from '../lib/mongoShell'
+import { FONT_SIZES, getSettings, useSettings } from '../lib/settings'
+import { hit, useShortcutLabel } from '../lib/shortcuts'
+import { keys } from '../lib/platform'
 import { fmt } from './DataView'
 
 const LIMITS = [100, 1000, 10000, 0]
@@ -98,11 +101,16 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     }
   }, [limit, onSchemaChanged, running, session.id, schema])
 
+  const zoomRef = useRef<(step: 1 | -1 | 0) => void>(() => {})
   // Ctrl+S saves the query (when this tab is visible).
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); onSave(editor.current?.value() ?? '') }
+      if (hit(e, 'query.save')) { e.preventDefault(); onSave(editor.current?.value() ?? '') }
+      // The text size keys work anywhere in the tab, not only in the editor.
+      else if (hit(e, 'editor.zoomIn')) { e.preventDefault(); zoomRef.current(1) }
+      else if (hit(e, 'editor.zoomOut')) { e.preventDefault(); zoomRef.current(-1) }
+      else if (hit(e, 'editor.zoomReset')) { e.preventDefault(); zoomRef.current(0) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -114,7 +122,33 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     if (autoRun && !autoRan.current && initialSql.trim()) { autoRan.current = true; run(initialSql) }
   }, [autoRun]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const runCurrent = () => run(editor.current?.current() ?? '')
+  const runCurrent = () => {
+    const text = editor.current?.current() ?? ''
+    // Between statements nothing is under the cursor: say so rather than guess.
+    if (!text.trim() && (editor.current?.value() ?? '').trim()) {
+      toast('error', 'No statement under the cursor', 'Click in the statement to run (it is highlighted), select some text, or use Run all.')
+      return
+    }
+    run(text)
+  }
+  // Text size: this tab's own after zooming, else the default from Settings.
+  const settings = useSettings()
+  const [zoomed, setZoomed] = useState<number | null>(null)
+  const fontSize = zoomed ?? settings.editorFontSize
+  const zoom = useCallback((step: 1 | -1 | 0) => setZoomed((z) => {
+    if (step === 0) return null
+    const next = Math.min(FONT_SIZES.max, Math.max(FONT_SIZES.min, (z ?? getSettings().editorFontSize) + step))
+    return next === getSettings().editorFontSize ? null : next
+  }), [])
+  zoomRef.current = zoom
+  const runKeys = useShortcutLabel('editor.runCurrent')
+  const runAllKeys = useShortcutLabel('editor.runAll')
+  const formatKeys = useShortcutLabel('editor.format')
+  const saveKeys = useShortcutLabel('query.save')
+  const zoomInKeys = useShortcutLabel('editor.zoomIn')
+  const zoomOutKeys = useShortcutLabel('editor.zoomOut')
+  const zoomResetKeys = useShortcutLabel('editor.zoomReset')
+  const withKeys = (text: string, k: string) => (k ? `${text} (${keys(k.replace(/ /g, '+'))})` : text)
   const mongo = isMongo(session.connection.driver)
   // Explain runs the statement under the cursor through explain("executionStats").
   const explain = () => {
@@ -246,12 +280,18 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-line px-2">
-        <Button size="sm" variant="primary" icon={<Play className="size-3.5" />} onClick={runCurrent} disabled={!!running} kbd="Ctrl ↵">Run</Button>
-        <Button size="sm" variant="ghost" icon={<StepForward className="size-3.5" />} onClick={runAll} disabled={!!running} title="Run all (Ctrl+Shift+Enter)">Run all</Button>
+        <Button size="sm" variant="primary" icon={<Play className="size-3.5" />} onClick={runCurrent} disabled={!!running} kbd={runKeys}>Run</Button>
+        <Button size="sm" variant="ghost" icon={<StepForward className="size-3.5" />} onClick={runAll} disabled={!!running} title={withKeys('Run all', runAllKeys)}>Run all</Button>
         {mongo && <Button size="sm" variant="ghost" icon={<Gauge className="size-3.5" />} onClick={explain} disabled={!!running} title="Show how the server runs the command under the cursor: indexes, documents examined, time">Explain</Button>}
-        <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={beautify} title="Beautify the selection, or everything (Ctrl+I)">Format</Button>
+        <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={beautify} title={withKeys('Beautify the selection, or everything', formatKeys)}>Format</Button>
         {running && <Button size="sm" variant="danger" icon={<Square className="size-3 fill-current" />} onClick={stop}>Stop · {(elapsed / 1000).toFixed(1)}s</Button>}
         <div className="flex-1" />
+        <div className="flex items-center rounded-lg border border-line" role="group" aria-label="Editor text size">
+          <IconButton label={withKeys('Smaller text', zoomOutKeys)} disabled={fontSize <= FONT_SIZES.min} onClick={() => zoom(-1)}><AArrowDown className="size-3.5" /></IconButton>
+          <button className={clsx('h-7 min-w-8 px-1 text-[12px] tabular-nums', zoomed ? 'font-semibold text-accent' : 'text-muted')} data-testid="editor-font-size"
+            title={zoomed ? withKeys(`Back to the default size (${settings.editorFontSize})`, zoomResetKeys) : 'The default size, set in Settings'} onClick={() => zoom(0)}>{fontSize}</button>
+          <IconButton label={withKeys('Larger text', zoomInKeys)} disabled={fontSize >= FONT_SIZES.max} onClick={() => zoom(1)}><AArrowUp className="size-3.5" /></IconButton>
+        </div>
         <span className="text-[12px] text-muted">Limit</span>
         <Select aria-label="Row limit" className="w-28" value={limit} onChange={(e) => {
           const n = Number(e.target.value)
@@ -262,7 +302,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
         </Select>
         <Button size="sm" variant="ghost" icon={<FolderOpen className="size-3.5" />} onClick={() => fileInput.current?.click()}>Open</Button>
         <Button size="sm" variant="ghost" icon={<Bookmark className="size-3.5" />} onClick={() => onSave(editor.current?.value() ?? '')}
-          title={savedName ? `Update “${savedName}” (Ctrl+S)` : 'Save to Queries (Ctrl+S)'}>Save</Button>
+          title={withKeys(savedName ? `Update “${savedName}”` : 'Save to Queries', saveKeys)}>Save</Button>
         <IconButton label="Save as .sql file…" onClick={() => saveAs(`${savedName ?? 'query'}.sql`, 'sql', () => editor.current?.value() ?? '')}><Save className="size-3.5" /></IconButton>
         <input ref={fileInput} type="file" accept=".sql,.txt" hidden onChange={async (e) => {
           const f = e.target.files?.[0]
@@ -272,7 +312,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
       </div>
       <div style={{ height: editorH }} className="shrink-0">
         <SqlEditor ref={editor} value={initialSql} onChange={changed} driver={session.connection.driver} tables={completions}
-          onRunCurrent={runCurrent} onRunAll={runAll} onFormat={beautify} autoFocus={active} />
+          onRunCurrent={runCurrent} onRunAll={runAll} onFormat={beautify} fontSize={zoomed ?? undefined} autoFocus={active} />
       </div>
       <DragHandle axis="y" onMouseDown={dragEditor} />
       <div className="flex min-h-0 flex-1 flex-col">

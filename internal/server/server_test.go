@@ -1040,3 +1040,32 @@ func TestExplainMongoDB(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsAPI(t *testing.T) {
+	h := newHarness(t)
+	var got map[string]any
+	if c := h.do("GET", "/api/settings", nil, &got); c != 200 || len(got) != 0 {
+		t.Fatal(c, got)
+	}
+	in := map[string]any{"theme": "dark", "accent": "teal", "editorFontSize": 15, "shortcuts": map[string]string{"query.run": "ctrl+e"}}
+	if c := h.do("PUT", "/api/settings", in, &got); c != 200 || got["accent"] != "teal" {
+		t.Fatal(c, got)
+	}
+	// Saved next to the connections, where the next launch finds them.
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(h.srv.store.Path()), "settings.json"))
+	if err != nil || !strings.Contains(string(data), `"query.run": "ctrl+e"`) {
+		t.Fatal(string(data), err)
+	}
+	if c := h.do("PUT", "/api/settings", []int{1}, nil); c != 400 {
+		t.Fatal(c)
+	}
+	// Like the rest of the API, only the app's own page may use it.
+	res, err := http.Get(h.ts.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 401 {
+		t.Fatal(res.StatusCode)
+	}
+}

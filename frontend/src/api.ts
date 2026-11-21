@@ -149,6 +149,14 @@ export const api = {
     call<{ statements: string[] }>('POST', `/api/sessions/${sid}/tables`, { schema, table, dryRun }),
   createDatabase: (sid: string, database: NewDatabase, dryRun: boolean) =>
     call<{ statements: string[] }>('POST', `/api/sessions/${sid}/databases`, { database, dryRun }),
+  updateInfo: () => call<UpdateInfo>('GET', '/api/update'),
+  updateCheck: () => call<UpdateCheck>('POST', '/api/update/check'),
+  updateInstall: () => call<UpdateProgress>('POST', '/api/update/install'),
+  updateProgress: () => call<UpdateProgress>('GET', '/api/update/progress'),
+  updateRestart: () => call<{ restarting: boolean }>('POST', '/api/update/restart'),
+  updateOpenRelease: () => call<{ url: string }>('POST', '/api/update/open-release'),
+  dropDatabase: (sid: string, database: { name: string; kind: 'database' | 'schema'; cascade: boolean }, dryRun: boolean) =>
+    call<{ statements: string[] }>('POST', `/api/sessions/${sid}/databases/drop`, { database, dryRun }),
   createSQLiteFile: (f: { name: string; path?: string; handle?: string; groupId?: string; tag?: string }) => call<Connection>('POST', '/api/sqlite-files', f),
   alter: (sid: string, table: TableRef, ops: AlterOp[], dryRun: boolean) =>
     call<{ statements: string[]; ok?: boolean }>('POST', `/api/sessions/${sid}/alter`, { table, ops, dryRun }),
@@ -199,4 +207,12 @@ export interface FieldReport {
   min?: string; max?: string
   top?: { value: string; count: number }[]
   distinct: number; unique: boolean
+}
+
+/** How this copy of GoTable is installed, and so how it updates (internal/update). */
+export interface UpdateInfo { version: string; kind: string; how: 'replace' | 'installer' | 'none'; path?: string; installed?: boolean }
+export interface UpdateCheck { current: string; latest: string; available: boolean; notes: string; url: string; published: string; asset?: { name: string; size: number } }
+export interface UpdateProgress {
+  phase: 'idle' | 'downloading' | 'installing' | 'ready' | 'opened' | 'failed'
+  done: number; total: number; version?: string; file?: string; error?: ApiErrorBody
 }

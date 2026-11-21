@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import {
   ArrowDownUp, ChevronDown, Code2, Columns2, History, PanelLeft, Copy, Database, Download, Eye, FileCode2, Home as HomeIcon, LogOut, Moon, PanelRight, Plus,
-  RefreshCw, Search, Server, Sun, Table2, Trash2, Upload, X,
+  RefreshCw, Search, Server, Settings, Sun, Table2, Trash2, Upload, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
@@ -11,11 +11,15 @@ import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
 import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isMongo } from '../types'
 import { mongoColl } from '../lib/mongoShell'
+import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
+import { binding, hit, label as keyLabel } from '../lib/shortcuts'
+import { keys } from '../lib/platform'
 import { CreateCollectionDialog } from './CreateCollectionDialog'
 import { DataView } from './DataView'
 import { DeleteTablesDialog } from './DeleteTablesDialog'
 import { subtitle } from './Home'
 import { CreateDatabaseDialog } from './CreateDatabaseDialog'
+import { DropDatabaseDialog, dropKind, type DropTarget } from './DropDatabaseDialog'
 import { CreateTableView } from './CreateTableView'
 import { QueryView } from './QueryView'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
@@ -62,7 +66,7 @@ const dbKeyOf = (sid: string, schema: string) => `${sid}|${schema}`
 const queriesKey = (connId: string) => `gotable:queries:${connId}`
 const openDbsKey = (connId: string) => `gotable:open-dbs:${connId}`
 
-export function Workspace({ session, sessions, active, onHome, onSwitch, onDisconnect, theme, toggleTheme, onOpenConnection }: {
+export function Workspace({ session, sessions, active, onHome, onSwitch, onDisconnect, theme, toggleTheme, onOpenConnection, onOpenSettings }: {
   session: SessionInfo
   sessions: SessionInfo[]
   active: boolean
@@ -70,6 +74,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   onSwitch: (sid: string) => void
   onDisconnect: () => void
   theme: 'light' | 'dark'
+  onOpenSettings: () => void
   toggleTheme: () => void
   /** onOpenConnection opens another saved connection (a new SQLite file). */
   onOpenConnection: (c: Connection) => void
@@ -79,6 +84,10 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const menu = useMenu()
   const ownTitleBar = useOwnTitleBar()
   const conn = session.connection
+  // Key hints follow the shortcuts as set in Settings.
+  const settings = useSettings()
+  const keyHint = (id: string) => keyLabel(binding(id, settings.shortcuts))
+  const withKeys = (text: string, id: string) => { const k = keyHint(id); return k ? `${text} (${keys(k.replace(/ /g, '+'))})` : text }
   // pg: databases on the server hold schemas (PostgreSQL, SQL Server); another
   // database opens as its own session.
   const pg = features(conn.driver).schemas && !features(conn.driver).file
@@ -98,6 +107,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
 
   const [schemaList, setSchemaList] = useState<string[]>(session.schemas)
   const [serverDbs, setServerDbs] = useState<string[] | null>(null)
+  const [dropping, setDropping] = useState<{ target?: DropTarget; choices?: DropTarget[] } | null>(null)
   const [filter, setFilter] = useState('')
   const [tabs, setTabs] = useState<Tab[]>(() => {
     try {
@@ -110,7 +120,9 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const [activeTab, setActiveTab] = useState<string | null>(tabs[0]?.id ?? null)
   const lastTabByDb = useRef(new Map<string, string>())
   const [picker, setPicker] = useState<'all' | 'tables' | 'databases' | null>(null)
-  const [inspector, setInspector] = useState(() => localStorage.getItem('gotable:inspector') !== '0')
+  // Panels start as Settings → Panels says (open, closed, or as last left).
+  const [inspector, setInspector] = useState(() => panelOpen(getSettings(), 'inspector'))
+  const toggleInspector = useCallback(() => setInspector((v) => { rememberPanel('inspector', !v); return !v }), [])
   const [transfer, setTransfer] = useState<{ tab: 'export' | 'import'; db: OpenDb; preselect?: string[] } | null>(null)
   // Sidebar multi-selection: names within one database (selDb).
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -121,10 +133,10 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const [sideTab, setSideTab] = useState<'items' | 'queries' | 'history'>(() => (localStorage.getItem('gotable:side-tab') as 'items') ?? 'items')
   useEffect(() => localStorage.setItem('gotable:side-tab', sideTab), [sideTab])
   // Collapsible panels (remembered): the database rail and the table sidebar.
-  const [railHidden, setRailHidden] = useState(() => localStorage.getItem('gotable:rail-hidden') === '1')
-  const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem('gotable:sidebar-hidden') === '1')
-  const toggleRail = useCallback(() => setRailHidden((v) => { localStorage.setItem('gotable:rail-hidden', v ? '0' : '1'); return !v }), [])
-  const toggleSidebar = useCallback(() => setSidebarHidden((v) => { localStorage.setItem('gotable:sidebar-hidden', v ? '0' : '1'); return !v }), [])
+  const [railHidden, setRailHidden] = useState(() => !panelOpen(getSettings(), 'rail'))
+  const [sidebarHidden, setSidebarHidden] = useState(() => !panelOpen(getSettings(), 'sidebar'))
+  const toggleRail = useCallback(() => setRailHidden((v) => { rememberPanel('rail', v); return !v }), [])
+  const toggleSidebar = useCallback(() => setSidebarHidden((v) => { rememberPanel('sidebar', v); return !v }), [])
   const [naming, setNaming] = useState<{ tabId: string; sql: string } | null>(null)
   const [creatingDb, setCreatingDb] = useState(false)
   const queryCounter = useRef(tabs.length)
@@ -295,6 +307,70 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     if (db.info.id !== session.id && !rest.some((d) => d.info.id === db.info.id)) api.closeSession(db.info.id).catch(() => {})
   }, [dbs, tabs, confirm, label, closeTabs, selDb, activeKey, activateDb, session.id])
 
+  // ---------------------------------------------------------------- deleting databases
+
+  const copy = (text: string) => {
+    navigator.clipboard?.writeText(text).then(() => toast('ok', 'Copied', text), () => toast('error', 'Could not copy', text))
+  }
+  /** dropMatches: the open entries a deleted database or schema takes with it. */
+  const dropMatches = (t: DropTarget, d: OpenDb) => (t.kind === 'database' && pg ? d.info.database === t.name : d.info.id === t.sid && d.schema === t.name)
+  /** listedTarget / serverTarget: an open entry's schema (or database), and its PostgreSQL / SQL Server database. */
+  const listedTarget = (d: OpenDb): DropTarget | null => {
+    const kind = dropKind(conn.driver, 'listed')
+    return kind && d.schema ? { name: d.schema, kind, sid: d.info.id, where: pg ? `in ${d.info.database}` : undefined } : null
+  }
+  const serverTarget = (name: string): DropTarget | null => (dropKind(conn.driver, 'server') ? { name, kind: 'database', sid: session.id } : null)
+
+  /**
+   * beforeDrop: what uses the database goes first. Tabs with uncommitted
+   * edits ask. A whole database's open entries close now, as the server
+   * won't drop a database GoTable is connected to; a schema's after.
+   */
+  const beforeDrop = async (t: DropTarget) => {
+    const hit = dbsRef.current.filter((d) => dropMatches(t, d))
+    const its = tabs.filter((tab) => hit.some((d) => d.key === tab.dbKey))
+    const dirty = its.filter((tab) => tab.dirty)
+    if (dirty.length) {
+      const r = await confirm({ title: `Delete ${t.name}?`, message: `${dirty.map((x) => x.title).join(', ')} ${dirty.length === 1 ? 'has' : 'have'} changes that aren’t committed. They go with it.`, confirmLabel: 'Discard & delete', danger: true })
+      if (r !== 'confirm') return false
+    }
+    closeTabs(its.map((x) => x.id))
+    // Never leave the rail empty: open something else first.
+    if (hit.length && hit.length === dbsRef.current.length) {
+      const other = t.kind === 'database' && pg ? null : schemaList.find((x) => x !== t.name)
+      if (other) await openDb({ schema: other })
+    }
+    if (t.kind === 'database' && pg) forgetDbs(hit.map((d) => d.key))
+    return true
+  }
+  const afterDrop = (t: DropTarget) => {
+    setDropping(null)
+    forgetDbs(dbsRef.current.filter((d) => dropMatches(t, d)).map((d) => d.key))
+    api.schemas(activeDb.info.id).then((r) => setSchemaList(r.schemas)).catch(() => {})
+    if (pg) api.databases(session.id).then((r) => setServerDbs(r.databases)).catch(() => {})
+  }
+  /** forgetDbs takes entries off the rail (their tabs are closed already), closing forks nothing else uses. */
+  const forgetDbs = (keys: string[]) => {
+    const all = dbsRef.current
+    const rest = all.filter((d) => !keys.includes(d.key))
+    if (!keys.length || !rest.length) return
+    dbsRef.current = rest
+    setDbs(rest)
+    if (selDb && keys.includes(selDb)) { setSelected(new Set()); setSelDb(null) }
+    if (keys.includes(activeKey)) activateDb(rest[0].key)
+    for (const d of all.filter((x) => keys.includes(x.key))) {
+      if (d.info.id !== session.id && !rest.some((x) => x.info.id === d.info.id)) api.closeSession(d.info.id).catch(() => {})
+    }
+  }
+  /** deleteChoices: every database and schema the picker lists that can go. */
+  const deleteChoices = (): DropTarget[] => {
+    const kind = dropKind(conn.driver, 'listed')
+    const listed = kind ? schemaList.map((name): DropTarget => ({ name, kind, sid: activeDb.info.id, where: pg ? `in ${activeDb.info.database}` : undefined })) : []
+    const server = pg && dropKind(conn.driver, 'server') ? (serverDbs ?? []).filter((n) => n !== session.database).map((n): DropTarget => ({ name: n, kind: 'database', sid: session.id })) : []
+    return [...listed, ...server]
+  }
+  const canDrop = dropKind(conn.driver, 'listed') !== null
+
   // Remember which databases are open, and restore them next time. The
   // saved list is read once, before the effect below overwrites it.
   const [savedOpen] = useState<{ database: string; schema: string; active?: boolean }[]>(() => {
@@ -355,13 +431,12 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
         return
       }
       const mod = e.ctrlKey || e.metaKey
-      if (!mod) return
       // Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) walk
       // through the open tabs in tab-bar order, wrapping around.
       // WebKitGTK reports Shift+Tab as key "Unidentified" (GTK's ISO_Left_Tab);
       // the code is still "Tab".
       const tab = e.code === 'Tab' || e.key === 'Tab'
-      if (e.ctrlKey && (tab || e.key === 'PageDown' || e.key === 'PageUp')) {
+      if (mod && e.ctrlKey && (tab || e.key === 'PageDown' || e.key === 'PageUp')) {
         e.preventDefault()
         if (tabs.length < 2) return
         const back = e.key === 'PageUp' || (tab && e.shiftKey)
@@ -369,16 +444,18 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
         selectTab(tabs[(i + (back ? -1 : 1) + tabs.length) % tabs.length])
         return
       }
-      const k = e.key.toLowerCase()
-      if (k === 'k') { e.preventDefault(); setPicker('all') }
-      else if (k === 'p' && !e.shiftKey) { e.preventDefault(); setPicker('tables') }
-      else if (k === 'd' && !e.shiftKey) { e.preventDefault(); openDatabasePicker() }
-      else if (k === 't') { e.preventDefault(); newQuery() }
-      else if (k === 'b') { e.preventDefault(); if (e.shiftKey) toggleRail(); else toggleSidebar() }
-      else if (k === 'w') { e.preventDefault(); if (activeTab) closeTab(activeTab) }
-      else if (k === 'f' && e.shiftKey) { e.preventDefault(); filterRef.current?.focus() }
-      else if (k === 'i' && e.shiftKey) { e.preventDefault(); setInspector((v) => { localStorage.setItem('gotable:inspector', v ? '0' : '1'); return !v }) }
-      else if (/^[1-9]$/.test(e.key)) { const t = tabs[Number(e.key) - 1]; if (t) { e.preventDefault(); selectTab(t) } }
+      // Ctrl+1…9 go to a tab; everything else is a shortcut the settings can change.
+      if (mod && /^[1-9]$/.test(e.key) && !e.shiftKey && !e.altKey) { const t = tabs[Number(e.key) - 1]; if (t) { e.preventDefault(); selectTab(t) } return }
+      const act = (f: () => void) => { e.preventDefault(); f() }
+      if (hit(e, 'ws.palette')) act(() => setPicker('all'))
+      else if (hit(e, 'ws.tables')) act(() => setPicker('tables'))
+      else if (hit(e, 'ws.databases')) act(openDatabasePicker)
+      else if (hit(e, 'ws.newQuery')) act(() => newQuery())
+      else if (hit(e, 'ws.rail')) act(toggleRail)
+      else if (hit(e, 'ws.sidebar')) act(toggleSidebar)
+      else if (hit(e, 'ws.closeTab')) act(() => { if (activeTab) closeTab(activeTab) })
+      else if (hit(e, 'ws.filterTables')) act(() => filterRef.current?.focus())
+      else if (hit(e, 'ws.inspector')) act(toggleInspector)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -551,7 +628,21 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     { label: 'Refresh', icon: <RefreshCw />, onSelect: () => loadObjects(db.key) },
     { label: 'Export database…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db }) },
     { label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
-    ...(dbs.length > 1 ? ['sep' as const, { label: 'Close database', icon: <X />, onSelect: () => closeDb(db.key) }] : []),
+    'sep',
+    ...(pg
+      ? [{ label: 'Copy database name', icon: <Copy />, onSelect: () => copy(db.info.database) }, ...(db.schema ? [{ label: 'Copy schema name', icon: <Copy />, onSelect: () => copy(db.schema) }] : [])]
+      : [{ label: 'Copy name', icon: <Copy />, onSelect: () => copy(db.schema || db.info.database) }]),
+    ...(dbs.length > 1 ? [{ label: 'Close database', icon: <X />, onSelect: () => closeDb(db.key) }] : []),
+    ...(() => {
+      const listed = listedTarget(db)
+      const server = pg ? serverTarget(db.info.database) : null
+      const items = []
+      if (listed) items.push({ label: `Delete ${listed.kind} ${listed.name}…`, icon: <Trash2 />, danger: true, onSelect: () => setDropping({ target: listed }) })
+      // The database the workspace is connected to can't be dropped from it.
+      if (server) items.push({ label: db.info.database === session.database ? `Delete database ${server.name} (connected)` : `Delete database ${server.name}…`, icon: <Trash2 />, danger: true,
+        disabled: db.info.database === session.database, onSelect: () => setDropping({ target: server }) })
+      return items.length ? ['sep' as const, ...items] : []
+    })(),
   ])
 
   // ---------------------------------------------------------------- pickers
@@ -565,24 +656,37 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const commands: Command[] = useMemo(() => [
     ...objectCommands(activeDb, true),
     ...dbs.filter((d) => d.key !== activeDb.key).flatMap((d) => objectCommands(d, true)),
-    { id: 'new-query', label: 'New query', hint: 'Ctrl T', icon: <Code2 />, run: () => newQuery() },
+    { id: 'new-query', label: 'New query', hint: keyHint('ws.newQuery'), icon: <Code2 />, run: () => newQuery() },
     { id: 'new-table', label: `New ${tableWord}…`, icon: <Plus />, run: () => newTable(activeDb) },
     ...(!features(conn.driver).createDatabase ? [] : [{ id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) }]),
     { id: 'saved-queries', label: 'Saved queries', icon: <FileCode2 />, run: () => { setSidebarHidden(false); setSideTab('queries') } },
     { id: 'history', label: 'Query history', icon: <History />, run: () => { setSidebarHidden(false); setSideTab('history') } },
-    { id: 'toggle-sidebar', label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', hint: 'Ctrl B', icon: <PanelLeft />, run: toggleSidebar },
-    { id: 'toggle-rail', label: railHidden ? 'Show databases' : 'Hide databases', hint: 'Ctrl ⇧ B', icon: <Columns2 />, run: toggleRail },
-    { id: 'go-table', label: 'Go to table…', hint: 'Ctrl P', icon: <Table2 />, run: () => setPicker('tables') },
-    { id: 'switch-db', label: 'Open database…', hint: 'Ctrl D', icon: <Database />, run: openDatabasePicker },
+    { id: 'toggle-sidebar', label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', hint: keyHint('ws.sidebar'), icon: <PanelLeft />, run: toggleSidebar },
+    { id: 'toggle-rail', label: railHidden ? 'Show databases' : 'Hide databases', hint: keyHint('ws.rail'), icon: <Columns2 />, run: toggleRail },
+    { id: 'go-table', label: 'Go to table…', hint: keyHint('ws.tables'), icon: <Table2 />, run: () => setPicker('tables') },
+    { id: 'switch-db', label: 'Open database…', hint: keyHint('ws.databases'), icon: <Database />, run: openDatabasePicker },
+    ...(canDrop ? [{ id: 'delete-db', label: pg ? 'Delete a database or schema…' : fileDb ? 'Delete a schema…' : 'Delete a database…', icon: <Trash2 />, run: async () => {
+      // Fresh lists, as in the database picker.
+      const schemas = await api.schemas(activeDb.info.id).then((r) => r.schemas).catch(() => schemaList)
+      const servers = pg ? await api.databases(session.id).then((r) => r.databases).catch(() => serverDbs ?? []) : []
+      setSchemaList(schemas)
+      if (pg) setServerDbs(servers)
+      const kind = dropKind(conn.driver, 'listed')!
+      setDropping({ choices: [
+        ...schemas.map((name): DropTarget => ({ name, kind, sid: activeDb.info.id, where: pg ? `in ${activeDb.info.database}` : undefined })),
+        ...(pg && dropKind(conn.driver, 'server') ? servers.filter((n) => n !== session.database).map((n): DropTarget => ({ name: n, kind: 'database', sid: session.id })) : []),
+      ] })
+    } }] : []),
     { id: 'export-db', label: 'Export database…', icon: <Download />, run: () => setTransfer({ tab: 'export', db: activeDb }) },
     { id: 'import-sql', label: mongo ? 'Import script…' : 'Import SQL file…', icon: <Upload />, run: () => setTransfer({ tab: 'import', db: activeDb }) },
-    { id: 'refresh', label: 'Refresh tables', hint: 'Ctrl R', icon: <RefreshCw />, run: refresh },
-    { id: 'theme', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', icon: theme === 'dark' ? <Sun /> : <Moon />, run: toggleTheme },
-    { id: 'inspector', label: inspector ? 'Hide row inspector' : 'Show row inspector', hint: 'Ctrl ⇧ I', icon: <PanelRight />, run: () => setInspector((v) => !v) },
+    { id: 'refresh', label: 'Refresh tables', hint: keyHint('app.refresh'), icon: <RefreshCw />, run: refresh },
+    { id: 'theme', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', hint: keyHint('app.theme'), icon: theme === 'dark' ? <Sun /> : <Moon />, run: toggleTheme },
+    { id: 'settings', label: 'Settings…', hint: keyHint('app.settings'), icon: <Settings />, run: onOpenSettings },
+    { id: 'inspector', label: inspector ? 'Hide row inspector' : 'Show row inspector', hint: keyHint('ws.inspector'), icon: <PanelRight />, run: toggleInspector },
     ...sessions.filter((s) => s.id !== session.id).map((s) => ({ id: 'conn:' + s.id, label: `Go to ${s.connection.name}`, icon: <Database />, run: () => onSwitch(s.id) })),
     { id: 'home', label: 'Connections', icon: <HomeIcon />, run: onHome },
     { id: 'disconnect', label: 'Disconnect', icon: <LogOut />, run: disconnect },
-  ], [dbs, activeDb, activeTab, theme, inspector, sessions, session.id, refresh, sidebarHidden, railHidden]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [dbs, activeDb, activeTab, theme, inspector, sessions, session.id, refresh, sidebarHidden, railHidden, settings.shortcuts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isOpen = (database: string, schema: string) => dbs.some((d) => d.info.database === database && d.schema === schema)
   const schemaGroup = pg ? `Schemas in ${activeDb.info.database}` : family(conn.driver) === 'sqlite' ? 'Attached databases' : fileDb ? 'Schemas' : 'Databases'
@@ -595,6 +699,8 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
       run: () => openDb({ database: name }) })) : []),
     ...(!features(conn.driver).createDatabase ? [] : [{ id: 'create-database', label: pg ? 'Create database or schema…' : family(conn.driver) === 'sqlite' ? 'Create database file…' : fileDb ? 'Create schema…' : 'Create database…',
       group: 'Actions', icon: <Plus />, run: () => setCreatingDb(true) }]),
+    ...(canDrop ? [{ id: 'delete-database', label: pg ? 'Delete a database or schema…' : fileDb ? 'Delete a schema…' : 'Delete a database…', group: 'Actions', icon: <Trash2 />,
+      run: () => setDropping({ choices: deleteChoices() }) }] : []),
   ]
 
   const tag = tagInfo(conn.tag)
@@ -606,8 +712,8 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
       <header onMouseDown={ownTitleBar ? dragWindow : undefined} className="relative flex h-11 shrink-0 select-none items-center gap-2 border-b border-line bg-panel px-2"
         style={conn.tag ? { boxShadow: `inset 0 3px 0 ${tag.color}` } : undefined}>
         <IconButton label="Connections" onClick={onHome}><HomeIcon className="size-4" /></IconButton>
-        <IconButton label={railHidden ? 'Show databases (Ctrl+Shift+B)' : 'Hide databases (Ctrl+Shift+B)'} active={!railHidden} onClick={toggleRail}><Columns2 className="size-4" /></IconButton>
-        <IconButton label={sidebarHidden ? 'Show sidebar (Ctrl+B)' : 'Hide sidebar (Ctrl+B)'} active={!sidebarHidden} onClick={toggleSidebar}><PanelLeft className="size-4" /></IconButton>
+        <IconButton label={withKeys(railHidden ? 'Show databases' : 'Hide databases', 'ws.rail')} active={!railHidden} onClick={toggleRail}><Columns2 className="size-4" /></IconButton>
+        <IconButton label={withKeys(sidebarHidden ? 'Show sidebar' : 'Hide sidebar', 'ws.sidebar')} active={!sidebarHidden} onClick={toggleSidebar}><PanelLeft className="size-4" /></IconButton>
         <button
           className="flex h-8 items-center gap-2 rounded-lg px-2 hover:bg-hover"
           onClick={(e) => menu.open({ clientX: e.currentTarget.getBoundingClientRect().left, clientY: e.currentTarget.getBoundingClientRect().bottom + 4 }, [
@@ -629,14 +735,15 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
         <div className="flex-1" />
         <button onClick={() => setPicker('all')}
           className="flex h-8 w-[min(380px,30vw)] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-panel-2 px-2.5 text-[12.5px] text-faint hover:border-faint">
-          <Search className="size-3.5 shrink-0" /> <span className="truncate">Jump to table or command…</span> <span className="ml-auto shrink-0"><Kbd>Ctrl K</Kbd></span>
+          <Search className="size-3.5 shrink-0" /> <span className="truncate">Jump to table or command…</span> <span className="ml-auto shrink-0"><Kbd>{keyHint('ws.palette')}</Kbd></span>
         </button>
         <div className="flex-1" />
         <JobsIndicator />
         <IconButton label="Import / Export database" onClick={() => setTransfer({ tab: 'export', db: activeDb })}><ArrowDownUp className="size-4" /></IconButton>
-        <IconButton label="New query (Ctrl+T)" onClick={() => newQuery()}><FileCode2 className="size-4" /></IconButton>
-        <IconButton label="Row inspector (Ctrl+Shift+I)" active={inspector} onClick={() => setInspector((v) => { localStorage.setItem('gotable:inspector', v ? '0' : '1'); return !v })}><PanelRight className="size-4" /></IconButton>
+        <IconButton label={withKeys('New query', 'ws.newQuery')} onClick={() => newQuery()}><FileCode2 className="size-4" /></IconButton>
+        <IconButton label={withKeys('Row inspector', 'ws.inspector')} active={inspector} onClick={toggleInspector}><PanelRight className="size-4" /></IconButton>
         <IconButton label={theme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggleTheme}>{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}</IconButton>
+        <IconButton label={withKeys('Settings', 'app.settings')} onClick={onOpenSettings}><Settings className="size-4" /></IconButton>
         <IconButton label="Disconnect" onClick={disconnect}><LogOut className="size-4" /></IconButton>
         {ownTitleBar && <><span className="mx-1 h-5 w-px bg-line" /><WindowControls /></>}
       </header>
@@ -815,6 +922,10 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
             await loadObjects(d.key)
             openTable(d, { schema: d.schema, name, kind: 'table' })
           }} />
+      )}
+      {dropping && (
+        <DropDatabaseDialog session={session} target={dropping.target} choices={dropping.choices}
+          before={beforeDrop} onClose={() => setDropping(null)} onDeleted={afterDrop} />
       )}
       {creatingDb && (
         <CreateDatabaseDialog session={activeDb.info} onClose={() => setCreatingDb(false)}

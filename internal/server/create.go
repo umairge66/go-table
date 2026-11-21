@@ -165,3 +165,36 @@ func (s *Server) typeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, info)
 }
+
+// dropDatabase previews (dryRun) or runs DROP DATABASE / DROP SCHEMA.
+func (s *Server) dropDatabase(w http.ResponseWriter, r *http.Request) {
+	se, err := s.session(r)
+	if err != nil {
+		writeErr(w, 410, err)
+		return
+	}
+	var in struct {
+		Database db.DropDatabase `json:"database"`
+		DryRun   bool            `json:"dryRun"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if in.DryRun {
+		stmt, err := db.BuildDropDatabase(se.c().Dialect, in.Database)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"statements": []string{stmt}})
+		return
+	}
+	stmt, err := se.c().DropDatabase(r.Context(), in.Database)
+	s.record(se, "query", stmt, 0, 0, err)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "statements": []string{stmt}})
+}

@@ -675,8 +675,10 @@ INSERT INTO t_parent VALUES (1); INSERT INTO t_child VALUES (1, 1);`)
   await expect(sidebar().getByTestId('sidebar-t_other')).toBeVisible()
   const bar = page.getByRole('toolbar', { name: 'Selected tables' })
 
-  // Ctrl+A selects every table listed; Esc clears.
+  // Ctrl+A selects every table listed; Esc clears. (Opening a table hands
+  // the keyboard to its rows, so the list is focused first.)
   await sidebar().getByTestId('sidebar-t_other').click()
+  await sidebar().getByTestId('sidebar-t_other').focus()
   await page.keyboard.press('Control+a')
   const total = await sidebar().locator('[data-testid^="sidebar-"]').count()
   await expect(bar).toContainText(`${total} selected`)
@@ -686,6 +688,7 @@ INSERT INTO t_parent VALUES (1); INSERT INTO t_child VALUES (1, 1);`)
   // With a filter, Ctrl+A selects only the matches.
   await page.getByLabel('Filter tables').fill('t_')
   await sidebar().getByTestId('sidebar-t_child').click()
+  await sidebar().getByTestId('sidebar-t_child').focus()
   await page.keyboard.press('Control+a')
   await expect(bar).toContainText('3 selected')
 

@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Check as CheckIcon, Copy, KeyRound, 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, type NewColumn, type TypeInfo } from '../api'
 import { Button, IconButton, Select, Switch, errorParts, useToast } from '../components/ui'
+import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { TypeSelect } from '../components/TypeSelect'
 import { category, findType, groupOf, has, paramProblem, typeString, type TypeSpec } from '../lib/sqlTypes'
 import { family, features, forDriver, tableOptions, type PerDriver, type SessionInfo } from '../types'
@@ -196,10 +197,11 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
 
   const createRef = useRef(() => {})
   createRef.current = () => { if (canCreate && !saving) create() }
+  const createKeys = useShortcutLabel('create.create')
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); createRef.current() }
+      if (hit(e, 'create.create')) { e.preventDefault(); createRef.current() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -223,7 +225,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
         {production && <span className="ml-2 flex items-center gap-1.5 rounded-full bg-err/10 px-2.5 py-1 text-[11.5px] font-semibold text-err"><AlertTriangle className="size-3.5" /> PRODUCTION</span>}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant={production ? 'danger' : 'primary'} disabled={!canCreate} loading={saving} onClick={create} kbd="Ctrl ↵">Create table</Button>
+          <Button variant={production ? 'danger' : 'primary'} disabled={!canCreate} loading={saving} onClick={create} kbd={createKeys}>Create table</Button>
         </div>
       </div>
 

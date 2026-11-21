@@ -1,9 +1,11 @@
 import clsx from 'clsx'
-import { ChevronDown, ChevronRight, Copy, Database, FolderPlus, Moon, Pencil, Plus, Search, Sun, Trash2, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Database, FolderPlus, Moon, Pencil, Plus, Search, Settings, Sun, Trash2, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
 import { api } from '../api'
 import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
+import { hit, useShortcutLabel } from '../lib/shortcuts'
+import { keys } from '../lib/platform'
 import { features, tagInfo, type Connection, type Group } from '../types'
 import { ConnectionForm, UrlDialog, newConnection } from './ConnectionForm'
 
@@ -15,7 +17,7 @@ export function subtitle(c: Connection) {
   return s
 }
 
-export function Home({ connections, groups, reload, onConnect, connecting, theme, toggleTheme }: {
+export function Home({ connections, groups, reload, onConnect, connecting, theme, toggleTheme, onOpenSettings }: {
   connections: Connection[]
   groups: Group[]
   reload: () => Promise<void>
@@ -23,9 +25,11 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
   connecting: string | null
   theme: 'light' | 'dark'
   toggleTheme: () => void
+  onOpenSettings: () => void
 }) {
   const toast = useToast()
   const menu = useMenu()
+  const newKeys = useShortcutLabel('home.new')
   const ownTitleBar = useOwnTitleBar()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string | null>(connections[0]?.id ?? null)
@@ -50,7 +54,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
   const startNew = () => { setDraft(newConnection()); setDraftPassword(''); setSelected(null) }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); startNew() }
+      if (hit(e, 'home.new')) { e.preventDefault(); startNew() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -112,7 +116,8 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
           <div className="flex-1" />
           <IconButton label={theme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggleTheme}>{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}</IconButton>
           <IconButton label="New group" onClick={() => setGroupDialog({ name: '' })}><FolderPlus className="size-4" /></IconButton>
-          <IconButton label="New connection (Ctrl+N)" onClick={startNew}><Plus className="size-4" /></IconButton>
+          <IconButton label={newKeys ? `New connection (${keys(newKeys.replace(/ /g, '+'))})` : 'New connection'} onClick={startNew}><Plus className="size-4" /></IconButton>
+          <IconButton label="Settings" onClick={onOpenSettings}><Settings className="size-4" /></IconButton>
         </div>
         <div className="px-3 pb-2">
           <Input icon={<Search />} value={search} placeholder="Search connections" onChange={(e) => setSearch(e.target.value)} aria-label="Search connections"
@@ -195,7 +200,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
         ) : (
           <EmptyState icon={<Database />} title={connections.length ? 'Pick a connection' : 'Welcome to GoTable'}
             actions={<>
-              <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={startNew} kbd="Ctrl N">New connection</Button>
+              <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={startNew} kbd={newKeys}>New connection</Button>
               <Button onClick={() => setUrlOpen(true)}>Paste a URL</Button>
             </>}>
             {connections.length

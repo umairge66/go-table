@@ -13,6 +13,7 @@ import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isMongo } from '../types'
 import { mongoColl } from '../lib/mongoShell'
+import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { ExportDialog } from './ExportDialog'
 import { FkLookup } from './FkLookup'
 import { ImportCSVDialog } from './ImportCSVDialog'
@@ -61,6 +62,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     setPageSize(n)
   })
 
+  const applyKeys = useShortcutLabel('table.applyFilter')
+  const commitKeys = useShortcutLabel('table.commit')
   const [mode, setMode] = useState<'data' | 'structure' | 'schema' | 'pipeline' | 'ddl'>(initialMode ?? 'data')
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [indexes, setIndexes] = useState<Index[]>([])
@@ -131,6 +134,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
           name, type: res.types[known.length + i] || 'null', nullable: true, default: null, primaryKey: false, comment: 'not in the sampled documents' }))])
       }
       setData(res)
+      if (mode === 'data') focusFirstRow(res.rows.length)
       setEdits(emptyEdits())
       setDataKey((k) => k + 1)
       setOffset(o)
@@ -193,10 +197,9 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); startReview() }
-      else if (mod && !e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); quickRef.current?.focus() }
-      else if (mod && e.key === 'Enter' && showFilters) { e.preventDefault(); apply() }
+      if (hit(e, 'table.commit')) { e.preventDefault(); startReview() }
+      else if (hit(e, 'table.search')) { e.preventDefault(); quickRef.current?.focus() }
+      else if (hit(e, 'table.applyFilter') && showFilters) { e.preventDefault(); apply() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -226,7 +229,19 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
 
   const edit = (r: number, c: number, v: Cell) => setEdits((e) => setCell(rows, e, r, c, v))
   const deleteRows = (rs: number[]) => setEdits((e) => toggleDelete(rows, e, rs))
-  const [focus, setFocus] = useState<{ r: number; c: number; edit?: boolean; text?: boolean; key: number }>()
+  const [focus, setFocus] = useState<{ r: number; c: number; edit?: boolean; text?: boolean; grab?: boolean; key: number }>()
+  // A table that opens puts the keyboard on its first row, once: arrow keys,
+  // Enter and typing work at once. Not while something else is being typed in.
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const focusedFirst = useRef(false)
+  const focusFirstRow = (rowCount: number) => {
+    if (focusedFirst.current || !rowCount || !activeRef.current) return
+    focusedFirst.current = true
+    const el = document.activeElement
+    if (el instanceof HTMLElement && el.closest('input, textarea, select, [contenteditable=true], .cm-editor')) return
+    setFocus({ r: 0, c: 0, grab: true, key: Date.now() })
+  }
   const insertRow = (values?: Cell[]) => {
     let next = addRow(edits, names.length)
     const r = rows.length + next.inserted.length - 1
@@ -346,7 +361,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                 <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">{mongo ? 'Query filter (optional)' : 'WHERE (raw SQL, optional)'}</span>
                 <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder={mongo ? '{ age: { $gt: 30 } }' : "created_at > now() - interval '7 days'"} onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
                 <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
-                <Button size="sm" variant="primary" onClick={apply} kbd="Ctrl ↵">Apply</Button>
+                <Button size="sm" variant="primary" onClick={apply} kbd={applyKeys}>Apply</Button>
               </div>
             </div>
           )}
@@ -357,7 +372,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               <span><b>{pending}</b> unsaved change{pending === 1 ? '' : 's'} — nothing is written until you commit.</span>
               <div className="flex-1" />
               <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => setEdits(emptyEdits())}>Discard</Button>
-              <Button size="sm" variant="primary" onClick={startReview} kbd="Ctrl S">Review & commit</Button>
+              <Button size="sm" variant="primary" onClick={startReview} kbd={commitKeys}>Review & commit</Button>
             </div>
           )}
 

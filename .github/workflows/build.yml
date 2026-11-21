@@ -70,6 +70,9 @@ jobs:
       - name: Install WebKitGTK
         if: matrix.target == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
+      - name: Install NSIS (the Windows installer)
+        if: matrix.target == 'windows'
+        run: sudo apt-get update && sudo apt-get install -y nsis
       - name: Build the web UI
         working-directory: frontend
         run: npm ci && npm run build
@@ -100,6 +103,16 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # GoTable installs an update only if SHA256SUMS is signed with the key
+      # it holds (internal/update); without the secret the release stops here.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Sign the release (SHA256SUMS and SHA256SUMS.sig)
+        env:
+          GOTABLE_RELEASE_KEY: ${{ secrets.GOTABLE_RELEASE_KEY }}
+        run: go run ./cmd/release-sign dist
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

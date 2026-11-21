@@ -38,7 +38,8 @@ export interface GridProps {
   /** Bumps when data changes so selection resets. */
   dataKey?: unknown
   /** When set (with a new key), selects the cell, scrolls to it and optionally edits it (text: as plain text). */
-  focus?: { r: number; c: number; edit?: boolean; text?: boolean; key: number }
+  /** focus selects a cell (and edits it); grab also gives the grid the keyboard. */
+  focus?: { r: number; c: number; edit?: boolean; text?: boolean; grab?: boolean; key: number }
 }
 
 const ROW_H = 30
@@ -197,6 +198,7 @@ export const Grid = memo(function Grid(p: GridProps) {
     const f = p.focus
     if (!f || f.r >= rowCount) return
     select(f.r, f.c)
+    if (f.grab) scrollRef.current?.focus({ preventScroll: true })
     // Wait for the virtualizer to render the row before editing it.
     requestAnimationFrame(() => {
       ensureVisible(f.r, f.c)

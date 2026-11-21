@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/ssh-key/check", s.checkSSHKey)
 	mux.HandleFunc("POST /api/jobs/{id}/save", s.saveJob)
 	mux.HandleFunc("POST /api/files", s.saveBody)
+	mux.HandleFunc("GET /api/update", s.updateInfo)
+	mux.HandleFunc("POST /api/update/check", s.updateCheck)
+	mux.HandleFunc("POST /api/update/install", s.updateInstall)
+	mux.HandleFunc("GET /api/update/progress", s.updateProgress)
+	mux.HandleFunc("POST /api/update/restart", s.updateRestart)
+	mux.HandleFunc("POST /api/update/open-release", s.updateOpenRelease)
+	mux.HandleFunc("GET /api/settings", s.getSettings)
+	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("GET /api/queries", s.listQueries)
 	mux.HandleFunc("PUT /api/queries/{id}", s.saveQuery)
 	mux.HandleFunc("DELETE /api/queries/{id}", s.deleteQuery)
@@ -56,6 +65,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{sid}/tables", s.createTable)
 	mux.HandleFunc("GET /api/sessions/{sid}/type-info", s.typeInfo)
 	mux.HandleFunc("POST /api/sessions/{sid}/databases", s.createDatabase)
+	mux.HandleFunc("POST /api/sessions/{sid}/databases/drop", s.dropDatabase)
 	mux.HandleFunc("POST /api/sqlite-files", s.createSQLiteFile)
 	mux.HandleFunc("POST /api/sessions/{sid}/drop", s.drop)
 	mux.HandleFunc("POST /api/sessions/{sid}/execute", s.execute)
@@ -1105,4 +1115,23 @@ func (s *Server) drivers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"supported": out})
+}
+
+// getSettings returns the UI's preferences as saved (see model.SettingsStore).
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(s.settings.Get())
+}
+
+// putSettings replaces them with the JSON object in the body.
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, model.MaxSettingsSize+1))
+	if err == nil {
+		err = s.settings.Put(data)
+	}
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	w.Write(s.settings.Get())
 }

@@ -37,6 +37,7 @@ func main() {
 		fmt.Println("gotable", version)
 		return
 	}
+	waitForPrevious() // after an update's restart
 
 	path := *storePath
 	if path == "" {
@@ -64,6 +65,8 @@ func main() {
 		log.Fatal(err)
 	}
 	srv := server.New(store, secrets, webui.FS())
+	srv.SetVersion(version)
+	srv.SetRestartHook(func() error { return restartInto(srv.Install()) })
 	if dir := os.Getenv("GOTABLE_TEST_DIALOGS"); dir != "" {
 		srv.SetDialogs(testDialogs{dir})
 		// Window actions from the page's own title bar go to dir/window.log.
@@ -83,6 +86,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	quitApp = stop
 	if *noWindow {
 		fmt.Println("GoTable is running at", url)
 		<-ctx.Done()

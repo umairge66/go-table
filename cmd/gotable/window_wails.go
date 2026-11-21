@@ -42,6 +42,7 @@ func runWindow(ctx context.Context, url string, srv *server.Server) error {
 	if ownTitleBar {
 		prepareOwnTitleBar()
 	}
+	registerDesktop() // before the window maps, so the task bar finds its icon
 	var app context.Context
 	// The window starts on Wails' own origin; send it to the local server.
 	target, _ := json.Marshal(url) // a JS string literal
@@ -64,6 +65,7 @@ func runWindow(ctx context.Context, url string, srv *server.Server) error {
 		AssetServer: &assetserver.Options{Handler: start},
 		OnStartup: func(c context.Context) {
 			app = c
+			quitApp = func() { runtime.Quit(c) }
 			srv.SetDialogs(dialogs{c})
 			srv.SetThemeHook(setNativeTheme)
 			if ownTitleBar {
