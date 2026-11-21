@@ -3,7 +3,7 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
-## Unreleased
+## v0.8.0 — 2026-11-21
 
 ### Added
 
@@ -21,6 +21,12 @@ release pages on GitHub also carry the full commit messages.
   built with cgo against DuckDB's Windows libraries (the `.exe` is bigger,
   about 120 MB). CI runs the DuckDB, SQLite, updater and export tests on a
   Windows machine.
+
+### Changed
+
+- The Windows `.exe`, `.zip` and installer are cross-built in a Fedora
+  container, whose MinGW targets the UCRT as DuckDB's libraries need
+  (`scripts/package.sh windows` uses `ucrt64-gcc-c++`, or `NO_DUCKDB=1`).
 
 ## v0.7.0 — 2026-11-21
 
