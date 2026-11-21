@@ -119,8 +119,17 @@ jobs:
           $failed = @()
           foreach ($t in Get-ChildItem tests\*.test.exe) {
             Write-Host "== $($t.Name)"
-            & $t.FullName -test.v -test.timeout 10m 2>&1 | Select-String -Pattern '^(--- |ok|PASS|FAIL|panic)|_test\.go:\d+' | ForEach-Object { $_.Line }
-            if ($LASTEXITCODE -ne 0) { $failed += $t.Name }
+            $out = & $t.FullName -test.v -test.timeout 10m 2>&1 | ForEach-Object { "$_" }
+            $code = $LASTEXITCODE
+            $out | Where-Object { $_ -match '^\s*--- (PASS|FAIL|SKIP)' } | ForEach-Object { Write-Host $_ }
+            if ($code -ne 0) {
+              $failed += $t.Name
+              Write-Host ("exit code {0} (0x{0:X8})" -f $code)
+              # The whole output, and its last lines as an annotation (readable without signing in).
+              $out | ForEach-Object { Write-Host $_ }
+              $tail = (($out | Select-Object -Last 25) -join '%0A') -replace '::', ': :'
+              Write-Host "::error title=$($t.Name) exit 0x$('{0:X8}' -f $code)::$tail"
+            }
           }
           if ($failed) { Write-Error "failed: $($failed -join ', ')"; exit 1 }
           # DuckDB must have run, not been left out of the build.
