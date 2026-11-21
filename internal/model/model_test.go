@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -22,7 +23,8 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix permissions: the file is private by its folder (%APPDATA%).
+	if fi, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("store file mode %v %v", fi.Mode(), err)
 	}
 

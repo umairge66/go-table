@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -157,7 +158,7 @@ func TestLatestAndDownload(t *testing.T) {
 	if b, _ := os.ReadFile(exe); string(b) != "#!new binary" {
 		t.Fatalf("%q", b)
 	}
-	if st, _ := os.Stat(exe); st.Mode().Perm()&0o100 == 0 {
+	if st, _ := os.Stat(exe); runtime.GOOS != "windows" && st.Mode().Perm()&0o100 == 0 { // no executable bit on Windows
 		t.Fatal("not executable")
 	}
 	if b, _ := os.ReadFile(exe + ".old"); string(b) != "#!old binary" {
@@ -270,7 +271,8 @@ func TestApplyFilesAndApps(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(app, "Contents", "MacOS", "gotable")); string(b) != "new mac" {
 		t.Fatal(string(b))
 	}
-	if l, err := os.Readlink(filepath.Join(app, "Contents", "Resources", "link")); err != nil || l != "../MacOS/gotable" {
+	// Windows writes the link's target with backslashes.
+	if l, err := os.Readlink(filepath.Join(app, "Contents", "Resources", "link")); err != nil || filepath.ToSlash(l) != "../MacOS/gotable" {
 		t.Fatal(l, err)
 	}
 	Cleanup(Install{Kind: KindMac, Path: app})

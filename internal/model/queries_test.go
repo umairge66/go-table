@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestHistoryStore(t *testing.T) {
 	if e := h3.List("C3", "", 1)[0]; !strings.HasSuffix(e.SQL, "(truncated)") {
 		t.Fatal("expected truncation")
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("history file mode %v", fi.Mode())
 	}
 }
