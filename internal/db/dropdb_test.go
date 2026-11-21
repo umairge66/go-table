@@ -108,11 +108,26 @@ func TestDropDatabaseLive(t *testing.T) {
 			if slices.Contains(list(), "gt_dropme") {
 				t.Fatal("still there", list())
 			}
-			// The database the connection uses is refused, with a reason.
+			// The database a connection uses is refused, with that reason: a
+			// connection to a database of its own (the configured one may be
+			// a system database, refused for another reason).
 			if sv.kind == "database" && (sv.driver == model.DriverPostgres || sv.driver == model.DriverMSSQL) {
-				cur := c.CurrentDatabase(ctx)
-				if _, err := c.DropDatabase(ctx, DropDatabase{Name: cur}); err == nil || !strings.Contains(err.Error(), "connected to") {
-					t.Fatal(cur, err)
+				res, err := c.Execute(ctx, "CREATE DATABASE gt_dropme_conn", 0)
+				if err != nil || res[0].Err != nil {
+					t.Fatal(err, res)
+				}
+				defer c.DropDatabase(context.Background(), DropDatabase{Name: "gt_dropme_conn"})
+				own := *cfg
+				own.DBName = "gt_dropme_conn"
+				c2 := openTest(t, &own, pw)
+				if _, err := c2.DropDatabase(ctx, DropDatabase{Name: "gt_dropme_conn"}); err == nil || !strings.Contains(err.Error(), "connected to") {
+					t.Fatal(err)
+				}
+				c2.Close()
+				// And a system database for its own reason.
+				system := map[model.Driver]string{model.DriverPostgres: "template1", model.DriverMSSQL: "master"}[sv.driver]
+				if _, err := c.DropDatabase(ctx, DropDatabase{Name: system}); err == nil || !strings.Contains(err.Error(), "can't be deleted") {
+					t.Fatal(err)
 				}
 			}
 		})
