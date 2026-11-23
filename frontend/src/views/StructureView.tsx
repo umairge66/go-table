@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isMongo } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isMongo, mongoExtras } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
@@ -175,7 +175,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                   <td className="px-3 py-1.5 font-mono text-[12px]"><IndexColumns x={x} /></td>
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      {mongo && !x.primary && (x.hidden
+                      {mongoExtras(driver) && !x.primary && (x.hidden
                         ? <IconButton label={`Unhide ${x.name}`} onClick={() => alter.run([{ kind: 'unhide_index', name: x.name }], `Unhide index ${x.name}`, { done: 'Index unhidden' })}><Eye className="size-3.5" /></IconButton>
                         : <IconButton label={`Hide ${x.name}`} onClick={() => alter.run([{ kind: 'hide_index', name: x.name }], `Hide index ${x.name}`, { done: 'Index hidden' })}><EyeOff className="size-3.5" /></IconButton>)}
                       {f.renameIndex && <IconButton label={`Rename ${x.name}`} disabled={x.primary && (mysql || sqlite)} onClick={() => setDialog({ kind: 'renameIndex', name: x.name })}><Pencil className="size-3.5" /></IconButton>}
@@ -233,7 +233,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
           </Section>
         )}
 
-        {mongo && <Validation key={`${table.schema}.${table.name}`} session={session} info={info} run={alter.run} />}
+        {mongoExtras(driver) && <Validation key={`${table.schema}.${table.name}`} session={session} info={info} run={alter.run} />}
 
         <TableOperations session={session} table={table} info={info} run={alter.run} onRenamed={onRenamed} />
       </>}

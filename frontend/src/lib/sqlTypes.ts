@@ -209,6 +209,39 @@ const CATALOG: PerDriver<TypeGroup[]> = {
       { name: 'ENUM', hint: 'one of a list', param: { kind: 'values', placeholder: "'a','b','c'", initial: "'a','b'" }, traits: ['text'] },
     ] },
   ],
+  // CrateDB's own names (it reads PostgreSQL's too).
+  cratedb: [
+    { label: 'Numeric', types: [
+      { name: 'INTEGER', hint: '4 bytes', traits: ['int'] }, { name: 'BIGINT', hint: '8 bytes', traits: ['int'] },
+      { name: 'SMALLINT', hint: '2 bytes', traits: ['int'] }, { name: 'DOUBLE PRECISION', hint: 'approximate, 8 bytes' },
+      { name: 'REAL', hint: 'approximate, 4 bytes' }, { name: 'NUMERIC', hint: 'exact number', param: { kind: 'precision', placeholder: '10,2', initial: '10,2' } },
+    ] },
+    { label: 'Text', types: [{ name: 'TEXT', hint: 'any length', traits: ['text'] }, { name: 'VARCHAR', hint: 'up to the length', param: len('length', '255'), traits: ['text'] }] },
+    { label: 'Date and time', types: [
+      { name: 'TIMESTAMP WITH TIME ZONE', hint: 'a point in time' }, { name: 'TIMESTAMP WITHOUT TIME ZONE', hint: 'date and time' }, { name: 'DATE', hint: 'YYYY-MM-DD' },
+    ] },
+    { label: 'Other', types: [
+      { name: 'BOOLEAN', hint: 'true or false' }, { name: 'OBJECT', hint: 'nested JSON-like document' },
+      { name: 'ARRAY(TEXT)', hint: 'a list of texts' }, { name: 'GEO_POINT', hint: 'longitude, latitude' }, { name: 'IP', hint: 'IPv4 or IPv6 address' },
+    ] },
+  ],
+  questdb: [
+    { label: 'Numeric', types: [
+      { name: 'INT', hint: '4 bytes', traits: ['int'] }, { name: 'LONG', hint: '8 bytes', traits: ['int'] },
+      { name: 'SHORT', hint: '2 bytes', traits: ['int'] }, { name: 'BYTE', hint: '1 byte', traits: ['int'] },
+      { name: 'DOUBLE', hint: 'approximate, 8 bytes' }, { name: 'FLOAT', hint: 'approximate, 4 bytes' },
+      { name: 'DECIMAL', hint: 'exact number', param: { kind: 'precision', placeholder: '18,4', initial: '18,4' } },
+    ] },
+    { label: 'Text', types: [
+      { name: 'VARCHAR', hint: 'text of any length', traits: ['text'] },
+      { name: 'SYMBOL', hint: 'repeated values (dictionary-encoded); can be indexed' }, { name: 'CHAR', hint: 'one character' },
+    ] },
+    { label: 'Date and time', types: [{ name: 'TIMESTAMP', hint: 'microseconds' }, { name: 'TIMESTAMP_NS', hint: 'nanoseconds' }, { name: 'DATE', hint: 'milliseconds' }] },
+    { label: 'Other', types: [
+      { name: 'BOOLEAN', hint: 'true or false' }, { name: 'UUID', hint: '128-bit id' }, { name: 'IPV4', hint: 'IPv4 address' },
+      { name: 'BINARY', hint: 'bytes' }, { name: 'LONG256', hint: '256-bit number' },
+    ] },
+  ],
   clickhouse: [
     { label: 'Numeric', types: [
       { name: 'Int32', hint: '4 bytes', traits: ['int'] }, { name: 'Int64', hint: '8 bytes', traits: ['int'] },

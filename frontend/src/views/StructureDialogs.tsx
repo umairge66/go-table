@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Field, IconButton, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, family, features, isMongo, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
+import { driverInfo, family, features, isMongo, mongoExtras, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
 // SQL, then the same request runs it.
@@ -233,7 +233,7 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
           </Field>
           <div className="col-span-2 flex gap-6">
             <Switch checked={sparse} onChange={setSparse} label={<span className="text-[12.5px]">Sparse <span className="text-muted">— skip documents without the field</span></span>} />
-            <Switch checked={hidden} onChange={setHidden} label={<span className="text-[12.5px]">Hidden <span className="text-muted">— built, but not used by queries yet</span></span>} />
+            {mongoExtras(driver) && <Switch checked={hidden} onChange={setHidden} label={<span className="text-[12.5px]">Hidden <span className="text-muted">— built, but not used by queries yet</span></span>} />}
           </div>
         </div>
       )}

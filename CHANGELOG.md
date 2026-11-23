@@ -3,6 +3,24 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## Unreleased
+
+### Added
+
+- **Ten more servers**, each tested in Docker (CI too):
+  - **CrateDB** and **QuestDB** (PostgreSQL protocol), read through their own
+    catalogs: columns, keys, DDL (`SHOW CREATE TABLE`), views. QuestDB pages
+    with its `LIMIT low, high` and refuses row deletes with an explanation;
+    CrateDB's grid edits are refreshed so they show at once.
+  - **StarRocks** and **Apache Doris** (MySQL protocol, analytical): named in
+    the top bar, case-insensitive search, edits and schema changes statement
+    by statement, dumps without foreign-key settings.
+  - **FerretDB** (MongoDB protocol on PostgreSQL), with text searches and
+    Explain adapted to it, and the options it lacks left out of the UI;
+    **Amazon DocumentDB** (TLS by default, retryable writes off; untested).
+  - **Dragonfly**, **KeyDB** and **Garnet** (Redis protocol).
+- Column types of CrateDB and QuestDB in the table designer.
+
 ## v0.8.0 — 2026-11-21
 
 ### Added

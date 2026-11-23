@@ -381,6 +381,74 @@ func mongoRegexExpr(field, pattern string) bson.D {
 	}}}}}
 }
 
+// mongoPlainRegex rewrites mongoRegexExpr's conditions as plain $regex
+// queries, for servers that refuse $regexMatch on a converted value
+// (FerretDB). They then match strings only, not numbers or dates as text.
+func mongoPlainRegex(v any) any {
+	switch x := v.(type) {
+	case bson.D:
+		if len(x) == 1 && x[0].Key == "$expr" {
+			if m, ok := x[0].Value.(bson.D); ok && len(m) == 1 && m[0].Key == "$regexMatch" {
+				if field, regex, opts, ok := regexMatchParts(m[0].Value); ok {
+					return bson.D{{Key: field, Value: bson.D{{Key: "$regex", Value: regex}, {Key: "$options", Value: opts}}}}
+				}
+			}
+		}
+		out := make(bson.D, len(x))
+		for i, e := range x {
+			out[i] = bson.E{Key: e.Key, Value: mongoPlainRegex(e.Value)}
+		}
+		return out
+	case bson.A:
+		out := make(bson.A, len(x))
+		for i, e := range x {
+			out[i] = mongoPlainRegex(e)
+		}
+		return out
+	}
+	return v
+}
+
+// regexMatchParts reads back what mongoRegexExpr built.
+func regexMatchParts(v any) (field, regex, opts string, ok bool) {
+	m, isD := v.(bson.D)
+	if !isD {
+		return
+	}
+	var input any
+	for _, e := range m {
+		switch e.Key {
+		case "input":
+			input = e.Value
+		case "regex":
+			regex, _ = e.Value.(string)
+		case "options":
+			opts, _ = e.Value.(string)
+		}
+	}
+	conv, isD := input.(bson.D)
+	if !isD || len(conv) != 1 || conv[0].Key != "$convert" {
+		return
+	}
+	for _, e := range conv[0].Value.(bson.D) {
+		if e.Key != "input" {
+			continue
+		}
+		switch ref := e.Value.(type) {
+		case string:
+			return strings.TrimPrefix(ref, "$"), regex, opts, true
+		case bson.D: // $getField of a name with a dot or $
+			for _, g := range ref[0].Value.(bson.D) {
+				if lit, isD := g.Value.(bson.D); g.Key == "field" && isD {
+					name, _ := lit[0].Value.(string)
+					return name, regex, opts, true
+				}
+			}
+		}
+	}
+	return
+}
+
 // mongoFieldRef refers to a top-level field in an aggregation expression.
 func mongoFieldRef(field string) any {
 	if strings.ContainsAny(field, ".$") {

@@ -2,8 +2,9 @@
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
 Oracle, DuckDB, ClickHouse, MongoDB and Redis, and the servers and cloud services compatible with
-them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, TiDB, Percona
-Server, SingleStore, PlanetScale, Valkey). A Go backend with a web UI, shipped as one binary that opens in a native window
+them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, CrateDB, QuestDB,
+TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
+FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -40,9 +41,17 @@ inspector and a Data / Structure / Definition switch.
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
+| CrateDB (tested on 6.5) | PostgreSQL protocol, its own SQL and catalog: every column is indexed by CrateDB, so there are no indexes to manage; no foreign keys or transactions (edits run one by one). Grid edits are refreshed at once; other writes appear within a second, as CrateDB makes them visible |
+| QuestDB (tested on 10.2) | PostgreSQL protocol, time series: one schema, no primary keys or constraints, and no `DELETE` (GoTable says so; drop a partition or the table instead). A table shows its designated timestamp, partitioning and WAL; `NULL <> 'x'` is true there |
+| StarRocks (tested on its all-in-one image), Apache Doris (tested on 2.1) | MySQL protocol, analytical: the key model and distribution are set when a table is made; no foreign keys; edits and schema changes run statement by statement; case-insensitive search |
+| FerretDB (tested on 2.7) | MongoDB protocol on PostgreSQL: as MongoDB, without views, hidden indexes, `$jsonSchema` validation or capped collections (the UI leaves those out). Searches match text fields only, and Explain shows PostgreSQL's plan |
+| Amazon DocumentDB | MongoDB protocol, over TLS (give the cluster's CA file, `global-bundle.pem`); retryable writes are off, as DocumentDB needs. Not tested here: it needs an AWS cluster |
+| Dragonfly, KeyDB, Garnet | Redis protocol, as Redis. Garnet has no streams |
 
-Neon, Supabase and PlanetScale default to TLS; pasting a `postgres://` or
-`mysql://` URL with their host name picks them.
+Neon, Supabase, PlanetScale and DocumentDB default to TLS; pasting a
+`postgres://`, `mysql://` or `mongodb://` URL with their host name picks them
+(also CrateDB Cloud's `*.cratedb.net`), as do `cratedb://`, `questdb://`,
+`starrocks://`, `doris://`, `dragonfly://`, `keydb://` and `garnet://` URLs.
 
 ### MongoDB
 
@@ -361,7 +370,8 @@ Valkey, KeyDB and Dragonfly speak the same protocol):
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
 ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, Redis, Valkey, CockroachDB,
-                                  # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore
+                                  # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore, CrateDB, QuestDB,
+                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet (the analytical ones are big images)
 ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
                                   # MongoDB standalone, replica set, sharded cluster, TLS + X.509
 scripts/test-mongo-srv.sh         # mongodb+srv:// with SRV/TXT records from a DNS container

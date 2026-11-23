@@ -93,8 +93,8 @@ func (w *whereBuilder) condition(f Filter, columns []string) (string, error) {
 		if not {
 			op = "NOT " + op
 		}
-		if w.d.kind == model.DriverSingleStore || w.d.family == model.DriverOracle {
-			// Case-sensitive there: Oracle's LIKE, SingleStore's utf8mb4_bin.
+		if w.d.kind == model.DriverSingleStore || w.d.family == model.DriverOracle || w.d.kind == model.DriverStarRocks || w.d.kind == model.DriverDoris {
+			// Case-sensitive there: Oracle's LIKE, SingleStore's utf8mb4_bin, StarRocks' and Doris' LIKE.
 			return "LOWER(" + w.d.TextExpr(f.Column) + ") " + op + " LOWER(" + w.bind(pattern) + ")" + w.d.likeEscape()
 		}
 		return w.d.TextExpr(f.Column) + " " + op + " " + w.bind(pattern) + w.d.likeEscape()

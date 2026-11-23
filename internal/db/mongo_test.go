@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"gotable/internal/model"
 )
@@ -211,7 +212,7 @@ func TestMongoURI(t *testing.T) {
 // hosted one (Atlas) given as GOTABLE_TEST_MONGOATLAS_URL.
 func TestMongoDB(t *testing.T) {
 	ran := false
-	for _, name := range []string{"MONGODB", "MONGORS", "MONGOSHARD", "MONGOATLAS"} {
+	for _, name := range []string{"MONGODB", "MONGORS", "MONGOSHARD", "MONGOATLAS", "FERRETDB"} {
 		if os.Getenv("GOTABLE_TEST_"+name+"_HOST") == "" && os.Getenv("GOTABLE_TEST_"+name+"_URL") == "" {
 			continue
 		}
@@ -233,13 +234,20 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal(err)
 		}
 	} else {
-		cfg, pw = serverConfig(t, name, model.DriverMongoDB)
+		d := model.DriverMongoDB
+		if name == "FERRETDB" {
+			d = model.DriverFerretDB
+		}
+		cfg, pw = serverConfig(t, name, d)
 		cfg.Options = os.Getenv("GOTABLE_TEST_" + name + "_OPTIONS") // directConnection=true for a replica set in a container
 	}
 	cfg.DBName = "gt_test"
 	c := openTest(t, cfg, pw)
+	// FerretDB (on PostgreSQL) emulates MongoDB without views, hidden
+	// indexes, most $jsonSchema keywords or $regexMatch on converted values.
+	ferret := name == "FERRETDB"
 	// Transactions where the server has them: a replica set or mongos.
-	if want := name != "MONGODB"; c.mongoTxn != want {
+	if want := name != "MONGODB"; name != "FERRETDB" && c.mongoTxn != want {
 		t.Fatalf("%s: transactions %v, want %v", name, c.mongoTxn, want)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -276,7 +284,7 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatalf("%v after %v", err, time.Since(start))
 		}
 	}
-	if v, err := c.ServerVersion(ctx); err != nil || !strings.HasPrefix(v, "MongoDB ") {
+	if v, err := c.ServerVersion(ctx); err != nil || !strings.HasPrefix(v, map[bool]string{false: "MongoDB ", true: "FerretDB "}[ferret]) {
 		t.Fatal(v, err)
 	}
 	if c.Schema() != "gt_test" {
@@ -304,11 +312,17 @@ func testMongoServer(t *testing.T, name string) {
 		t.Fatal(r.RowsAffected)
 	}
 	must(`db.people.createIndex({ name: 1 }, { unique: true })`)
-	must(`db.createView("adults", "people", [{ $match: { age: { $gte: 30 } } }, { $project: { name: 1 } }])`)
+	if !ferret { // FerretDB makes an empty collection of it
+		must(`db.createView("adults", "people", [{ $match: { age: { $gte: 30 } } }, { $project: { name: 1 } }])`)
+	}
 
 	t.Run("introspection", func(t *testing.T) {
 		objs, err := c.Objects(ctx, "gt_test")
-		if err != nil || len(objs) != 2 || objs[0].Name != "adults" || objs[0].Kind != KindView || objs[1].Kind != KindTable {
+		if ferret {
+			if err != nil || len(objs) != 1 || objs[0].Name != "people" {
+				t.Fatal(objs, err)
+			}
+		} else if err != nil || len(objs) != 2 || objs[0].Name != "adults" || objs[0].Kind != KindView || objs[1].Kind != KindTable {
 			t.Fatal(objs, err)
 		}
 		cols, err := c.Columns(ctx, tbl)
@@ -338,7 +352,7 @@ func testMongoServer(t *testing.T, name string) {
 		if names, err := c.ColumnNames(ctx, tbl); err != nil || names[0] != "_id" || !slices.Contains(names, "score") {
 			t.Fatal(names, err)
 		}
-		if idx, err := c.Indexes(ctx, TableRef{Schema: "gt_test", Name: "adults"}); err != nil || len(idx) != 0 {
+		if idx, err := c.Indexes(ctx, TableRef{Schema: "gt_test", Name: "adults"}); !ferret && (err != nil || len(idx) != 0) {
 			t.Fatal(idx, err)
 		}
 		def, err := c.Definition(ctx, Object{Schema: "gt_test", Name: "people", Kind: KindTable})
@@ -346,7 +360,7 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal(def, err)
 		}
 		def, err = c.Definition(ctx, Object{Schema: "gt_test", Name: "adults", Kind: KindView})
-		if err != nil || !strings.Contains(def, `"viewOn":"people"`) {
+		if !ferret && (err != nil || !strings.Contains(def, `"viewOn":"people"`)) {
 			t.Fatal(def, err)
 		}
 	})
@@ -367,7 +381,7 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal(n, err)
 		}
 		// Views count too, although they have no metadata to count from.
-		if n, err := c.CountRows(ctx, TableRef{Schema: "gt_test", Name: "adults"}, Page{}, nil); err != nil || n != 2 {
+		if n, err := c.CountRows(ctx, TableRef{Schema: "gt_test", Name: "adults"}, Page{}, nil); !ferret && (err != nil || n != 2) {
 			t.Fatal(n, err)
 		}
 	})
@@ -414,6 +428,10 @@ func testMongoServer(t *testing.T, name string) {
 			{Filter{Column: AnyColumn, Op: OpContains, Value: "paris"}, []string{"Bob"}},
 			{Filter{Column: AnyColumn, Op: OpContains, Value: "2024"}, []string{"Alice"}},
 		} {
+			// FerretDB: text searches match strings only.
+			if ferret && (tc.f.Value == "29" && tc.f.Op == OpContains || tc.f.Value == "2024") {
+				tc.want = nil
+			}
 			if got := names(Page{Filters: []Filter{tc.f}}); !slices.Equal(got, tc.want) {
 				t.Errorf("%+v: got %v, want %v", tc.f, got, tc.want)
 			}
@@ -438,6 +456,13 @@ func testMongoServer(t *testing.T, name string) {
 		show := func(p *QueryPlan) string { b, _ := json.MarshalIndent(p, "", " "); return string(b) }
 		is := func(n *int64, want int64) bool { return n != nil && *n == want }
 
+		if ferret { // PostgreSQL's plan: its nodes, read as stages
+			p := plan(`db.people.find({ city: "Berlin" }).explain()`)
+			if !strings.Contains(p.Root.Stage, "Scan") {
+				t.Fatal(show(p))
+			}
+			return
+		}
 		// An index lookup, executed: the counts are there.
 		p := plan(`db.people.find({ name: "Alice" }).explain()`)
 		if p.Verbosity != "executionStats" || !slices.Contains(p.Indexes, "name_1") || p.CollScan ||
@@ -536,7 +561,7 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal(err)
 		}
 		dup := []Change{{Kind: ChangeInsert, Values: map[string]Value{"name": Text("Bob")}}}
-		if err := c.ApplyChanges(ctx, tbl, dup, true); err == nil || !strings.Contains(err.Error(), "E11000") {
+		if err := c.ApplyChanges(ctx, tbl, dup, true); err == nil || !mongo.IsDuplicateKeyError(err) {
 			t.Fatal(err)
 		}
 		// _id "1" and 1 at once: refuse to guess.
@@ -649,6 +674,9 @@ func testMongoServer(t *testing.T, name string) {
 	})
 
 	t.Run("index options", func(t *testing.T) {
+		if ferret {
+			t.Skip("FerretDB has no hidden indexes")
+		}
 		must(`db.ix.insertMany([{ _id: 1, at: ISODate("2024-01-01T00:00:00Z"), age: 30, bio: "likes go", loc: { type: "Point", coordinates: [13.4, 52.5] }, x: { y: 1 } }, { _id: 2, age: 10 }])`)
 		ref := TableRef{Schema: "gt_test", Name: "ix"}
 		ttl := int64(3600)
@@ -742,6 +770,9 @@ func testMongoServer(t *testing.T, name string) {
 	})
 
 	t.Run("validation", func(t *testing.T) {
+		if ferret {
+			t.Skip("FerretDB's $jsonSchema lacks required, so no rules to test")
+		}
 		must(`db.createCollection("v")`)
 		ref := TableRef{Schema: "gt_test", Name: "v"}
 		if info, err := c.TableInfo(ctx, ref); err != nil || info.Validator != "" {
@@ -812,13 +843,17 @@ func testMongoServer(t *testing.T, name string) {
 		if st := create("capd", NewCollectionOptions{Capped: true, SizeBytes: 4096, MaxDocs: 2}); st[0] != `db.createCollection("capd", {"capped":true,"size":4096,"max":2})` {
 			t.Fatal(st)
 		}
-		// A capped collection keeps only the newest documents.
-		must(`db.capd.insertMany([{ i: 1 }, { i: 2 }, { i: 3 }])`)
-		if r := must(`db.capd.find({}, { _id: 0 })`); len(r.Set.Rows) != 2 || r.Set.Rows[0][0].Text != "2" {
-			t.Fatal(r.Set.Rows)
-		}
-		if o := info("capd"); o != "capped at 4 KB, 2 documents" {
-			t.Fatal(o)
+		// A capped collection keeps only the newest documents (FerretDB
+		// accepts the options but keeps them all).
+		if !ferret {
+			// A capped collection keeps only the newest documents.
+			must(`db.capd.insertMany([{ i: 1 }, { i: 2 }, { i: 3 }])`)
+			if r := must(`db.capd.find({}, { _id: 0 })`); len(r.Set.Rows) != 2 || r.Set.Rows[0][0].Text != "2" {
+				t.Fatal(r.Set.Rows)
+			}
+			if o := info("capd"); o != "capped at 4 KB, 2 documents" {
+				t.Fatal(o)
+			}
 		}
 		if major >= 5 {
 			create("ts", NewCollectionOptions{TimeField: "at", MetaField: "sensor", Granularity: "minutes", ExpireAfterSeconds: &day})
@@ -855,8 +890,11 @@ func testMongoServer(t *testing.T, name string) {
 			{ _id: 2, extra: "only here" },
 		])`)
 		must(`db.dump.createIndex({ s: 1 }, { unique: true, sparse: true })`)
-		must(`db.createView("dumpview", "dump", [{ $match: { i: 7 } }])`)
-		objs := []Object{{Schema: "gt_test", Name: "dump", Kind: KindTable}, {Schema: "gt_test", Name: "dumpview", Kind: KindView}}
+		objs := []Object{{Schema: "gt_test", Name: "dump", Kind: KindTable}}
+		if !ferret {
+			must(`db.createView("dumpview", "dump", [{ $match: { i: 7 } }])`)
+			objs = append(objs, Object{Schema: "gt_test", Name: "dumpview", Kind: KindView})
+		}
 		var buf bytes.Buffer
 		var last DumpProgress
 		if err := c.Dump(ctx, &buf, DumpOptions{Objects: objs, Structure: true, Data: true, DropFirst: true, BatchSize: 1}, func(p DumpProgress) { last = p }); err != nil {
@@ -890,9 +928,12 @@ func testMongoServer(t *testing.T, name string) {
 		}
 		same("db.dump.find().sort({ _id: 1 })")
 		same("db.dump.getIndexes()")
-		same("db.dumpview.find()")
 		objects, _ := c.Objects(ctx, "gt_copy")
-		if len(objects) != 2 || objects[0].Name != "dump" || objects[1].Kind != KindView {
+		if ferret {
+			if len(objects) != 1 || objects[0].Name != "dump" {
+				t.Fatalf("%+v", objects)
+			}
+		} else if same("db.dumpview.find()"); len(objects) != 2 || objects[0].Name != "dump" || objects[1].Kind != KindView {
 			t.Fatalf("%+v", objects)
 		}
 		// An import reports a failing statement, or skips it when told to.
@@ -950,7 +991,7 @@ func testMongoServer(t *testing.T, name string) {
 		}
 		// A duplicate _id stops the import there, saying where…
 		res, err = imp(`[{"_id": 3}, {"_id": 1}, {"_id": 4}]`, JSONImportOptions{})
-		if err == nil || !strings.Contains(err.Error(), "documents 1–3") || !strings.Contains(err.Error(), "duplicate key") || res.Inserted != 1 {
+		if err == nil || !strings.Contains(err.Error(), "documents 1–3") || !strings.Contains(strings.ToLower(err.Error()), "duplicate key") || res.Inserted != 1 {
 			t.Fatal(res, err)
 		}
 		// … or is skipped and reported.
@@ -1078,9 +1119,11 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal(rep, err)
 		}
 		// A view works too, and an empty collection says so.
-		must(`db.createView("sav", "sa", [{ $match: { city: "Berlin" } }])`)
-		if rep, err := c.AnalyzeSchema(ctx, TableRef{Schema: "gt_test", Name: "sav"}, 1000); err != nil || rep.Sampled != 2 {
-			t.Fatal(rep, err)
+		if !ferret {
+			must(`db.createView("sav", "sa", [{ $match: { city: "Berlin" } }])`)
+			if rep, err := c.AnalyzeSchema(ctx, TableRef{Schema: "gt_test", Name: "sav"}, 1000); err != nil || rep.Sampled != 2 {
+				t.Fatal(rep, err)
+			}
 		}
 		must(`db.createCollection("saempty")`)
 		if rep, err := c.AnalyzeSchema(ctx, TableRef{Schema: "gt_test", Name: "saempty"}, 1000); err != nil || rep.Sampled != 0 || len(rep.Fields) != 0 {
@@ -1137,8 +1180,10 @@ func testMongoServer(t *testing.T, name string) {
 			t.Fatal("the edit wasn't saved as written")
 		}
 		// Naming a type on purpose still changes it.
+		// (FerretDB doesn't store an array whose numbers are equal to the old
+		// ones, 9 for NumberLong 9: the long stays.)
 		save(map[string]Value{"list": Text(`[NumberInt(9), 3.0]`)})
-		if r := must(`db.nest.aggregate([{ $project: { _id: 0, t: { $type: { $arrayElemAt: ["$list", 0] } } } }])`); r.Set.Rows[0][0].Text != "int" {
+		if r := must(`db.nest.aggregate([{ $project: { _id: 0, t: { $type: { $arrayElemAt: ["$list", 0] } } } }])`); !ferret && r.Set.Rows[0][0].Text != "int" {
 			t.Fatal(r.Set.Rows)
 		}
 	})

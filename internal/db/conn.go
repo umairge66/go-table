@@ -410,6 +410,9 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	if c.redis != nil {
 		return c.redisApplyChanges(ctx, t, changes)
 	}
+	if err := questNoDelete(c, changes); err != nil {
+		return err
+	}
 	stmts := make([]Statement, 0, len(changes))
 	for _, ch := range changes {
 		s, err := BuildChange(c.Dialect, t, ch, hasPK)
@@ -427,7 +430,8 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 		return err
 	}
 	// ClickHouse mutations report no row count.
-	counted := c.Dialect.family != model.DriverClickHouse
+	// Doris reports 0 rows for a DELETE. Neither can tell a row that changed.
+	counted := c.Dialect.family != model.DriverClickHouse && c.Config.Driver != model.DriverDoris
 	for _, s := range stmts {
 		res, err := tx.ExecContext(ctx, s.SQL, s.Args...)
 		if err == nil && counted && s.Args != nil && !strings.HasPrefix(s.SQL, "INSERT") {
@@ -440,7 +444,11 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 			return fmt.Errorf("%s: %w", Preview(c.Dialect, s), err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	c.crateRefresh(ctx, t)
+	return nil
 }
 
 // PreviewChanges renders pending edits the way the review dialog shows them.
@@ -450,6 +458,9 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	}
 	if c.redis != nil {
 		return c.redisPreviewChanges(ctx, t, changes)
+	}
+	if err := questNoDelete(c, changes); err != nil {
+		return nil, err
 	}
 	out := make([]string, 0, len(changes))
 	for _, ch := range changes {
@@ -758,10 +769,20 @@ func (noTx) Rollback() error { return nil }
 // begin starts a transaction on the pinned connection. ClickHouse has none,
 // so its statements apply one by one. Callers hold c.mu.
 func (c *Conn) begin(ctx context.Context) (txn, error) {
-	if c.Dialect.family == model.DriverClickHouse {
+	if c.Dialect.family == model.DriverClickHouse || noTransactions(c.Config.Driver) {
 		return noTx{c.conn}, nil
 	}
 	return c.conn.BeginTx(ctx, nil)
+}
+
+// noTransactions: servers that take BEGIN but don't keep a transaction of
+// several writes (StarRocks refuses some), so edits run one by one.
+func noTransactions(d model.Driver) bool {
+	switch d {
+	case model.DriverStarRocks, model.DriverDoris, model.DriverCrateDB, model.DriverQuestDB:
+		return true
+	}
+	return false
 }
 
 func isComposite(dbType string) bool {

@@ -160,6 +160,11 @@ func redisServerName(info string) string {
 		return "Valkey " + fields["valkey_version"]
 	case strings.EqualFold(fields["server_name"], "valkey"):
 		return "Valkey " + fields["redis_version"]
+	case fields["garnet_version"] != "":
+		return "Garnet " + fields["garnet_version"]
+	// KeyDB reports a Redis version; its program's name says KeyDB.
+	case strings.Contains(strings.ToLower(fields["executable"]+fields["config_file"]), "keydb"):
+		return "KeyDB " + fields["redis_version"]
 	case fields["redis_version"] != "":
 		return "Redis " + fields["redis_version"]
 	}

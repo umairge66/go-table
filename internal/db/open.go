@@ -69,6 +69,12 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	case model.DriverPostgres:
 		sqlDB, err = openPostgres(cfg, addr, cred.Password)
 		eng = postgresEngine{}
+		switch cfg.Driver {
+		case model.DriverCrateDB:
+			eng = crateEngine{}
+		case model.DriverQuestDB:
+			eng = questEngine{}
+		}
 	case model.DriverMySQL:
 		sqlDB, err = openMySQL(cfg, addr, cred.Password)
 		eng = mysqlEngine{}

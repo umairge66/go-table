@@ -191,9 +191,9 @@ func summarizePlan(doc bson.D, verbosity string) *QueryPlan {
 		case s.Index != "" && !seen[s.Index]:
 			seen[s.Index] = true
 			p.Indexes = append(p.Indexes, s.Index)
-		case s.Stage == "COLLSCAN":
+		case s.Stage == "COLLSCAN" || s.Stage == "Seq Scan":
 			p.CollScan = true
-		case s.Stage == "SORT" || s.Stage == "$sort":
+		case s.Stage == "SORT" || s.Stage == "$sort" || s.Stage == "Sort":
 			p.InMemorySort = true
 		}
 		for _, ch := range s.Children {
@@ -236,6 +236,10 @@ func planOf(doc bson.D) PlanStage {
 		}
 	}
 	if qp := section(doc, "queryPlanner"); qp != nil {
+		// FerretDB: PostgreSQL's plan, as EXPLAIN (FORMAT JSON) gives it.
+		if pg := section(qp, "Plan"); pg != nil {
+			return pgStageOf(pg)
+		}
 		if wp := section(qp, "winningPlan"); wp != nil {
 			if q := section(wp, "queryPlan"); q != nil {
 				return stageOf(q)
@@ -244,6 +248,37 @@ func planOf(doc bson.D) PlanStage {
 		}
 	}
 	return PlanStage{Stage: "?"}
+}
+
+// pgStageOf reads a PostgreSQL plan node and the ones under it.
+func pgStageOf(d bson.D) PlanStage {
+	s := PlanStage{Stage: str(d, "Node Type"), Index: str(d, "Index Name"), Direction: str(d, "Scan Direction")}
+	for _, k := range []string{"Index Cond", "Filter", "Sort Key"} {
+		if v, ok := mongoGet(d, k); ok {
+			if s.Filter != "" {
+				s.Filter += "; "
+			}
+			s.Filter += k + ": " + strings.Trim(compactJSON(v), `"`)
+		}
+	}
+	if n := num(d, "Actual Rows"); n != nil {
+		s.NReturned = n
+	} else if v, ok := mongoGet(d, "Actual Rows"); ok {
+		if f, ok := v.(float64); ok {
+			n := int64(f)
+			s.NReturned = &n
+		}
+	}
+	if v, ok := mongoGet(d, "Plans"); ok {
+		if a, ok := v.(bson.A); ok {
+			for _, c := range a {
+				if cd, ok := c.(bson.D); ok {
+					s.Children = append(s.Children, pgStageOf(cd))
+				}
+			}
+		}
+	}
+	return s
 }
 
 func isSlotBased(doc bson.D) bool {

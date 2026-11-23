@@ -43,7 +43,19 @@ const (
 	DriverSingleStore Driver = "singlestore"
 	DriverPlanetScale Driver = "planetscale"
 	// Servers that speak the Redis protocol.
-	DriverValkey Driver = "valkey"
+	DriverValkey    Driver = "valkey"
+	DriverDragonfly Driver = "dragonfly"
+	DriverKeyDB     Driver = "keydb"
+	DriverGarnet    Driver = "garnet"
+	// MongoDB-compatible: FerretDB (on PostgreSQL) and Amazon DocumentDB.
+	DriverFerretDB   Driver = "ferretdb"
+	DriverDocumentDB Driver = "documentdb"
+	// Analytical servers that speak the MySQL protocol (frontend port 9030).
+	DriverStarRocks Driver = "starrocks"
+	DriverDoris     Driver = "doris"
+	// Servers that speak the PostgreSQL protocol with their own SQL.
+	DriverCrateDB Driver = "cratedb"
+	DriverQuestDB Driver = "questdb"
 )
 
 // driverSpec describes a driver. family is the engine whose protocol and SQL
@@ -76,13 +88,24 @@ var specs = map[Driver]driverSpec{
 	DriverPercona:     {"Percona Server", DriverMySQL, 3306, false},
 	DriverSingleStore: {"SingleStore", DriverMySQL, 3306, false},
 	DriverPlanetScale: {"PlanetScale", DriverMySQL, 3306, true},
+	DriverDragonfly:   {"Dragonfly", DriverRedis, 6379, false},
+	DriverKeyDB:       {"KeyDB", DriverRedis, 6379, false},
+	DriverGarnet:      {"Garnet", DriverRedis, 6379, false},
+	DriverFerretDB:    {"FerretDB", DriverMongoDB, 27017, false},
+	DriverDocumentDB:  {"Amazon DocumentDB", DriverMongoDB, 27017, true},
+	DriverStarRocks:   {"StarRocks", DriverMySQL, 9030, false},
+	DriverDoris:       {"Apache Doris", DriverMySQL, 9030, false},
+	DriverCrateDB:     {"CrateDB", DriverPostgres, 5432, false},
+	DriverQuestDB:     {"QuestDB", DriverPostgres, 8812, false},
 }
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
 var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
-	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverValkey}
+	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverStarRocks, DriverDoris,
+	DriverCrateDB, DriverQuestDB, DriverFerretDB, DriverDocumentDB,
+	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
 // DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
@@ -139,6 +162,8 @@ func (d Driver) SSLModes() []string {
 			return []string{"require", "verify-full", "verify-ca"}
 		case DriverMySQL:
 			return []string{"required", "verify_identity", "verify_ca"}
+		case DriverMongoDB:
+			return []string{"require", "skip-verify"}
 		}
 	}
 	return modes

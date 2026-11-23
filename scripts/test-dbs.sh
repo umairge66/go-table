@@ -17,6 +17,10 @@
 #            mongotls    MongoDB that requires TLS, with a test CA and a
 #                        client certificate for X.509 login (needs openssl)
 #   redis    Redis          valkey    Valkey (the Redis fork)
+#   dragonfly Dragonfly     keydb     KeyDB          garnet   Microsoft Garnet
+#   ferretdb FerretDB (MongoDB protocol on PostgreSQL with DocumentDB)
+#   cratedb  CrateDB        questdb   QuestDB        (PostgreSQL protocol)
+#   starrocks StarRocks     doris     Apache Doris   (MySQL protocol)
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
 set -euo pipefail
@@ -38,10 +42,18 @@ ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23-slim-faststart}
 MONGODB_IMAGE=${MONGODB_IMAGE:-mongo:7}
 REDIS_IMAGE=${REDIS_IMAGE:-redis:7-alpine}
 VALKEY_IMAGE=${VALKEY_IMAGE:-valkey/valkey:8-alpine}
+DRAGONFLY_IMAGE=${DRAGONFLY_IMAGE:-docker.dragonflydb.io/dragonflydb/dragonfly:latest}
+KEYDB_IMAGE=${KEYDB_IMAGE:-eqalpha/keydb:latest}
+GARNET_IMAGE=${GARNET_IMAGE:-ghcr.io/microsoft/garnet:latest}
+FERRETDB_IMAGE=${FERRETDB_IMAGE:-ghcr.io/ferretdb/ferretdb-eval:2}
+CRATEDB_IMAGE=${CRATEDB_IMAGE:-crate:latest}
+QUESTDB_IMAGE=${QUESTDB_IMAGE:-questdb/questdb:latest}
+STARROCKS_IMAGE=${STARROCKS_IMAGE:-starrocks/allin1-ubuntu:latest}
+DORIS_IMAGE=${DORIS_IMAGE:-apache/doris:doris-all-in-one-2.1.0}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey dragonfly keydb garnet ferretdb cratedb questdb starrocks doris crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -73,6 +85,10 @@ tcp_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 has pg && run pg -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$PG_IMAGE"
 has mysql && run mysql -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$MYSQL_IMAGE"
 has mariadb && run mariadb -e MARIADB_ROOT_PASSWORD=$PW -e MARIADB_DATABASE=gotable -p 127.0.0.1::3306 "$MARIADB_IMAGE"
+has cratedb && run cratedb -p 127.0.0.1::5432 "$CRATEDB_IMAGE" -Cdiscovery.type=single-node
+has questdb && run questdb -p 127.0.0.1::8812 "$QUESTDB_IMAGE"
+has starrocks && run starrocks -p 127.0.0.1::9030 "$STARROCKS_IMAGE"
+has doris && run doris -p 127.0.0.1::9030 "$DORIS_IMAGE"
 has crdb && run crdb -p 127.0.0.1::26257 "$CRDB_IMAGE" start-single-node --insecure
 # yugabyted listens on the address it advertises: the container's own.
 has yb && run yb -p 127.0.0.1::5433 "$YB_IMAGE" bash -c 'exec bin/yugabyted start --background=false --advertise_address="$(hostname -i | cut -d" " -f1)"'
@@ -125,6 +141,10 @@ fi
 # With a password, as a server reachable from elsewhere should have.
 has redis && run redis -p 127.0.0.1::6379 "$REDIS_IMAGE" redis-server --requirepass "$PW"
 has valkey && run valkey -p 127.0.0.1::6379 "$VALKEY_IMAGE" valkey-server --requirepass "$PW"
+has dragonfly && run dragonfly -p 127.0.0.1::6379 --ulimit memlock=-1 "$DRAGONFLY_IMAGE" --requirepass "$PW" --dbnum 16
+has ferretdb && run ferretdb -e POSTGRES_USER=gotable -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::27017 "$FERRETDB_IMAGE"
+has keydb && run keydb -p 127.0.0.1::6379 "$KEYDB_IMAGE" keydb-server --requirepass "$PW"
+has garnet && run garnet -p 127.0.0.1::6379 "$GARNET_IMAGE" --auth Password --password "$PW"
 has ts && run ts -e POSTGRES_PASSWORD=$PW -p 127.0.0.1::5432 "$TS_IMAGE"
 has percona && run percona -e MYSQL_ROOT_PASSWORD=$PW -e MYSQL_DATABASE=gotable -p 127.0.0.1::3306 "$PERCONA_IMAGE"
 has s2 && run s2 -e ROOT_PASSWORD=$PW -p 127.0.0.1::3306 "$S2_IMAGE"
@@ -146,6 +166,25 @@ fi
 if has mariadb; then
 	wait_ready mariadb in_container mariadb mariadb -uroot -p$PW -h127.0.0.1 -e 'SELECT 1'
 	export_env MARIADB "$(port mariadb 3306)" root $PW gotable
+fi
+# Their ports open before they answer queries: wait for a query.
+if has cratedb; then
+	wait_ready cratedb in_container cratedb sh -c 'curl -sf -H "Content-Type: application/json" -d "{\"stmt\":\"SELECT 1\"}" localhost:4200/_sql'
+	export_env CRATEDB "$(port cratedb 5432)" crate "" doc
+fi
+if has questdb; then
+	wait_ready questdb in_container questdb sh -c 'curl -sf "localhost:9000/exec?query=SELECT%201" >/dev/null'
+	export_env QUESTDB "$(port questdb 8812)" admin quest qdb
+fi
+if has starrocks; then
+	wait_ready starrocks in_container starrocks mysql -uroot -h127.0.0.1 -P9030 -e 'SELECT 1'
+	in_container starrocks mysql -uroot -h127.0.0.1 -P9030 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
+	export_env STARROCKS "$(port starrocks 9030)" root "" gotable
+fi
+if has doris; then # ready when its backend is
+	wait_ready doris sh -c "'$DOCKER' exec gotable-doris mysql -uroot -h127.0.0.1 -P9030 -N -e 'SHOW BACKENDS' | grep -q true"
+	in_container doris mysql -uroot -h127.0.0.1 -P9030 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
+	export_env DORIS "$(port doris 9030)" root "" gotable
 fi
 if has crdb; then
 	wait_ready crdb in_container crdb cockroach sql --insecure -e 'SELECT 1'
@@ -201,6 +240,19 @@ if has valkey; then
 	wait_ready valkey in_container valkey valkey-cli -a "$PW" --no-auth-warning ping
 	export_env VALKEY "$(port valkey 6379)" "" "$PW" 0
 fi
+if has ferretdb; then
+	# The port opens before PostgreSQL behind it is ready.
+	wait_ready ferretdb in_container ferretdb pg_isready -h 127.0.0.1 -U gotable
+	wait_ready ferretdb tcp_open "$(port ferretdb 27017)"
+	export_env FERRETDB "$(port ferretdb 27017)" gotable $PW gotable
+fi
+# Dragonfly and Garnet have no redis-cli inside: wait for the port.
+for e in dragonfly keydb garnet; do
+	has $e || continue
+	E=$(echo $e | tr a-z A-Z)
+	wait_ready $e tcp_open "$(port $e 6379)"
+	export_env $E "$(port $e 6379)" "" "$PW" 0
+done
 if has ts; then
 	wait_ready ts in_container ts pg_isready -U postgres -h 127.0.0.1
 	sleep 3 # the image restarts PostgreSQL once after loading TimescaleDB

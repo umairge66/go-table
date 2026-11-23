@@ -43,7 +43,15 @@ func postgresDSN(cfg *model.Connection, addr, password string) string {
 		// The Structure tab changes column types; CockroachDB gates that.
 		q.Set("enable_experimental_alter_column_type_general", "true")
 	}
-	q.Set("default_query_exec_mode", "simple_protocol")
+	mode := "simple_protocol"
+	if cfg.Driver == model.DriverQuestDB {
+		// pgx's simple protocol needs the server to report
+		// standard_conforming_strings, which QuestDB doesn't. Values are
+		// written into the SQL as literals, so the extended protocol (one
+		// statement at a time, as GoTable sends them) changes nothing else.
+		mode = "exec"
+	}
+	q.Set("default_query_exec_mode", mode)
 	q.Set("application_name", "GoTable")
 	q.Set("connect_timeout", "15")
 	u.RawQuery = q.Encode()

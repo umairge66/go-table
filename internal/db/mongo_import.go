@@ -174,7 +174,7 @@ func (c *Conn) ExportJSON(ctx context.Context, w io.Writer, t TableRef, p Page, 
 	if c.mongo == nil {
 		return errors.New("documents export from MongoDB")
 	}
-	filter, err := mongoFilter(p, columns)
+	filter, err := c.mongoQuery(p, columns)
 	if err != nil {
 		return err
 	}

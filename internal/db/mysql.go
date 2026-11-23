@@ -125,6 +125,14 @@ func (mysqlEngine) serverVersion(ctx context.Context, c *Conn) (string, error) {
 		return "", err
 	}
 	var s2 string
+	// StarRocks and Doris answer as MySQL 5.7/8.0; their own version is apart.
+	if c.Config.Driver == model.DriverStarRocks && c.conn.QueryRowContext(ctx, "SELECT current_version()").Scan(&s2) == nil {
+		return "StarRocks " + strings.Fields(s2 + " ")[0], nil // 3.4.2 6a3a8b0
+	}
+	if c.Config.Driver == model.DriverDoris && c.conn.QueryRowContext(ctx, "SELECT @@version_comment").Scan(&s2) == nil {
+		_, v, _ := strings.Cut(s2, "doris-") // Doris version doris-2.1.0-rc11-…
+		return "Apache Doris " + strings.Split(v, "-rc")[0], nil
+	}
 	if c.conn.QueryRowContext(ctx, "SELECT @@memsql_version").Scan(&s2) == nil {
 		return "SingleStore " + s2, nil
 	}
@@ -218,7 +226,47 @@ func (mysqlEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Column, 
 	if len(out) == 0 {
 		return nil, fmt.Errorf("table %s not found", c.Dialect.QualifiedName(t))
 	}
+	if c.Config.Driver == model.DriverDoris {
+		rows.Close()
+		dorisKeys(ctx, c, t, out)
+	}
 	return out, nil
+}
+
+// dorisKeys marks a Doris table's key columns, which information_schema
+// leaves out: DESC says Key = true for them. They are a unique key on the
+// tables the grid can edit (UNIQUE KEY, merge-on-write).
+func dorisKeys(ctx context.Context, c *Conn, t TableRef, cols []Column) {
+	rows, err := c.conn.QueryContext(ctx, "DESC "+c.Dialect.QualifiedName(t))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	names, _ := rows.Columns()
+	key := map[string]bool{}
+	for rows.Next() {
+		vals := make([]sql.NullString, len(names))
+		ptrs := make([]any, len(names))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if rows.Scan(ptrs...) != nil {
+			return
+		}
+		var field, isKey string
+		for i, n := range names {
+			switch strings.ToLower(n) {
+			case "field":
+				field = vals[i].String
+			case "key":
+				isKey = vals[i].String
+			}
+		}
+		key[field] = strings.EqualFold(isKey, "true")
+	}
+	for i := range cols {
+		cols[i].PrimaryKey = key[cols[i].Name]
+	}
 }
 
 var (
@@ -298,7 +346,10 @@ func enumValues(colType string) []string {
 	return out
 }
 
-func (mysqlEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, error) {
+func (e mysqlEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index, error) {
+	if c.Config.Driver == model.DriverDoris {
+		return e.dorisIndexes(ctx, c, t)
+	}
 	rows, err := c.conn.QueryContext(ctx, `SELECT INDEX_NAME, MAX(NON_UNIQUE) = 0,
 			GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','), LOWER(MAX(INDEX_TYPE))
 		FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
@@ -389,4 +440,52 @@ func (mysqlEngine) tableInfo(ctx context.Context, c *Conn, t TableRef) (TableInf
 		ti.Checks = append(ti.Checks, ck)
 	}
 	return ti, rows.Err()
+}
+
+// dorisIndexes: the table's key, then its own indexes (inverted, bloom
+// filter…) as SHOW INDEX lists them.
+func (e mysqlEngine) dorisIndexes(ctx context.Context, c *Conn, t TableRef) ([]Index, error) {
+	cols, err := e.columns(ctx, c, t)
+	if err != nil {
+		return nil, err
+	}
+	out := []Index{}
+	var key []string
+	for _, col := range cols {
+		if col.PrimaryKey {
+			key = append(key, col.Name)
+		}
+	}
+	if len(key) > 0 {
+		out = append(out, Index{Name: "key", Columns: key, Unique: true, Primary: true, Constraint: true})
+	}
+	rows, err := c.conn.QueryContext(ctx, "SHOW INDEX FROM "+c.Dialect.QualifiedName(t))
+	if err != nil {
+		return out, nil // older servers
+	}
+	defer rows.Close()
+	names, _ := rows.Columns()
+	for rows.Next() {
+		vals := make([]sql.NullString, len(names))
+		ptrs := make([]any, len(names))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return out, err
+		}
+		ix := Index{}
+		for i, n := range names {
+			switch strings.ToLower(n) {
+			case "key_name":
+				ix.Name = vals[i].String
+			case "column_name":
+				ix.Columns = strings.Split(vals[i].String, ",")
+			case "index_type":
+				ix.Type = strings.ToLower(vals[i].String)
+			}
+		}
+		out = append(out, ix)
+	}
+	return out, rows.Err()
 }

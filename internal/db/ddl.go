@@ -231,7 +231,7 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 // runDDLLocked is runDDL for callers that hold c.mu.
 func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
 	if c.Config.Driver == model.DriverCockroachDB || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverDuckDB ||
-		c.Dialect.family == model.DriverOracle { // Oracle commits each DDL statement anyway
+		c.Dialect.family == model.DriverOracle || noTransactions(c.Config.Driver) { // Oracle commits each DDL statement anyway
 		// CockroachDB refuses some schema changes (ALTER COLUMN TYPE) inside
 		// a transaction, DuckDB still sees an index dropped earlier in the
 		// same transaction, and ClickHouse has none. So each statement

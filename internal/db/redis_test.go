@@ -73,20 +73,21 @@ func TestRedisPatterns(t *testing.T) {
 // TestRedis covers GoTable on a real Redis-protocol server (Redis, Valkey).
 func TestRedis(t *testing.T) {
 	ran := false
-	for _, name := range []string{"REDIS", "VALKEY"} {
+	for name, d := range map[string]model.Driver{"REDIS": model.DriverRedis, "VALKEY": model.DriverValkey,
+		"DRAGONFLY": model.DriverDragonfly, "KEYDB": model.DriverKeyDB, "GARNET": model.DriverGarnet} {
 		if os.Getenv("GOTABLE_TEST_"+name+"_HOST") == "" {
 			continue
 		}
 		ran = true
-		t.Run(strings.ToLower(name), func(t *testing.T) { testRedisServer(t, name) })
+		t.Run(strings.ToLower(name), func(t *testing.T) { testRedisServer(t, name, d) })
 	}
 	if !ran {
 		t.Skip("GOTABLE_TEST_REDIS_HOST not set")
 	}
 }
 
-func testRedisServer(t *testing.T, name string) {
-	cfg, pw := serverConfig(t, name, model.DriverRedis)
+func testRedisServer(t *testing.T, name string, d model.Driver) {
+	cfg, pw := serverConfig(t, name, d)
 	cfg.DBName = "1"
 	c := openTest(t, cfg, pw)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -123,11 +124,18 @@ func testRedisServer(t *testing.T, name string) {
 			t.Fatal(err)
 		}
 	}
-	if v, err := c.ServerVersion(ctx); err != nil || !(strings.HasPrefix(v, "Redis ") || strings.HasPrefix(v, "Valkey ")) {
+	if v, err := c.ServerVersion(ctx); err != nil || !strings.HasPrefix(v, strings.Fields(d.Label())[0]+" ") {
 		t.Fatal(v, err)
 	}
 	if s, _ := c.Schemas(ctx); len(s) != 16 || s[0] != "db0" || c.Schema() != "db1" {
 		t.Fatal(s, c.Schema())
+	}
+
+	// Garnet has no streams: there, events is a string.
+	streams := d != model.DriverGarnet
+	seedEvents := "XADD events 1-1 type login who alice"
+	if !streams {
+		seedEvents = "SET events none"
 	}
 
 	t.Run("query editor", func(t *testing.T) {
@@ -137,7 +145,7 @@ HSET user:1:profile name Alice age 41
 RPUSH queue a b c
 SADD tags x y
 ZADD scores 10 alice 20 bob
-XADD events 1-1 type login who alice
+` + seedEvents + `
 SET "odd*key" v
 SET counter 5
 EXPIRE counter 300
@@ -251,14 +259,18 @@ GET missing`)
 			t.Fatal(rs, err)
 		}
 		// Each type's contents.
-		for k, want := range map[string]string{
+		contents := map[string]string{
 			"user:1:profile": "field,value:age=41,name=Alice",
 			"queue":          "index,value:0=a,1=b,2=c",
 			"tags":           "member:x,y",
 			"scores":         "member,score:alice=10,bob=20",
 			"events":         "id,type,who:1-1=login=alice",
 			"user:1":         "key,value:user:1=Alice",
-		} {
+		}
+		if !streams {
+			delete(contents, "events")
+		}
+		for k, want := range contents {
 			rs, err := c.FetchRows(ctx, key(k), Page{}, nil)
 			if err != nil {
 				t.Fatal(k, err)
@@ -365,8 +377,9 @@ GET missing`)
 		s := key("tags")
 		apply(t, s, Change{Kind: ChangeUpdate, Key: k("member", "x"), Values: map[string]Value{"member": Text("xx")}},
 			Change{Kind: ChangeInsert, Values: map[string]Value{"member": Text("z")}}, Change{Kind: ChangeDelete, Key: k("member", "y")})
-		if all("SORT tags ALPHA") != "xx,z" {
-			t.Fatal(all("SORT tags ALPHA"))
+		members := strings.Split(all("SMEMBERS tags"), ",")
+		if slices.Sort(members); strings.Join(members, ",") != "xx,z" {
+			t.Fatal(members)
 		}
 		refuse(t, "already in the set", s, Change{Kind: ChangeInsert, Values: map[string]Value{"member": Text("z")}})
 
@@ -379,13 +392,15 @@ GET missing`)
 		}
 		refuse(t, "a score is a number", z, Change{Kind: ChangeInsert, Values: map[string]Value{"member": Text("dan"), "score": Text("lots")}})
 
-		e := key("events")
-		apply(t, e, Change{Kind: ChangeInsert, Values: map[string]Value{"id": Text("2-1"), "type": Text("logout"), "who": Text("alice")}})
-		if got("XLEN events") != "2" {
-			t.Fatal()
+		if streams {
+			e := key("events")
+			apply(t, e, Change{Kind: ChangeInsert, Values: map[string]Value{"id": Text("2-1"), "type": Text("logout"), "who": Text("alice")}})
+			if got("XLEN events") != "2" {
+				t.Fatal()
+			}
+			refuse(t, "can't be changed", e, Change{Kind: ChangeUpdate, Key: k("id", "1-1"), Values: map[string]Value{"type": Text("x")}})
+			apply(t, e, Change{Kind: ChangeDelete, Key: k("id", "1-1")})
 		}
-		refuse(t, "can't be changed", e, Change{Kind: ChangeUpdate, Key: k("id", "1-1"), Values: map[string]Value{"type": Text("x")}})
-		apply(t, e, Change{Kind: ChangeDelete, Key: k("id", "1-1")})
 
 		must("SET greeting hello\nEXPIRE greeting 500")
 		apply(t, key("greeting"), Change{Kind: ChangeUpdate, Key: k("key", "greeting"), Values: map[string]Value{"value": Text("hi")}})

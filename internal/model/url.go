@@ -41,7 +41,7 @@ func ParseURL(raw string) (*Connection, string, error) {
 	if l := strings.ToLower(raw); strings.HasPrefix(l, "mongodb://") || strings.HasPrefix(l, "mongodb+srv://") {
 		return parseMongoURL(raw)
 	}
-	for _, s := range []string{"redis://", "rediss://", "valkey://", "valkeys://"} {
+	for _, s := range []string{"redis://", "rediss://", "valkey://", "valkeys://", "dragonfly://", "keydb://", "garnet://"} {
 		if strings.HasPrefix(strings.ToLower(raw), s) {
 			return parseRedisURL(raw)
 		}
@@ -76,6 +76,14 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverSingleStore
 	case "planetscale":
 		d = DriverPlanetScale
+	case "starrocks":
+		d = DriverStarRocks
+	case "doris":
+		d = DriverDoris
+	case "cratedb", "crate":
+		d = DriverCrateDB
+	case "questdb":
+		d = DriverQuestDB
 	case "sqlserver", "mssql":
 		d = DriverMSSQL
 	case "clickhouse", "ch":
@@ -205,6 +213,11 @@ func parseMongoURL(raw string) (*Connection, string, error) {
 		c.Port = 0
 		c.SSLMode = "require" // an SRV connection defaults to TLS
 	}
+	// Amazon DocumentDB: a cluster's host, or a seed list of its instances.
+	if h := strings.ToLower(c.Host); strings.Contains(h, ".docdb.amazonaws.com") || strings.Contains(h, ".docdb-elastic.amazonaws.com") {
+		c.Driver = DriverDocumentDB
+		c.SSLMode = "require"
+	}
 	path, query, _ := strings.Cut(path, "?")
 	db, err := url.PathUnescape(strings.TrimPrefix(path, "/"))
 	if err != nil {
@@ -253,6 +266,7 @@ var hostedSuffixes = []struct {
 	{".psdb.cloud", DriverMySQL, DriverPlanetScale},
 	{".tidbcloud.com", DriverMySQL, DriverTiDB},
 	{".singlestore.com", DriverMySQL, DriverSingleStore},
+	{".cratedb.net", DriverPostgres, DriverCrateDB},
 }
 
 // byHost picks the service a plain postgres:// or mysql:// URL points at.
@@ -278,8 +292,15 @@ func parseRedisURL(raw string) (*Connection, string, error) {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	d := DriverRedis
-	if strings.HasPrefix(scheme, "valkey") {
+	switch {
+	case strings.HasPrefix(scheme, "valkey"):
 		d = DriverValkey
+	case scheme == "dragonfly":
+		d = DriverDragonfly
+	case scheme == "keydb":
+		d = DriverKeyDB
+	case scheme == "garnet":
+		d = DriverGarnet
 	}
 	c := NewConnection(d)
 	if u.Hostname() == "" {

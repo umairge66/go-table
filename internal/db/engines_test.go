@@ -205,3 +205,52 @@ func TestSingleStore(t *testing.T) {
 	cfg, pw := serverConfig(t, "SINGLESTORE", model.DriverSingleStore)
 	runSuite(t, openTest(t, cfg, pw))
 }
+
+// Servers with their own SQL behind the PostgreSQL or MySQL protocol.
+
+func TestCrateDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "CRATEDB", model.DriverCrateDB)
+	runCompatSuite(t, openTest(t, cfg, pw), compatCaps{
+		version: "CrateDB ",
+		setup: []string{"DROP VIEW IF EXISTS gt_cv", "DROP TABLE IF EXISTS gt_c", "DROP TABLE IF EXISTS gt_copy",
+			"CREATE TABLE gt_c (id INT PRIMARY KEY, name TEXT NOT NULL, city TEXT, score INT DEFAULT 0)",
+			"INSERT INTO gt_c (id, name, city, score) VALUES " + compatRows},
+		after: "REFRESH TABLE gt_c",
+		views: true, edits: true, pk: true, addCol: true, csv: true, dump: true,
+	})
+}
+
+func TestQuestDB(t *testing.T) {
+	cfg, pw := serverConfig(t, "QUESTDB", model.DriverQuestDB)
+	runCompatSuite(t, openTest(t, cfg, pw), compatCaps{
+		version: "QuestDB ",
+		setup: []string{"DROP VIEW IF EXISTS gt_cv", "DROP TABLE IF EXISTS gt_c", "DROP TABLE IF EXISTS gt_copy",
+			"CREATE TABLE gt_c (id INT, name VARCHAR, city VARCHAR, score INT)",
+			"INSERT INTO gt_c (id, name, city, score) VALUES " + compatRows},
+		views: true, edits: true, noDelete: true, addCol: true, textType: "VARCHAR", csv: true, dump: true, nullNotEqual: true,
+	})
+}
+
+func TestStarRocks(t *testing.T) {
+	cfg, pw := serverConfig(t, "STARROCKS", model.DriverStarRocks)
+	runCompatSuite(t, openTest(t, cfg, pw), compatCaps{
+		version: "StarRocks ",
+		setup: []string{"DROP VIEW IF EXISTS gt_cv", "DROP TABLE IF EXISTS gt_c", "DROP TABLE IF EXISTS gt_copy",
+			"CREATE TABLE gt_c (id INT NOT NULL, name VARCHAR(100) NOT NULL, city VARCHAR(100), score INT DEFAULT '0') PRIMARY KEY (id) DISTRIBUTED BY HASH(id) PROPERTIES ('replication_num' = '1')",
+			"INSERT INTO gt_c (id, name, city, score) VALUES " + compatRows},
+		views: true, edits: true, pk: true, addCol: true, csv: true, dump: true,
+	})
+}
+
+func TestDoris(t *testing.T) {
+	cfg, pw := serverConfig(t, "DORIS", model.DriverDoris)
+	runCompatSuite(t, openTest(t, cfg, pw), compatCaps{
+		version: "Apache Doris ",
+		setup: []string{"DROP VIEW IF EXISTS gt_cv", "DROP TABLE IF EXISTS gt_c", "DROP TABLE IF EXISTS gt_copy",
+			`CREATE TABLE gt_c (id INT NOT NULL, name VARCHAR(100) NOT NULL, city VARCHAR(100), score INT DEFAULT "0")
+			UNIQUE KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 1
+			PROPERTIES ("replication_num" = "1", "enable_unique_key_merge_on_write" = "true")`,
+			"INSERT INTO gt_c (id, name, city, score) VALUES " + compatRows},
+		views: true, edits: true, pk: true, addCol: true, csv: true, dump: true,
+	})
+}

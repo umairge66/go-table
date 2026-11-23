@@ -1,6 +1,7 @@
 export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis'
   | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
-  | 'tidb' | 'percona' | 'singlestore' | 'planetscale' | 'valkey'
+  | 'tidb' | 'percona' | 'singlestore' | 'planetscale' | 'starrocks' | 'doris' | 'cratedb' | 'questdb'
+  | 'ferretdb' | 'documentdb' | 'valkey' | 'dragonfly' | 'keydb' | 'garnet'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
 export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis'
 
@@ -10,6 +11,8 @@ export const family = (d: Driver): Family => driverInfo(d).family
 export const isMongo = (d: Driver) => family(d) === 'mongodb'
 /** isRedis: a key-value store: keys (by pattern) instead of tables, commands instead of SQL. */
 export const isRedis = (d: Driver) => family(d) === 'redis'
+/** mongoExtras: MongoDB features FerretDB doesn't have (hidden indexes, validation rules). */
+export const mongoExtras = (d: Driver) => isMongo(d) && d !== 'ferretdb'
 /** usesCommands: the query editor takes the server's own commands, not SQL. */
 export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d)
 
@@ -74,6 +77,18 @@ const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions
   // A distributed database: no foreign keys or CHECKs; the primary key is
   // the shard key, and table options are fixed at creation.
   singlestore: { foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, tableOptions: false },
+  // Every column is indexed by CrateDB itself; no foreign keys or transactions.
+  cratedb: { transactions: false, importTransaction: false, foreignKeys: false, renameIndex: false, uniqueIndexes: false, primaryKey: false,
+    autoIncrement: false, comments: false, collations: false, cascade: false, createDatabase: false, onUpdate: false, indexMethods: [] },
+  // One schema; no primary keys, constraints, defaults or DELETE.
+  questdb: { transactions: false, importTransaction: false, foreignKeys: false, checks: false, renameIndex: false, uniqueIndexes: false,
+    primaryKey: false, autoIncrement: false, comments: false, collations: false, cascade: false, schemas: false, createDatabase: false,
+    onUpdate: false, indexMethods: [] },
+  // Analytical: the table's key model and distribution are fixed when it is made.
+  starrocks: { transactions: false, importTransaction: false, foreignKeys: false, checks: false, renameIndex: false, uniqueIndexes: false,
+    primaryKey: false, autoIncrement: false, collations: false, onUpdate: false, tableOptions: false },
+  doris: { transactions: false, importTransaction: false, foreignKeys: false, checks: false, renameIndex: false, uniqueIndexes: false,
+    primaryKey: false, autoIncrement: false, collations: false, onUpdate: false, tableOptions: false },
 }
 export const features = (d: Driver): Features => ({ ...FEATURES[family(d)], ...DRIVER_FEATURES[d] })
 /** tableOptions: storage engine, collation and AUTO_INCREMENT can change (MySQL family). */
@@ -234,7 +249,9 @@ export interface QueryPlan {
  * without a logo (see lib/driverLogos); user is the usual administrator
  * account (the User field's placeholder); hosted services require TLS.
  */
-export const DRIVERS: { id: Driver; label: string; family: Family; port: number; color: string; user: string; hosted?: boolean; host?: string; database?: string }[] = [
+export const DRIVERS: { id: Driver; label: string; family: Family; port: number; color: string; user: string; hosted?: boolean; host?: string; database?: string
+  /** note: shown in the connection form when the server is chosen. */
+  note?: string }[] = [
   { id: 'postgres', label: 'PostgreSQL', family: 'postgres', port: 5432, color: '#336791', user: 'postgres' },
   { id: 'mysql', label: 'MySQL', family: 'mysql', port: 3306, color: '#00758f', user: 'root' },
   { id: 'mariadb', label: 'MariaDB', family: 'mysql', port: 3306, color: '#b4644a', user: 'root' },
@@ -254,7 +271,17 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'percona', label: 'Percona Server', family: 'mysql', port: 3306, color: '#b5341a', user: 'root' },
   { id: 'singlestore', label: 'SingleStore', family: 'mysql', port: 3306, color: '#7a1fa2', user: 'root' },
   { id: 'planetscale', label: 'PlanetScale', family: 'mysql', port: 3306, color: '#1f2328', user: '', hosted: true, host: 'aws.connect.psdb.cloud' },
+  { id: 'starrocks', label: 'StarRocks', family: 'mysql', port: 9030, color: '#b8432b', user: 'root' },
+  { id: 'doris', label: 'Apache Doris', family: 'mysql', port: 9030, color: '#3a6fd8', user: 'root' },
+  { id: 'cratedb', label: 'CrateDB', family: 'postgres', port: 5432, color: '#0f9b8e', user: 'crate', database: 'schema, e.g. doc' },
+  { id: 'questdb', label: 'QuestDB', family: 'postgres', port: 8812, color: '#a2285a', user: 'admin', database: 'qdb' },
+  { id: 'ferretdb', label: 'FerretDB', family: 'mongodb', port: 27017, color: '#3c7a2e', user: 'optional' },
+  { id: 'documentdb', label: 'Amazon DocumentDB (untested)', family: 'mongodb', port: 27017, color: '#2e5c8a', user: 'optional', hosted: true, host: '<cluster>.docdb.amazonaws.com',
+    note: "Untested: DocumentDB runs only on AWS, so GoTable hasn't been tried against it. It connects as MongoDB, over TLS (give the cluster's CA file, global-bundle.pem), with retryable writes off. A cluster is reached from inside its VPC: use an SSH tunnel through an EC2 machine. Please report what doesn't work." },
   { id: 'valkey', label: 'Valkey', family: 'redis', port: 6379, color: '#4f46b8', user: 'optional', database: 'number, e.g. 0' },
+  { id: 'dragonfly', label: 'Dragonfly', family: 'redis', port: 6379, color: '#7c3aed', user: 'optional', database: 'number, e.g. 0' },
+  { id: 'keydb', label: 'KeyDB', family: 'redis', port: 6379, color: '#c2410c', user: 'optional', database: 'number, e.g. 0' },
+  { id: 'garnet', label: 'Garnet', family: 'redis', port: 6379, color: '#9f1239', user: 'optional', database: 'number, e.g. 0' },
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
@@ -288,6 +315,7 @@ export const SSL_MODES: PerDriver<string[]> = {
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],
+  documentdb: ['require', 'skip-verify'],
 }
 
 export const FILTER_OPS: FilterOp[] = ['=', '<>', '<', '>', '<=', '>=', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL', 'BETWEEN',

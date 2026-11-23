@@ -505,7 +505,9 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	case model.DriverPostgres:
 		sw.printf("SET client_encoding = 'UTF8';\nSET standard_conforming_strings = on;\n\n")
 	case model.DriverMySQL:
-		sw.printf("SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n\n")
+		if !ownDDL(c.Config.Driver) { // StarRocks and Doris have no foreign keys to check
+			sw.printf("SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n\n")
+		}
 	case model.DriverSQLite:
 		sw.printf("PRAGMA foreign_keys = OFF;\nBEGIN TRANSACTION;\n\n")
 	case model.DriverMSSQL:
@@ -628,7 +630,9 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	}
 	switch c.Config.Driver.Family() {
 	case model.DriverMySQL:
-		sw.printf("SET FOREIGN_KEY_CHECKS = 1;\n")
+		if !ownDDL(c.Config.Driver) {
+			sw.printf("SET FOREIGN_KEY_CHECKS = 1;\n")
+		}
 	case model.DriverSQLite:
 		sw.printf("COMMIT;\nPRAGMA foreign_keys = ON;\n")
 	}
@@ -646,6 +650,9 @@ type pgSequence struct {
 }
 
 func (c *Conn) pgSequences(ctx context.Context, schema string) ([]pgSequence, error) {
+	if c.Config.Driver == model.DriverCrateDB || c.Config.Driver == model.DriverQuestDB { // none
+		return nil, nil
+	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err
 	}
@@ -684,6 +691,10 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 	defer c.mu.Unlock()
 	d := c.Dialect
 	name := d.QuoteIdent(o.Name)
+	if ownDDL(c.Config.Driver) { // the server writes its DDL better than the catalog would
+		def, err := c.eng.definition(ctx, c, o)
+		return strings.TrimSuffix(unqualify(d, o.Schema, def), ";"), nil, err
+	}
 	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		rows, err := c.conn.QueryContext(ctx, `SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
@@ -780,8 +791,18 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 	}
 }
 
+// ownDDL: servers whose catalog the PostgreSQL or MySQL dump can't read;
+// their own SHOW CREATE … is used instead.
+func ownDDL(d model.Driver) bool {
+	return d == model.DriverCrateDB || d == model.DriverQuestDB || d == model.DriverStarRocks || d == model.DriverDoris
+}
+
 // dumpView returns a CREATE VIEW statement without a schema.
 func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
+	if ownDDL(c.Config.Driver) {
+		def, err := c.Definition(ctx, o)
+		return strings.TrimSuffix(unqualify(c.Dialect, o.Schema, def), ";"), err
+	}
 	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
 		if err := c.lock(ctx); err != nil {

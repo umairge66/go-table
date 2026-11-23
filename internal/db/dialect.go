@@ -36,7 +36,7 @@ func (d Dialect) QuoteIdent(name string) string {
 
 // QualifiedName returns schema.table quoted. An empty schema is omitted.
 func (d Dialect) QualifiedName(t TableRef) string {
-	if t.Schema == "" || d.family == model.DriverSQLite && t.Schema == "main" {
+	if t.Schema == "" || d.family == model.DriverSQLite && t.Schema == "main" || d.kind == model.DriverQuestDB { // QuestDB: one schema, never named
 		return d.QuoteIdent(t.Name)
 	}
 	return d.QuoteIdent(t.Schema) + "." + d.QuoteIdent(t.Name)
@@ -144,6 +144,12 @@ func (d Dialect) escapeLike(s string) string {
 
 // LimitOffset renders a LIMIT/OFFSET clause.
 func (d Dialect) LimitOffset(limit, offset int) string {
+	if d.kind == model.DriverQuestDB && offset > 0 { // LIMIT lo, hi: rows lo+1 to hi
+		if limit <= 0 {
+			return " LIMIT " + strconv.Itoa(offset) + ", 9223372036854775807"
+		}
+		return " LIMIT " + strconv.Itoa(offset) + ", " + strconv.Itoa(offset+limit)
+	}
 	if d.family == model.DriverMSSQL || d.family == model.DriverOracle { // SQL Server also needs an ORDER BY (BuildSelect)
 		if limit <= 0 && offset <= 0 {
 			return ""

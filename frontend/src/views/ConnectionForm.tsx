@@ -201,6 +201,9 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
       </section>
 
       <section className="mt-3 space-y-3 rounded-xl border border-line bg-panel p-4">
+        {driverInfo(c.driver).note && (
+          <div className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-fg-2" role="note">{driverInfo(c.driver).note}</div>
+        )}
         {file ? (
           <Field label="Database file" hint="Absolute path. A new file is created if it doesn't exist.">
             <Input mono value={c.path ?? ''} placeholder={examplePath(family(c.driver) === 'duckdb' ? 'data/warehouse.duckdb' : 'data/app.sqlite')} onChange={(e) => set('path', e.target.value)} />

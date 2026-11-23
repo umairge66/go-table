@@ -323,6 +323,47 @@ jobs:
           MONGODB_IMAGE: mongo:${{ matrix.version }}
         run: scripts/test-mongo-srv.sh
 
+  compatible:
+    name: Compatible servers (${{ matrix.group }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # Servers that speak another engine's protocol with their own quirks,
+    # each in Docker through the same script as locally. StarRocks and Doris
+    # are big images, so they get a job each.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: Redis and MongoDB protocols
+            engines: dragonfly keydb garnet ferretdb
+            run: TestRedis$|TestMongoDB$
+          - group: CrateDB and QuestDB
+            engines: cratedb questdb
+            run: TestCrateDB$|TestQuestDB$
+          - group: StarRocks
+            engines: starrocks
+            run: TestStarRocks$
+          - group: Apache Doris
+            engines: doris
+            run: TestDoris$
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-compatible-${{ hashFiles('go.sum') }}
+          restore-keys: go-compatible-
+      - name: Go tests
+        env:
+          ENGINES: ${{ matrix.engines }}
+        run: scripts/test-dbs.sh -run '${{ matrix.run }}' -v ./internal/db/
+
   e2e:
     name: End-to-end tests
     runs-on: ubuntu-24.04

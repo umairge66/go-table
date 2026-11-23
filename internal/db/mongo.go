@@ -124,6 +124,10 @@ func openMongo(ctx context.Context, cfg *model.Connection, addr, password string
 	if t != nil {
 		opts.SetTLSConfig(t)
 	}
+	// DocumentDB refuses retryable writes, which the driver turns on.
+	if cfg.Driver == model.DriverDocumentDB && !strings.Contains(strings.ToLower(cfg.Options), "retrywrites") {
+		opts.SetRetryWrites(false)
+	}
 	client, err := mongo.Connect(opts)
 	if err != nil {
 		return fail(err)
@@ -199,9 +203,18 @@ func mongoDatabases(ctx context.Context, c *Conn) ([]string, error) {
 
 func (mongoEngine) serverVersion(ctx context.Context, c *Conn) (string, error) {
 	var info struct {
-		Version string `bson:"version"`
+		Version  string `bson:"version"`
+		FerretDB struct {
+			Version string `bson:"version"`
+		} `bson:"ferretdb"`
 	}
 	err := c.mongo.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&info)
+	if v := info.FerretDB.Version; v != "" { // it answers as the MongoDB it emulates
+		return "FerretDB " + strings.TrimPrefix(v, "v"), err
+	}
+	if c.Config.Driver == model.DriverDocumentDB { // reports the MongoDB API it implements
+		return "Amazon DocumentDB · MongoDB " + info.Version, err
+	}
 	return "MongoDB " + info.Version, err
 }
 
@@ -599,8 +612,17 @@ func (c *Conn) mongoQuickFields(ctx context.Context, t TableRef) ([]string, erro
 
 // ---------------------------------------------------------------- browsing
 
+// mongoQuery is mongoFilter, adapted to the server.
+func (c *Conn) mongoQuery(p Page, columns []string) (bson.D, error) {
+	f, err := mongoFilter(p, columns)
+	if err == nil && c.Config.Driver == model.DriverFerretDB {
+		f = mongoPlainRegex(f).(bson.D)
+	}
+	return f, err
+}
+
 func (c *Conn) mongoFetchRows(ctx context.Context, t TableRef, p Page, columns []string) (*ResultSet, error) {
-	filter, err := mongoFilter(p, columns)
+	filter, err := c.mongoQuery(p, columns)
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +673,7 @@ func drainMongo(ctx context.Context, cur *mongo.Cursor, limit int) ([]bson.D, bo
 }
 
 func (c *Conn) mongoCountRows(ctx context.Context, t TableRef, p Page, columns []string) (int64, error) {
-	filter, err := mongoFilter(p, columns)
+	filter, err := c.mongoQuery(p, columns)
 	if err != nil {
 		return 0, err
 	}
@@ -672,7 +694,7 @@ func (c *Conn) mongoCountRows(ctx context.Context, t TableRef, p Page, columns [
 // mongoStreamRows streams a page. Rows of a table are flat, so a first pass
 // finds every field: an export mustn't lose a field the sample didn't see.
 func (c *Conn) mongoStreamRows(ctx context.Context, t TableRef, p Page, columns []string, fn func(cols, types []string, row []Value) error) error {
-	filter, err := mongoFilter(p, columns)
+	filter, err := c.mongoQuery(p, columns)
 	if err != nil {
 		return err
 	}
