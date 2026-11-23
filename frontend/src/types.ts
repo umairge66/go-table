@@ -1,9 +1,9 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb'
   | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
   | 'tidb' | 'percona' | 'singlestore' | 'planetscale' | 'starrocks' | 'doris' | 'cratedb' | 'questdb'
   | 'ferretdb' | 'documentdb' | 'valkey' | 'dragonfly' | 'keydb' | 'garnet' | 'scylladb'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb'
 
 /** family maps compatible servers and services to the engine they follow. */
 export const family = (d: Driver): Family => driverInfo(d).family
@@ -15,6 +15,8 @@ export const isRedis = (d: Driver) => family(d) === 'redis'
 export const mongoExtras = (d: Driver) => isMongo(d) && d !== 'ferretdb'
 /** isCassandra: CQL, keyspaces, and a primary key fixed when the table is made. */
 export const isCassandra = (d: Driver) => family(d) === 'cassandra'
+/** isDynamo: an AWS web service: PartiQL, items without fixed attributes, a region and AWS keys. */
+export const isDynamo = (d: Driver) => family(d) === 'dynamodb'
 /** usesCommands: the query editor takes the server's own commands, not SQL. */
 export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d)
 
@@ -76,6 +78,9 @@ export const FEATURES: Record<Family, Features> = {
   // Keyspaces are the schemas; no transactions, constraints or key changes.
   cassandra: { ...BASE, transactions: false, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false,
     autoIncrement: false, cascade: false, schemas: true, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
+  // Keys are fixed when a table is made; a commit is one transaction.
+  dynamodb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false, autoIncrement: false,
+    comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
 }
 /** DRIVER_FEATURES: where a server differs from its family's engine. */
 const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions?: boolean }>> = {
@@ -268,6 +273,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'mongodb', label: 'MongoDB', family: 'mongodb', port: 27017, color: '#00684a', user: 'optional' },
   { id: 'redis', label: 'Redis', family: 'redis', port: 6379, color: '#d82c20', user: 'optional', database: 'number, e.g. 0' },
   { id: 'cassandra', label: 'Cassandra', family: 'cassandra', port: 9042, color: '#1287b1', user: 'optional', database: 'keyspace, optional' },
+  { id: 'dynamodb', label: 'DynamoDB', family: 'dynamodb', port: 8000, color: '#4053d6', user: 'empty: your AWS profile', host: 'empty: AWS', database: 'us-east-1' },
   { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
   { id: 'yugabytedb', label: 'YugabyteDB', family: 'postgres', port: 5433, color: '#c4471f', user: 'yugabyte' },
   { id: 'timescaledb', label: 'TimescaleDB', family: 'postgres', port: 5432, color: '#a3610b', user: 'postgres' },
@@ -282,7 +288,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'cratedb', label: 'CrateDB', family: 'postgres', port: 5432, color: '#0f9b8e', user: 'crate', database: 'schema, e.g. doc' },
   { id: 'questdb', label: 'QuestDB', family: 'postgres', port: 8812, color: '#a2285a', user: 'admin', database: 'qdb' },
   { id: 'ferretdb', label: 'FerretDB', family: 'mongodb', port: 27017, color: '#3c7a2e', user: 'optional' },
-  { id: 'documentdb', label: 'Amazon DocumentDB (untested)', family: 'mongodb', port: 27017, color: '#2e5c8a', user: 'optional', hosted: true, host: '<cluster>.docdb.amazonaws.com',
+  { id: 'documentdb', label: 'DocumentDB (untested)', family: 'mongodb', port: 27017, color: '#2e5c8a', user: 'optional', hosted: true, host: '<cluster>.docdb.amazonaws.com',
     note: "Untested: DocumentDB runs only on AWS, so GoTable hasn't been tried against it. It connects as MongoDB, over TLS (give the cluster's CA file, global-bundle.pem), with retryable writes off. A cluster is reached from inside its VPC: use an SSH tunnel through an EC2 machine. Please report what doesn't work." },
   { id: 'valkey', label: 'Valkey', family: 'redis', port: 6379, color: '#4f46b8', user: 'optional', database: 'number, e.g. 0' },
   { id: 'dragonfly', label: 'Dragonfly', family: 'redis', port: 6379, color: '#7c3aed', user: 'optional', database: 'number, e.g. 0' },
@@ -292,7 +298,7 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
-export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb', 'redis', 'cassandra']
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb', 'redis', 'cassandra', 'dynamodb']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -320,6 +326,7 @@ export const SSL_MODES: PerDriver<string[]> = {
   mongodb: ['disable', 'require', 'skip-verify'],
   redis: ['disable', 'require', 'skip-verify'],
   cassandra: ['disable', 'require', 'skip-verify'],
+  dynamodb: ['disable', 'require', 'skip-verify'],
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],

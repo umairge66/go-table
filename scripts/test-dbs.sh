@@ -22,6 +22,7 @@
 #   cratedb  CrateDB        questdb   QuestDB        (PostgreSQL protocol)
 #   starrocks StarRocks     doris     Apache Doris   (MySQL protocol)
 #   cassandra Cassandra     scylla    ScyllaDB       (CQL)
+#   dynamodb DynamoDB Local
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
 set -euo pipefail
@@ -53,10 +54,11 @@ STARROCKS_IMAGE=${STARROCKS_IMAGE:-starrocks/allin1-ubuntu:latest}
 DORIS_IMAGE=${DORIS_IMAGE:-apache/doris:doris-all-in-one-2.1.0}
 CASSANDRA_IMAGE=${CASSANDRA_IMAGE:-cassandra:5}
 SCYLLA_IMAGE=${SCYLLA_IMAGE:-scylladb/scylla:latest}
+DYNAMODB_IMAGE=${DYNAMODB_IMAGE:-amazon/dynamodb-local:latest}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey dragonfly keydb garnet ferretdb cratedb questdb starrocks doris cassandra scylla crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey dragonfly keydb garnet ferretdb cratedb questdb starrocks doris cassandra scylla dynamodb crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -93,6 +95,7 @@ has questdb && run questdb -p 127.0.0.1::8812 "$QUESTDB_IMAGE"
 has starrocks && run starrocks -p 127.0.0.1::9030 "$STARROCKS_IMAGE"
 has doris && run doris -p 127.0.0.1::9030 "$DORIS_IMAGE"
 # Small heaps: a test needs little, and CI runners have 16 GB.
+has dynamodb && run dynamodb -p 127.0.0.1::8000 "$DYNAMODB_IMAGE"
 has cassandra && run cassandra -p 127.0.0.1::9042 -e MAX_HEAP_SIZE=512M -e HEAP_NEWSIZE=128M "$CASSANDRA_IMAGE"
 has scylla && run scylla -p 127.0.0.1::9042 "$SCYLLA_IMAGE" --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
 has crdb && run crdb -p 127.0.0.1::26257 "$CRDB_IMAGE" start-single-node --insecure
@@ -191,6 +194,10 @@ if has doris; then # ready when its backend is
 	wait_ready doris sh -c "'$DOCKER' exec gotable-doris mysql -uroot -h127.0.0.1 -P9030 -N -e 'SHOW BACKENDS' | grep -q true"
 	in_container doris mysql -uroot -h127.0.0.1 -P9030 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
 	export_env DORIS "$(port doris 9030)" root "" gotable
+fi
+if has dynamodb; then # any HTTP answer will do: requests must be signed
+	wait_ready dynamodb curl -s -o /dev/null "http://127.0.0.1:$(port dynamodb 8000)"
+	export_env DYNAMODB "$(port dynamodb 8000)" "" "" us-east-1
 fi
 for e in cassandra scylla; do # ready when cqlsh answers
 	has $e || continue

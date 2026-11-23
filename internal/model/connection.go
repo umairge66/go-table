@@ -33,6 +33,9 @@ const (
 	// DriverCassandra: CQL over Cassandra's native protocol. Keyspaces are
 	// the schemas; reads have no OFFSET and few filters (cassandra*.go).
 	DriverCassandra Driver = "cassandra"
+	// DriverDynamoDB is an AWS web service: a region (DBName) and AWS
+	// credentials; Host is only for another endpoint (DynamoDB Local).
+	DriverDynamoDB Driver = "dynamodb"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -84,6 +87,7 @@ var specs = map[Driver]driverSpec{
 	DriverMongoDB:     {"MongoDB", DriverMongoDB, 27017, false},
 	DriverRedis:       {"Redis", DriverRedis, 6379, false},
 	DriverCassandra:   {"Cassandra", DriverCassandra, 9042, false},
+	DriverDynamoDB:    {"DynamoDB", DriverDynamoDB, 8000, false},
 	DriverScyllaDB:    {"ScyllaDB", DriverCassandra, 9042, false},
 	DriverValkey:      {"Valkey", DriverRedis, 6379, false},
 	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
@@ -108,7 +112,7 @@ var specs = map[Driver]driverSpec{
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverStarRocks, DriverDoris,
 	DriverCrateDB, DriverQuestDB, DriverFerretDB, DriverDocumentDB,
@@ -158,7 +162,7 @@ func (d Driver) SSLModes() []string {
 	case DriverMSSQL:
 		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
 		modes = []string{"optional", "disable", "required", "trust", "strict"}
-	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis, DriverCassandra:
+	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB:
 		modes = []string{"disable", "require", "skip-verify"}
 	default:
 		return nil
@@ -246,6 +250,9 @@ func NewID() string {
 
 // NewConnection returns a connection with defaults for the given driver.
 func NewConnection(d Driver) *Connection {
+	if d.Family() == DriverDynamoDB { // no host: AWS's own endpoint for the region
+		return &Connection{ID: NewID(), Driver: d, Port: d.DefaultPort(), SSLMode: firstOr(d.SSLModes(), ""), SSHPort: 22, RowsPerPage: 300}
+	}
 	return &Connection{
 		ID:          NewID(),
 		Driver:      d,
@@ -314,11 +321,19 @@ func (c *Connection) Validate() error {
 		}
 	default:
 		// MongoDB, Redis and Cassandra servers run without users unless told otherwise.
-		if c.User == "" && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra {
+		if c.User == "" && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra && c.Driver.Family() != DriverDynamoDB {
 			return fmt.Errorf("user is required")
 		}
 		if c.Port < 0 || c.Port > 65535 {
 			return fmt.Errorf("port %d out of range", c.Port)
+		}
+		if c.Driver.Family() == DriverDynamoDB {
+			if c.DBName == "" && c.Host == "" {
+				return fmt.Errorf("the AWS region is required, e.g. us-east-1")
+			}
+			if c.Host == "" && c.UseSSHTunnel {
+				return fmt.Errorf("an SSH tunnel needs an endpoint host; AWS itself is reached directly")
+			}
 		}
 		if c.Driver.Family() == DriverRedis && c.DBName != "" {
 			if n, err := strconv.Atoi(c.DBName); err != nil || n < 0 {

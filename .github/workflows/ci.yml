@@ -334,9 +334,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: Redis and MongoDB protocols
-            engines: dragonfly keydb garnet ferretdb
-            run: TestRedis$|TestMongoDB$
+          - group: Redis and MongoDB protocols, DynamoDB
+            engines: dragonfly keydb garnet ferretdb dynamodb
+            run: TestRedis$|TestMongoDB$|TestDynamo
           - group: CrateDB and QuestDB
             engines: cratedb questdb
             run: TestCrateDB$|TestQuestDB$

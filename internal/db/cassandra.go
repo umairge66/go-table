@@ -11,7 +11,7 @@ package db
 //     cassMaxScan rows. A raw CQL WHERE is sent to the server, with ALLOW
 //     FILTERING.
 //   - Edits are CQL with lightweight transactions (IF EXISTS, IF NOT
-//     EXISTS), so a row changed or deleted meanwhile is reported. There are
+//     EXISTS), so a row deleted meanwhile is reported. There are
 //     no transactions: each change commits on its own.
 //   - The session talks to the host it was given, which coordinates the
 //     cluster: other nodes' addresses may not be reachable from here (an SSH
@@ -901,7 +901,7 @@ func (c *Conn) cassApplyChanges(ctx context.Context, t TableRef, changes []Chang
 			if strings.HasPrefix(st, "INSERT") {
 				err = errors.New("a row with that key already exists")
 			} else {
-				err = errors.New("row no longer exists or was changed by someone else")
+				err = errors.New("the row no longer exists")
 			}
 		}
 		if err != nil {

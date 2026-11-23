@@ -208,6 +208,9 @@ func (c *Conn) AddColumn(ctx context.Context, t TableRef, def ColumnDef) ([]stri
 	if c.cass != nil {
 		return c.cassAddColumn(ctx, t, def)
 	}
+	if c.dyn != nil {
+		return nil, errDynNoColumns
+	}
 	if c.mongo != nil {
 		return nil, errMongoNoColumns
 	}
@@ -274,6 +277,9 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 	}
 	if d.family == model.DriverCassandra {
 		return buildCassDrop(d, objs), nil
+	}
+	if d.family == model.DriverDynamoDB {
+		return buildDynDrop(objs), nil
 	}
 	var views, tables []string
 	for _, o := range objs {
@@ -365,6 +371,9 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 	}
 	if c.cass != nil {
 		return c.cassDrop(ctx, objs)
+	}
+	if c.dyn != nil {
+		return c.dynDrop(ctx, objs)
 	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err

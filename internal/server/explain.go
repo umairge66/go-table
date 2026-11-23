@@ -23,6 +23,14 @@ func Explain(err error) Friendly {
 		return false
 	}
 	switch {
+	case has("unrecognizedclientexception", "invalidsignatureexception", "invalidclienttokenid"):
+		return Friendly{"Wrong AWS access key", "AWS rejected the access key or its secret (or they are for another partition)."}
+	case has("expiredtoken"):
+		return Friendly{"The AWS sign-in has expired", "Sign in again, e.g. with aws sso login."}
+	case has("accessdeniedexception") && has("dynamodb"):
+		return Friendly{"Not allowed", "This AWS user's policy doesn't permit that DynamoDB action."}
+	case has("failed to refresh cached credentials", "no ec2 imds role found", "failed to get shared config profile"):
+		return Friendly{"No AWS credentials", "Enter an access key, or set up the AWS CLI (aws configure, aws sso login); profile=name in Options picks a profile."}
 	case has("no hosts available in the pool", "unable to connect to initial hosts", "unable to discover protocol version"):
 		return Friendly{"Can't reach the server", "No Cassandra node answered on that host and port (9042 by default). Is it running, and does it listen on that address (rpc_address)?"}
 	case has("provided username") && has("incorrect"), has("authentication") && has("cassandra"):

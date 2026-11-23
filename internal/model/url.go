@@ -46,6 +46,9 @@ func ParseURL(raw string) (*Connection, string, error) {
 			return parseRedisURL(raw)
 		}
 	}
+	if strings.HasPrefix(strings.ToLower(raw), "dynamodb://") {
+		return parseDynamoURL(raw)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid URL: %w", err)
@@ -337,5 +340,36 @@ func parseRedisURL(raw string) (*Connection, string, error) {
 		c.SSLMode = "require"
 	}
 	c.Name = c.Host
+	return c, password, nil
+}
+
+// parseDynamoURL reads dynamodb://KEY:SECRET@host:8000/region (a local
+// endpoint) and dynamodb:///region (AWS).
+func parseDynamoURL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	c := NewConnection(DriverDynamoDB)
+	c.Host = u.Hostname()
+	if p := u.Port(); p != "" {
+		if c.Port, err = strconv.Atoi(p); err != nil || c.Port <= 0 || c.Port > 65535 {
+			return nil, "", fmt.Errorf("invalid port %q", p)
+		}
+	}
+	c.DBName = strings.Trim(u.Path, "/")
+	if c.DBName == "" && c.Host == "" {
+		return nil, "", fmt.Errorf("the URL has no region: dynamodb:///us-east-1")
+	}
+	c.Options = u.RawQuery
+	password := ""
+	if u.User != nil {
+		c.User = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	c.Name = "DynamoDB " + c.DBName
+	if c.Host != "" {
+		c.Name = "DynamoDB @ " + c.Host
+	}
 	return c, password, nil
 }

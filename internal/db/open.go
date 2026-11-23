@@ -63,6 +63,9 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	if cfg.Driver.Family() == model.DriverCassandra {
 		return openCassandra(ctx, cfg, addr, cred.Password, tunnel)
 	}
+	if cfg.Driver.Family() == model.DriverDynamoDB {
+		return openDynamo(ctx, cfg, addr, cred.Password, tunnel)
+	}
 	var (
 		sqlDB *sql.DB
 		eng   engine
@@ -121,7 +124,7 @@ var openers = map[model.Driver]func(cfg *model.Connection, addr, password string
 // Supported reports whether this build can open connections of driver d.
 func Supported(d model.Driver) bool {
 	switch d.Family() {
-	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra:
+	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra, model.DriverDynamoDB:
 		return true
 	}
 	_, ok := openers[d.Family()]

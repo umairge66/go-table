@@ -19,6 +19,9 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+
 	"gotable/internal/model"
 )
 
@@ -62,6 +65,8 @@ type Conn struct {
 	redis *redisState
 	// cass replaces db and conn on a Cassandra connection (cassandra.go).
 	cass *cassState
+	// dyn replaces db and conn on a DynamoDB connection (dynamodb.go).
+	dyn *dynState
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -111,6 +116,9 @@ func (c *Conn) Close() error {
 	if c.cass != nil {
 		return c.closeCass()
 	}
+	if c.dyn != nil {
+		return c.closeDyn()
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -147,6 +155,13 @@ func (c *Conn) lock(ctx context.Context) error {
 	}
 	if c.cass != nil { // and gocql
 		if c.cass.closed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		return nil
+	}
+	if c.dyn != nil { // DynamoDB is requests, not a connection
+		if c.dyn.closed {
 			c.mu.Unlock()
 			return ErrClosed
 		}
@@ -206,6 +221,10 @@ func (c *Conn) Ping(ctx context.Context) error {
 			return err
 		}
 		return s.Query("SELECT release_version FROM system.local").WithContext(ctx).Exec()
+	}
+	if c.dyn != nil {
+		_, err := c.dyn.cl.ListTables(ctx, &dynamodb.ListTablesInput{Limit: aws.Int32(1)})
+		return dynErr(err)
 	}
 	return c.conn.PingContext(ctx)
 }
@@ -386,6 +405,9 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.cass != nil {
 		return c.cassFetchRows(ctx, t, p)
 	}
+	if c.dyn != nil {
+		return c.dynFetchRows(ctx, t, p)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -413,6 +435,9 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.cass != nil {
 		return c.cassCountRows(ctx, t, p)
 	}
+	if c.dyn != nil {
+		return c.dynCountRows(ctx, t, p)
+	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
 		return 0, err
@@ -437,6 +462,9 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	}
 	if c.cass != nil {
 		return c.cassApplyChanges(ctx, t, changes)
+	}
+	if c.dyn != nil {
+		return c.dynApplyChanges(ctx, t, changes)
 	}
 	if err := questNoDelete(c, changes); err != nil {
 		return err
@@ -490,6 +518,9 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	if c.cass != nil {
 		return c.cassPreviewChanges(ctx, t, changes)
 	}
+	if c.dyn != nil {
+		return c.dynPreviewChanges(ctx, t, changes)
+	}
 	if err := questNoDelete(c, changes); err != nil {
 		return nil, err
 	}
@@ -523,6 +554,9 @@ func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int)
 	}
 	if c.cass != nil {
 		return c.cassExecuteIn(ctx, schema, script, rowCap)
+	}
+	if c.dyn != nil {
+		return c.dynExecuteIn(ctx, script, rowCap)
 	}
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {

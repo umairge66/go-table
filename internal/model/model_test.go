@@ -335,3 +335,21 @@ func TestRedisURLs(t *testing.T) {
 		t.Fatal("expected a number")
 	}
 }
+
+func TestDynamoURLs(t *testing.T) {
+	c, pw, err := ParseURL("dynamodb://KEY:s%2Fcret@localhost:8001/eu-west-1")
+	if err != nil || c.Driver != DriverDynamoDB || c.Host != "localhost" || c.Port != 8001 || c.DBName != "eu-west-1" || c.User != "KEY" || pw != "s/cret" {
+		t.Fatal(c, pw, err)
+	}
+	c, _, err = ParseURL("dynamodb:///us-east-1?profile=work")
+	if err != nil || c.Host != "" || c.DBName != "us-east-1" || c.Options != "profile=work" || c.Validate() != nil {
+		t.Fatal(c, err)
+	}
+	if _, _, err := ParseURL("dynamodb://"); err == nil {
+		t.Fatal("no region")
+	}
+	c.UseSSHTunnel, c.SSHHost, c.SSHUser = true, "h", "u"
+	if c.Validate() == nil {
+		t.Fatal("a tunnel to AWS itself")
+	}
+}

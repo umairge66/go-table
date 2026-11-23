@@ -3,6 +3,22 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## Unreleased
+
+### Added
+
+- **DynamoDB**, tested on DynamoDB Local (not yet on AWS): tables, keys and
+  indexes; items as rows, with a PartiQL condition run on the server; every
+  attribute type shown and edited without losing it; a commit as one
+  transaction (per 100 changes); PartiQL plus `CREATE TABLE`, `DROP TABLE`
+  and `PUT` in the editor; export, import, CSV and emptying tables.
+
+### Fixed
+
+- The DocumentDB tile shows that it is untested (the word was cut off).
+- Cassandra's message for a deleted row no longer suggests it detects
+  changes to one.
+
 ## v0.10.0 — 2026-11-23
 
 ### Added
@@ -11,8 +27,10 @@ release pages on GitHub also carry the full commit messages.
   column's role in the key, indexes, and the server's own DDL. Rows page by
   skipping (CQL has no OFFSET); filters and sorts work over up to 100,000
   rows, and a CQL filter runs on the server. Every CQL type is shown and
-  edited (collections as CQL), and edits use lightweight transactions, so a
-  row changed meanwhile is reported. The query editor runs CQL with `USE`;
+  edited (collections as CQL), and edits use lightweight transactions, so a row deleted meanwhile
+  is reported (another edit of the same row is overwritten). *Corrected after
+  release; tuples, user types, `duration`, `time`, `inet`, `varint`,
+  `decimal` and materialized views haven't been tested.* The query editor runs CQL with `USE`;
   export writes CQL scripts; CSV import, adding and dropping columns and
   indexes, emptying tables and deleting keyspaces work too.
 
@@ -20,7 +38,8 @@ release pages on GitHub also carry the full commit messages.
 
 ### Added
 
-- **Ten more servers**, each tested in Docker (CI too):
+- **Nine more servers**, all but DocumentDB tested in Docker (CI too;
+  first published as ten):
   - **CrateDB** and **QuestDB** (PostgreSQL protocol), read through their own
     catalogs: columns, keys, DDL (`SHOW CREATE TABLE`), views. QuestDB pages
     with its `LIMIT low, high` and refuses row deletes with an explanation;
@@ -39,13 +58,14 @@ release pages on GitHub also carry the full commit messages.
 ### Added
 
 - **Redis and Valkey.** Connect with a host or a `redis://` / `rediss://`
-  URL (with TLS, an ACL user, or over SSH). Numbered databases are listed;
+  URL (TLS, ACL users and SSH are supported but untested). Numbered databases are listed;
   the sidebar shows all keys and the namespaces in them (`user:*`). A key
   list shows each key's type, TTL and value, and opens any key to its
   contents: hash fields, list items, set and sorted-set members, stream
   entries, strings and JSON. Keys, values, TTLs and a key's contents can be
-  edited; the changes run as one watched `MULTI/EXEC`, so nothing is saved
-  over a key that changed meanwhile. The query editor runs redis-cli style
+  edited; the changes run as one watched `MULTI/EXEC`, so a commit is
+  all or nothing. It doesn't notice a value changed since you loaded it
+  (corrected after release). The query editor runs redis-cli style
   commands with completion and shows replies as tables. Export writes keys
   as commands with their expiry; Import script runs such a file.
 - **DuckDB on Windows.** The Windows build now opens DuckDB files: it is

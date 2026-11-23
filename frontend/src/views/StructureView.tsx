@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isCassandra, isMongo, mongoExtras } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isCassandra, isDynamo, isMongo, mongoExtras } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
@@ -55,6 +55,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   useEffect(() => { setChecked((cs) => cs.filter((c) => columns.some((x) => x.name === c))) }, [columns])
   // A collection has no column definitions: a field can only be renamed or removed.
   const mongo = isMongo(driver)
+  // DynamoDB: attributes belong to items, and AWS manages indexes.
+  const fixed = isDynamo(driver)
   const editColumn = (c: Column) => setDialog(mongo ? { kind: 'renameField', name: c.name } : { kind: 'column', editing: c })
   const pk = indexes.find((x) => x.primary)
   const inOrder = (names: string[]) => columns.map((c) => c.name).filter((n) => names.includes(n))
@@ -73,7 +75,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   const columnMenu = (e: React.MouseEvent, c: Column, i: number) => {
     const isText = /char|text|enum|set/i.test(c.type)
     menu.open(e, [
-      ...(isCassandra(driver) ? [] : [{ label: mongo ? 'Rename…' : 'Edit…', icon: <Pencil />, disabled: mongo && c.primaryKey, onSelect: () => editColumn(c) }]),
+      ...(isCassandra(driver) || fixed ? [] : [{ label: mongo ? 'Rename…' : 'Edit…', icon: <Pencil />, disabled: mongo && c.primaryKey, onSelect: () => editColumn(c) }]),
       'sep',
       ...(pkChangeable(!!pk) ? [
         { label: pk ? 'Make it the primary key' : 'Primary key', icon: <KeyRound />, disabled: pk?.columns.length === 1 && pk.columns[0] === c.name, onSelect: () => setPrimary([c.name]) },
@@ -90,7 +92,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
         { label: 'Move down', icon: <ArrowDown />, disabled: i === columns.length - 1, onSelect: () => move(c, columns[i + 1].name) },
       ] : []),
       'sep',
-      { label: mongo ? 'Remove from every document' : 'Drop column', icon: <Trash2 />, danger: true, disabled: columns.length === 1 || (mongo && c.primaryKey), onSelect: () => dropColumns([c.name]) },
+      { label: mongo ? 'Remove from every document' : 'Drop column', icon: <Trash2 />, danger: true, disabled: fixed || columns.length === 1 || (mongo && c.primaryKey), onSelect: () => dropColumns([c.name]) },
     ])
   }
 
@@ -101,7 +103,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
 
   return (
     <div className="h-full overflow-auto p-4" data-testid="structure">
-      <Section title={mongo ? 'Fields' : 'Columns'} count={columns.length} actions={!readOnly && !mongo && (
+      <Section title={mongo ? 'Fields' : 'Columns'} count={columns.length} actions={!readOnly && !mongo && !fixed && (
         <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'column' })}>Add column</Button>
       )}>
         {!readOnly && checked.length > 0 && (
@@ -111,7 +113,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
             {f.uniqueIndexes && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'unique')}>Unique</Button>}
             <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'index')}>Index</Button>
             {mysql && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'fulltext')}>Fulltext</Button>}
-            <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={checked.length === columns.length || (mongo && checked.includes('_id'))} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
+            <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={fixed || checked.length === columns.length || (mongo && checked.includes('_id'))} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
             <div className="flex-1" />
             <button className="text-[12px] text-muted hover:text-fg" onClick={() => setChecked([])}>Clear</button>
           </div>
@@ -152,8 +154,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                 {!readOnly && (
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      {!isCassandra(driver) && <IconButton label={`Edit ${c.name}`} disabled={mongo && c.primaryKey} onClick={() => editColumn(c)}><Pencil className="size-3.5" /></IconButton>}
-                      <IconButton label={`Drop ${c.name}`} disabled={columns.length === 1 || (mongo && c.primaryKey)} onClick={() => dropColumns([c.name])}><Trash2 className="size-3.5" /></IconButton>
+                      {!isCassandra(driver) && !fixed && <IconButton label={`Edit ${c.name}`} disabled={mongo && c.primaryKey} onClick={() => editColumn(c)}><Pencil className="size-3.5" /></IconButton>}
+                      <IconButton label={`Drop ${c.name}`} disabled={fixed || columns.length === 1 || (mongo && c.primaryKey)} onClick={() => dropColumns([c.name])}><Trash2 className="size-3.5" /></IconButton>
                       <IconButton label={`More for ${c.name}`} onClick={(e) => columnMenu(e, c, i)}><MoreHorizontal className="size-3.5" /></IconButton>
                     </span>
                   </td>
@@ -165,7 +167,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
       </Section>
 
       {!readOnly && <>
-        <Section title="Indexes" count={indexes.length} actions={<Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'index' })}>Add index</Button>}>
+        <Section title="Indexes" count={indexes.length} actions={!fixed && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'index' })}>Add index</Button>}>
           {indexes.length === 0 ? <Empty>No indexes. Add one to speed up searching and sorting on a column.</Empty> : (
             <Rows heads={['Name', 'Kind', 'Columns']}>
               {indexes.map((x) => (
@@ -179,7 +181,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                         ? <IconButton label={`Unhide ${x.name}`} onClick={() => alter.run([{ kind: 'unhide_index', name: x.name }], `Unhide index ${x.name}`, { done: 'Index unhidden' })}><Eye className="size-3.5" /></IconButton>
                         : <IconButton label={`Hide ${x.name}`} onClick={() => alter.run([{ kind: 'hide_index', name: x.name }], `Hide index ${x.name}`, { done: 'Index hidden' })}><EyeOff className="size-3.5" /></IconButton>)}
                       {f.renameIndex && <IconButton label={`Rename ${x.name}`} disabled={x.primary && (mysql || sqlite)} onClick={() => setDialog({ kind: 'renameIndex', name: x.name })}><Pencil className="size-3.5" /></IconButton>}
-                      <IconButton label={`Drop ${x.name}`} disabled={x.primary && !pkChangeable(true)} onClick={() => alter.run([{ kind: 'drop_index', name: x.name }], x.primary ? 'Drop the primary key' : `Drop index ${x.name}`, { danger: true, done: 'Index dropped' })}>
+                      <IconButton label={`Drop ${x.name}`} disabled={fixed || x.primary && !pkChangeable(true)} onClick={() => alter.run([{ kind: 'drop_index', name: x.name }], x.primary ? 'Drop the primary key' : `Drop index ${x.name}`, { danger: true, done: 'Index dropped' })}>
                         <Trash2 className="size-3.5" />
                       </IconButton>
                     </span>
@@ -431,7 +433,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
       <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">{isMongo(driver) ? 'Collection' : 'Table'}</h3>
       <div className="space-y-4 rounded-xl border border-line p-4">
         {info?.options && <div className="text-[12.5px] text-fg-2" data-testid="collection-options">{info.options[0].toUpperCase() + info.options.slice(1)}.</div>}
-        {!isCassandra(driver) && <div className="flex items-end gap-2">
+        {!isCassandra(driver) && !isDynamo(driver) && <div className="flex items-end gap-2">
           <Field label={isMongo(driver) ? 'Rename collection' : 'Rename table'} className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>

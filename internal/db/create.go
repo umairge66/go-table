@@ -390,6 +390,9 @@ func (c *Conn) CreateTable(ctx context.Context, schema string, t NewTable) ([]st
 	if c.cass != nil {
 		return nil, errCassNoDesigner
 	}
+	if c.dyn != nil {
+		return nil, errDynNoDesigner
+	}
 	stmts, err := BuildCreateTable(c.Dialect, schema, t)
 	if err != nil {
 		return nil, err
@@ -463,6 +466,9 @@ func (c *Conn) CreateDatabase(ctx context.Context, nd NewDatabase) (string, erro
 	if c.redis != nil {
 		return "", errors.New("Redis has a fixed set of numbered databases (db0, db1…): there is none to create")
 	}
+	if c.dyn != nil {
+		return "", errors.New("DynamoDB has tables, not databases: connect to another region instead")
+	}
 	if c.cass != nil {
 		return "", errors.New("a keyspace is made with CREATE KEYSPACE in the query editor: it needs a replication strategy")
 	}
@@ -499,7 +505,7 @@ type TypeInfo struct {
 
 // TypeInfo reads the type-related options of schema from the server.
 func (c *Conn) TypeInfo(ctx context.Context, schema string) (*TypeInfo, error) {
-	if c.redis != nil || c.cass != nil {
+	if c.redis != nil || c.cass != nil || c.dyn != nil {
 		return &TypeInfo{CustomTypes: []string{}, Collations: []string{}, Charsets: []string{}, Engines: []string{}}, nil
 	}
 	if err := c.lock(ctx); err != nil {

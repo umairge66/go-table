@@ -1,7 +1,7 @@
 # GoTable
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB, ClickHouse, MongoDB, Redis and Cassandra, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra and DynamoDB, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, CrateDB, QuestDB,
 TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
 FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB). A Go backend with a web UI, shipped as one binary that opens in a native window
@@ -39,6 +39,7 @@ inspector and a Data / Structure / Definition switch.
 | MongoDB (4.4+, Atlas; tested on 4.4–8.0) | a document database: see [below](#mongodb) |
 | Redis, Valkey (tested on Redis 7, Valkey 8) | a key-value store: see [below](#redis) |
 | Cassandra, ScyllaDB (tested on Cassandra 5, ScyllaDB 2026.3) | CQL: see [below](#cassandra) |
+| DynamoDB (tested on DynamoDB Local, not on AWS) | items without fixed attributes: see [below](#dynamodb) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -358,7 +359,8 @@ Valkey, KeyDB and Dragonfly speak the same protocol):
   string key, delete keys; in an opened key, change its fields, items,
   members, scores or entries. Review shows the exact commands (`RENAME`,
   `SET … KEEPTTL`, `HSET`, `LSET`, `ZADD`…). They run together in one
-  `MULTI/EXEC`, watched, so if a key changed meanwhile nothing is saved.
+  `MULTI/EXEC`, watched, so it is all or nothing; a value changed since you
+  loaded it is overwritten.
 - **The query editor** runs commands as redis-cli takes them, one a line
   (`#` starts a comment): replies are tables (`HGETALL` as field/value,
   `ZRANGE … WITHSCORES` as member/score, `INFO` by section, `SCAN` with the
@@ -381,7 +383,8 @@ its clustering columns (the Structure tab says which). `cassandra://` and
   are edited the same way.
 - **Editing** writes each type as CQL and uses lightweight transactions
   (`UPDATE … IF EXISTS`, `INSERT … IF NOT EXISTS`, `DELETE … IF EXISTS`),
-  so a row changed or deleted meanwhile is reported. There are no
+  so a row deleted meanwhile is reported; another edit of
+  the same row is overwritten. There are no
   transactions: each change commits on its own. Key columns can't change.
 - **Structure**: columns can be added or dropped, indexes added or dropped,
   the comment set and the table emptied; the key and the column types are
@@ -394,12 +397,39 @@ its clustering columns (the Structure tab says which). `cassandra://` and
 - GoTable talks to the host it is given, which coordinates the cluster: the
   other nodes' addresses needn't be reachable (an SSH tunnel works).
 
+### DynamoDB
+
+A connection is a region and an AWS access key; without a key GoTable signs
+in as the AWS CLI does (environment, `~/.aws`, SSO; `profile=name` in
+Options). An endpoint host is for DynamoDB Local, which is never sent the
+machine's AWS keys. URLs: `dynamodb:///us-east-1`,
+`dynamodb://KEY:SECRET@localhost:8000/us-east-1`.
+
+- **Reads on AWS are billed.** A table's columns come from its first 500
+  items; a page is read by scanning up to it; the filter bar and sorts scan
+  the table (up to 100,000 items). A PartiQL condition (WHERE) runs on the
+  server: with the partition key in it, it reads only that. Tables over
+  100,000 items show AWS's approximate count.
+- **Types** are kept when edited; text that doesn't fit is refused. Lists
+  and maps are JSON; sets and nested binary are `{"$ss": ["a"]}`,
+  `{"$ns": [1]}`, `{"$bs": ["base64"]}`, `{"$b": "base64"}`. NULL removes
+  the attribute. Keys can't change.
+- **A commit** is one transaction per 100 changes. It fails if an item was
+  deleted meanwhile or a new key exists; another edit of the same attribute
+  is overwritten.
+- **The query editor** runs PartiQL, and for what that can't say:
+  `CREATE TABLE "t" ("id" S PARTITION KEY, "at" N SORT KEY)`,
+  `CREATE TABLE "t" WITH {the AWS CLI's create-table JSON}`, `DROP TABLE`
+  and `PUT "t" {item}`. Exports use these, so GoTable's Import reads them.
+  Exports include keys, indexes and capacity, but not TTL, streams, tags or
+  backups. Indexes are changed with the AWS console or CLI.
+
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
 ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, Redis, Valkey, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore, CrateDB, QuestDB,
-                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet, Cassandra, ScyllaDB
+                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet, Cassandra, ScyllaDB, DynamoDB Local
                                   # (the analytical ones are big images)
 ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
                                   # MongoDB standalone, replica set, sharded cluster, TLS + X.509
@@ -497,7 +527,7 @@ goes into `key.go`, and copies with the old key take no more updates).
 
 ## Not implemented yet
 
-Other engines (IBM Db2, DynamoDB, …), ER
+Other engines (IBM Db2, …), ER
 diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 

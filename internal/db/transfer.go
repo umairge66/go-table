@@ -26,6 +26,9 @@ func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
 	if c.cass != nil {
 		return c.cassExec(ctx, stmt)
 	}
+	if c.dyn != nil {
+		return c.dynExec(ctx, stmt)
+	}
 	if err := c.lock(ctx); err != nil {
 		return 0, err
 	}
@@ -71,6 +74,9 @@ func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []str
 	}
 	if c.cass != nil {
 		return c.cassStreamRows(ctx, t, p, fn)
+	}
+	if c.dyn != nil {
+		return c.dynStreamRows(ctx, t, p, fn)
 	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
@@ -171,6 +177,9 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	}
 	if c.cass != nil {
 		return c.cassImportScript(ctx, r, o, progress)
+	}
+	if c.dyn != nil {
+		return c.dynImportScript(ctx, r, o, progress)
 	}
 	if o.MaxErrors <= 0 {
 		o.MaxErrors = 200
@@ -347,6 +356,9 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	if c.cass != nil {
 		return c.cassImportCSV(ctx, r, t, o, progress)
 	}
+	if c.dyn != nil {
+		return c.dynImportCSV(ctx, r, t, o, progress)
+	}
 	if len(o.Columns) == 0 || len(o.Columns) != len(o.Mapping) {
 		return 0, errors.New("choose at least one column to import")
 	}
@@ -490,6 +502,9 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	}
 	if c.cass != nil {
 		return c.cassDump(ctx, w, o, progress)
+	}
+	if c.dyn != nil {
+		return c.dynDump(ctx, w, o, progress)
 	}
 	if o.BatchSize <= 0 {
 		o.BatchSize = 200

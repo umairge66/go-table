@@ -27,6 +27,7 @@ type compatCaps struct {
 	// editor: two statements that run, and a script whose second fails
 	// (the defaults are SQL).
 	editorOK, editorStop string
+	keysOnly             bool // a definition names the keys, not every column (DynamoDB)
 	addCol               bool
 	csv                  bool
 	dump                 bool // a SQL dump loads back
@@ -113,7 +114,7 @@ func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
 			t.Fatal(err)
 		}
 		def, err := c.Definition(ctx, Object{Schema: schema, Name: "gt_c", Kind: KindTable})
-		if err != nil || !strings.Contains(def, "gt_c") || !strings.Contains(def, "score") {
+		if err != nil || !strings.Contains(def, "gt_c") || !caps.keysOnly && !strings.Contains(def, "score") {
 			t.Fatal(def, err)
 		}
 		if caps.views {
@@ -254,7 +255,7 @@ func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
 		if err := c.Dump(ctx, &buf, DumpOptions{Objects: []Object{{Schema: schema, Name: "gt_c", Kind: KindTable}}, Structure: true, Data: true}, nil); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(buf.String(), "gt_c") || !strings.Contains(buf.String(), "INSERT") {
+		if !strings.Contains(buf.String(), "gt_c") || !strings.Contains(buf.String(), "INSERT") && !strings.Contains(buf.String(), "PUT ") {
 			t.Fatal(buf.String())
 		}
 		if !caps.dump {

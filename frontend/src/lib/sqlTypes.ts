@@ -184,6 +184,7 @@ const CATALOG: PerDriver<TypeGroup[]> = {
   // Never offered: a collection has no column types (see StructureView).
   mongodb: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   redis: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
+  dynamodb: [{ label: 'Keys', types: [{ name: 'S', hint: 'string' }, { name: 'N', hint: 'number' }, { name: 'B', hint: 'binary' }] }],
   cassandra: [
     { label: 'Numeric', types: [
       { name: 'int', hint: '4 bytes', traits: ['int'] }, { name: 'bigint', hint: '8 bytes', traits: ['int'] },

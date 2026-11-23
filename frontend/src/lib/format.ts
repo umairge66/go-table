@@ -14,6 +14,7 @@ const languages: PerDriver<SqlLanguage> = {
   oracle: 'plsql',
   mongodb: 'sql', // never used: see formatSQL
   redis: 'sql', // never used: see formatSQL
+  dynamodb: 'sql', // never used: see formatSQL
   cassandra: 'sql', // CQL reads close enough to plain SQL
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
@@ -27,6 +28,7 @@ const languages: PerDriver<SqlLanguage> = {
 export function formatSQL(sql: string, driver: Driver): string {
   if (family(driver) === 'mongodb') return formatMongo(sql)
   if (family(driver) === 'redis') return formatRedis(sql)
+  if (family(driver) === 'dynamodb') return sql.trim() + '\n' // PartiQL's values and PUT's JSON aren't SQL to a formatter
   const out = format(sql, {
     language: forDriver(languages, driver),
     keywordCase: 'upper',
