@@ -9,7 +9,7 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isMongo, isRedis } from '../types'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isMongo, isRedis } from '../types'
 import { isPattern, keyLabel as redisLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
@@ -203,6 +203,18 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   // newTable opens a "New table" tab for designing a table in db.
   const newTable = useCallback((db: OpenDb) => {
     if (mongo) { setCreatingCollection(db); return } // nothing to design: fields come with the documents
+    if (isCassandra(conn.driver)) {
+      newQuery(`-- A Cassandra table's primary key (partition key, then clustering columns) is fixed when it is made.
+CREATE TABLE ${quote('events', conn.driver)} (
+  user_id uuid,
+  at timestamp,
+  kind text,
+  payload map<text, text>,
+  PRIMARY KEY ((user_id), at)
+) WITH CLUSTERING ORDER BY (at DESC);
+`, db.key)
+      return
+    }
     if (redis) { newQuery('# A key is made by the command that writes it:\nSET greeting "hello"\n# HSET user:1 name Alice  ·  RPUSH queue a b  ·  SADD tags x  ·  ZADD scores 10 alice\n', db.key); return }
     queryCounter.current += 1
     const tab: Tab = { id: `new:${db.key}:${queryCounter.current}`, kind: 'create-table', title: 'New table', dbKey: db.key }

@@ -30,6 +30,9 @@ const (
 	// DriverRedis is a key-value store: keys, not tables, and commands
 	// instead of SQL (internal/db/redis*.go).
 	DriverRedis Driver = "redis"
+	// DriverCassandra: CQL over Cassandra's native protocol. Keyspaces are
+	// the schemas; reads have no OFFSET and few filters (cassandra*.go).
+	DriverCassandra Driver = "cassandra"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -56,6 +59,8 @@ const (
 	// Servers that speak the PostgreSQL protocol with their own SQL.
 	DriverCrateDB Driver = "cratedb"
 	DriverQuestDB Driver = "questdb"
+	// Speaks Cassandra's protocol and CQL.
+	DriverScyllaDB Driver = "scylladb"
 )
 
 // driverSpec describes a driver. family is the engine whose protocol and SQL
@@ -78,6 +83,8 @@ var specs = map[Driver]driverSpec{
 	DriverOracle:      {"Oracle", DriverOracle, 1521, false},
 	DriverMongoDB:     {"MongoDB", DriverMongoDB, 27017, false},
 	DriverRedis:       {"Redis", DriverRedis, 6379, false},
+	DriverCassandra:   {"Cassandra", DriverCassandra, 9042, false},
+	DriverScyllaDB:    {"ScyllaDB", DriverCassandra, 9042, false},
 	DriverValkey:      {"Valkey", DriverRedis, 6379, false},
 	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
 	DriverYugabyteDB:  {"YugabyteDB", DriverPostgres, 5433, false},
@@ -101,11 +108,11 @@ var specs = map[Driver]driverSpec{
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverStarRocks, DriverDoris,
 	DriverCrateDB, DriverQuestDB, DriverFerretDB, DriverDocumentDB,
-	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet}
+	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet, DriverScyllaDB}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
 // DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
@@ -151,7 +158,7 @@ func (d Driver) SSLModes() []string {
 	case DriverMSSQL:
 		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
 		modes = []string{"optional", "disable", "required", "trust", "strict"}
-	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis:
+	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis, DriverCassandra:
 		modes = []string{"disable", "require", "skip-verify"}
 	default:
 		return nil
@@ -306,8 +313,8 @@ func (c *Connection) Validate() error {
 			return fmt.Errorf("database file is required")
 		}
 	default:
-		// MongoDB and Redis servers run without users unless told otherwise.
-		if c.User == "" && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis {
+		// MongoDB, Redis and Cassandra servers run without users unless told otherwise.
+		if c.User == "" && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra {
 			return fmt.Errorf("user is required")
 		}
 		if c.Port < 0 || c.Port > 65535 {

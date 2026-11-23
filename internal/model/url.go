@@ -84,6 +84,10 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverCrateDB
 	case "questdb":
 		d = DriverQuestDB
+	case "cassandra", "cql":
+		d = DriverCassandra
+	case "scylla", "scylladb":
+		d = DriverScyllaDB
 	case "sqlserver", "mssql":
 		d = DriverMSSQL
 	case "clickhouse", "ch":

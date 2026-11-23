@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
+	github.com/apache/cassandra-gocql-driver/v2 v2.1.2
 	github.com/duckdb/duckdb-go/v2 v2.20000.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/jackc/pgx/v5 v5.11.0
@@ -15,6 +16,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.9.3
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
+	gopkg.in/inf.v0 v0.9.1
 	modernc.org/sqlite v1.60.1
 )
 

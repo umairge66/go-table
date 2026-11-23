@@ -1,9 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -253,4 +256,203 @@ func TestDoris(t *testing.T) {
 			"INSERT INTO gt_c (id, name, city, score) VALUES " + compatRows},
 		views: true, edits: true, pk: true, addCol: true, csv: true, dump: true,
 	})
+}
+
+// Cassandra and ScyllaDB: CQL.
+func TestCassandra(t *testing.T) {
+	ran := false
+	for name, d := range map[string]model.Driver{"CASSANDRA": model.DriverCassandra, "SCYLLA": model.DriverScyllaDB} {
+		if os.Getenv("GOTABLE_TEST_"+name+"_HOST") == "" {
+			continue
+		}
+		ran = true
+		t.Run(strings.ToLower(name), func(t *testing.T) {
+			cfg, pw := serverConfig(t, name, d)
+			runCompatSuite(t, openTest(t, cfg, pw), compatCaps{
+				version: strings.Fields(d.Label())[0] + " ",
+				setup: []string{"DROP TABLE IF EXISTS gt_c", "DROP TABLE IF EXISTS gt_copy",
+					"CREATE TABLE gt_c (id int PRIMARY KEY, name text, city text, score int)",
+					"INSERT INTO gt_c (id, name, city, score) VALUES (1, 'Alice', 'Berlin', 90)",
+					"INSERT INTO gt_c (id, name, city, score) VALUES (2, 'Bob', 'Paris', 70)",
+					"INSERT INTO gt_c (id, name, score) VALUES (3, 'Carol', 85)",
+					"INSERT INTO gt_c (id, name, city, score) VALUES (4, 'Dave', 'Berlin', 60)",
+					"INSERT INTO gt_c (id, name, city, score) VALUES (5, 'Eve_x', 'Rome', 99)"},
+				edits: true, pk: true, addCol: true, textType: "text", csv: true, dump: true,
+				editorOK:   "SELECT name FROM gt_c WHERE id IN (1, 5);\nSELECT COUNT(*) AS n FROM gt_c",
+				editorStop: "SELECT * FROM gt_c WHERE id = 1;\nSELECT * FROM gt_no_such_table;\nSELECT * FROM gt_c",
+			})
+		})
+	}
+	if !ran {
+		t.Skip("GOTABLE_TEST_CASSANDRA_HOST not set")
+	}
+}
+
+// TestCassandraTypes: CQL's types, keys and edits, beyond the shared suite.
+func TestCassandraTypes(t *testing.T) {
+	for name, d := range map[string]model.Driver{"CASSANDRA": model.DriverCassandra, "SCYLLA": model.DriverScyllaDB} {
+		if os.Getenv("GOTABLE_TEST_"+name+"_HOST") == "" {
+			continue
+		}
+		t.Run(strings.ToLower(name), func(t *testing.T) { testCassandraTypes(t, name, d) })
+	}
+}
+
+func testCassandraTypes(t *testing.T, name string, d model.Driver) {
+	cfg, pw := serverConfig(t, name, d)
+	c := openTest(t, cfg, pw)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	must := func(q string) Result {
+		t.Helper()
+		res, err := c.Execute(ctx, q, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range res {
+			if r.Err != nil {
+				t.Fatalf("%s: %v", r.Statement, r.Err)
+			}
+		}
+		return res[len(res)-1]
+	}
+	must("DROP TABLE IF EXISTS gt_t; DROP TABLE IF EXISTS gt_t2")
+	must(`CREATE TABLE gt_t (tenant text, day date, at timestamp, id uuid, ok boolean, ratio double, data blob, note text,
+		tags set<text>, nums list<int>, attrs map<text, int>, PRIMARY KEY ((tenant, day), at, id)) WITH CLUSTERING ORDER BY (at DESC, id ASC)`)
+	must(`INSERT INTO gt_t (tenant, day, at, id, ok, ratio, data, note, tags, nums, attrs) VALUES ('acme', '2024-03-15', '2024-03-15T10:20:30.123Z',
+		0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0, true, 2.5, 0x0102ff, '', {'a', 'b'}, [3, 1, 2], {'x': 1, 'y': 2})`)
+	must(`INSERT INTO gt_t (tenant, day, at, id) VALUES ('acme', '2024-03-15', '2024-03-15T09:00:00Z', 00000000-0000-0000-0000-000000000001)`)
+	ref := TableRef{Schema: "gotable", Name: "gt_t"}
+
+	cols, err := c.Columns(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, col := range cols {
+		if col.PrimaryKey {
+			keys = append(keys, col.Name+":"+col.Comment)
+		}
+	}
+	if strings.Join(keys, " ") != "tenant:partition key day:partition key at:clustering, desc id:clustering, asc" {
+		t.Fatal(keys)
+	}
+	if def, err := c.Definition(ctx, Object{Schema: "gotable", Name: "gt_t", Kind: KindTable}); err != nil || !strings.Contains(def, "CLUSTERING ORDER BY") {
+		t.Fatal(def, err)
+	}
+
+	rs, err := c.FetchRows(ctx, ref, Page{}, nil)
+	if err != nil || len(rs.Rows) != 2 {
+		t.Fatal(rs, err)
+	}
+	row := map[string]Value{}
+	for i, col := range rs.Columns {
+		row[col] = rs.Rows[0][i] // clustering DESC: the 10:20 row first
+	}
+	for col, want := range map[string]string{"day": "2024-03-15", "at": "2024-03-15T10:20:30.123Z", "id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+		"ok": "true", "ratio": "2.5", "data": "0x0102ff", "tags": "{'a', 'b'}", "nums": "[3, 1, 2]", "attrs": "{'x': 1, 'y': 2}"} {
+		if row[col].Text != want {
+			t.Errorf("%s = %q, want %q", col, row[col].Text, want)
+		}
+	}
+	if row["note"].Null || row["note"].Text != "" { // empty, not NULL
+		t.Errorf("note %+v", row["note"])
+	}
+	other := map[string]Value{}
+	for i, col := range rs.Columns {
+		other[col] = rs.Rows[1][i]
+	}
+	if !other["note"].Null || !other["tags"].Null {
+		t.Errorf("unset columns should be NULL: %+v", other)
+	}
+
+	// Edits write each type as CQL, keyed on the whole primary key.
+	key := map[string]Value{"tenant": Text("acme"), "day": Text("2024-03-15"), "at": row["at"], "id": row["id"]}
+	edit := []Change{{Kind: ChangeUpdate, Key: key, Values: map[string]Value{"ok": Text("false"), "ratio": Text("1e3"), "note": Text("it's"),
+		"tags": Text("{'c'}"), "attrs": Text("{'z': 9}"), "data": NullValue}}}
+	stmts, err := c.PreviewChanges(ctx, ref, edit, true)
+	if err != nil || !strings.Contains(stmts[0], "IF EXISTS") || !strings.Contains(stmts[0], `"note" = 'it''s'`) {
+		t.Fatal(stmts, err)
+	}
+	if err := c.ApplyChanges(ctx, ref, edit, true); err != nil {
+		t.Fatal(err)
+	}
+	got := must(`SELECT ok, ratio, note, tags, attrs, data FROM gt_t WHERE tenant = 'acme' AND day = '2024-03-15' AND at = '2024-03-15T10:20:30.123Z'`).Set.Rows[0]
+	if got[0].Text != "false" || got[1].Text != "1000" || got[2].Text != "it's" || got[3].Text != "{'c'}" || got[4].Text != "{'z': 9}" || !got[5].Null {
+		t.Fatalf("%+v", got)
+	}
+	for _, bad := range []map[string]Value{{"ratio": Text("lots")}, {"ok": Text("maybe")}, {"at": Text("2024-01-01")}} {
+		if err := c.ApplyChanges(ctx, ref, []Change{{Kind: ChangeUpdate, Key: key, Values: bad}}, true); err == nil {
+			t.Errorf("%v: expected an error", bad)
+		}
+	}
+	// A row deleted meanwhile: the lightweight transaction says so.
+	must(`DELETE FROM gt_t WHERE tenant = 'acme' AND day = '2024-03-15' AND at = '2024-03-15T10:20:30.123Z' AND id = 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0`)
+	if err := c.ApplyChanges(ctx, ref, edit, true); err == nil || !strings.Contains(err.Error(), "no longer exists") {
+		t.Fatal(err)
+	}
+	ins := []Change{{Kind: ChangeInsert, Values: map[string]Value{"tenant": Text("acme"), "day": Text("2024-03-15"), "at": Text("2024-03-15T09:00:00.000Z"),
+		"id": Text("00000000-0000-0000-0000-000000000001"), "note": Text("dup")}}}
+	if err := c.ApplyChanges(ctx, ref, ins, true); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatal(err)
+	}
+
+	// A CQL filter runs on the server.
+	if rs, err := c.FetchRows(ctx, ref, Page{RawWhere: "tenant = 'acme' AND day = '2024-03-15'"}, nil); err != nil || len(rs.Rows) != 1 {
+		t.Fatal(rs, err)
+	}
+	if n, err := c.CountRows(ctx, ref, Page{RawWhere: "tenant = 'nobody' AND day = '2024-03-15'"}, nil); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+
+	// Exported and loaded back, the types are the same.
+	must(`INSERT INTO gt_t (tenant, day, at, id, ok, ratio, data, note, tags, nums, attrs) VALUES ('acme', '2024-03-16', '2024-03-16T00:00:00Z',
+		0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0, true, 0.1, 0x00, 'a''b', {'q'}, [1], {'k': -5})`)
+	before := must("SELECT * FROM gt_t").Set.Rows
+	var buf bytes.Buffer
+	if err := c.Dump(ctx, &buf, DumpOptions{Objects: []Object{{Schema: "gotable", Name: "gt_t", Kind: KindTable}}, Structure: true, Data: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	dump := strings.ReplaceAll(buf.String(), "gt_t", "gt_t2")
+	if _, err := c.ImportSQL(ctx, strings.NewReader(dump), ImportOptions{}, nil); err != nil {
+		t.Fatalf("%v\n%s", err, dump)
+	}
+	if after := must("SELECT * FROM gt_t2").Set.Rows; !reflect.DeepEqual(before, after) {
+		t.Fatalf("\n%v\n%v", before, after)
+	}
+
+	// Indexes and columns change; the key doesn't.
+	if _, err := c.Alter(ctx, ref, []AlterOp{{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_t_note", Columns: []string{"note"}}}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if ix, _ := c.Indexes(ctx, ref); len(ix) != 2 || ix[1].Name != "gt_t_note" {
+		t.Fatal(ix)
+	}
+	if _, err := c.Alter(ctx, ref, []AlterOp{{Kind: AlterDropIndex, Name: "gt_t_note"}, {Kind: AlterDropColumn, Column: "nums"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Alter(ctx, ref, []AlterOp{{Kind: AlterSetPrimaryKey, Columns: []string{"id"}}}, true); err == nil {
+		t.Fatal("changed a primary key")
+	}
+
+	// Keyspaces: USE in the editor, and one made, then deleted.
+	must("CREATE KEYSPACE IF NOT EXISTS gt_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+	must("USE gt_ks; CREATE TABLE IF NOT EXISTS x (a int PRIMARY KEY)")
+	if c.Schema() != "gt_ks" {
+		t.Fatal(c.Schema())
+	}
+	if objs, _ := c.Objects(ctx, "gt_ks"); len(objs) != 1 || objs[0].Name != "x" {
+		t.Fatal(objs)
+	}
+	if _, err := c.DropDatabase(ctx, DropDatabase{Name: "gt_ks"}); err == nil {
+		t.Fatal("dropped the keyspace in use")
+	}
+	must("USE gotable")
+	if _, err := c.DropDatabase(ctx, DropDatabase{Name: "gt_ks"}); err != nil {
+		t.Fatal(err)
+	}
+	if ks, _ := c.Schemas(ctx); slices.Contains(ks, "gt_ks") || !slices.Contains(ks, "gotable") {
+		t.Fatal(ks)
+	}
+	must("DROP TABLE gt_t; DROP TABLE gt_t2")
 }

@@ -26,13 +26,18 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL, cassandra: PostgreSQL }
 
 /** language: MongoDB's commands are written in the JavaScript of its shell; Redis's are command lines. */
 const language = (driver: Driver, tables?: Record<string, string[]>) => isMongo(driver)
   ? [javascript(), javascriptLanguage.data.of({ autocomplete: mongoCompletions(tables) })]
   : isRedis(driver) ? [redisLanguage, redisLanguage.data.of({ autocomplete: redisCompletions })]
-  : sql({ dialect: forDriver(dialects, driver), schema: tables, upperCaseKeywords: true })
+  : sql({ dialect: forDriver(dialects, driver), schema: tables && cleanSchema(tables), upperCaseKeywords: true })
+
+/** cleanSchema drops tables without a column list: CodeMirror's SQL
+ * completion fails on them, and takes the whole editor down. */
+const cleanSchema = (tables: Record<string, string[]>) =>
+  Object.fromEntries(Object.entries(tables).filter(([, cols]) => Array.isArray(cols)))
 
 /** rangeAt: the statement the cursor is at, the way the driver's commands are written. */
 const rangeAt = (driver: Driver, text: string, pos: number, withSemicolon = false) =>

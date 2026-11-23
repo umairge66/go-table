@@ -14,6 +14,7 @@ const languages: PerDriver<SqlLanguage> = {
   oracle: 'plsql',
   mongodb: 'sql', // never used: see formatSQL
   redis: 'sql', // never used: see formatSQL
+  cassandra: 'sql', // CQL reads close enough to plain SQL
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',
 }

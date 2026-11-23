@@ -3,6 +3,19 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## v0.10.0 — 2026-11-23
+
+### Added
+
+- **Cassandra and ScyllaDB.** Keyspaces, tables and materialized views, each
+  column's role in the key, indexes, and the server's own DDL. Rows page by
+  skipping (CQL has no OFFSET); filters and sorts work over up to 100,000
+  rows, and a CQL filter runs on the server. Every CQL type is shown and
+  edited (collections as CQL), and edits use lightweight transactions, so a
+  row changed meanwhile is reported. The query editor runs CQL with `USE`;
+  export writes CQL scripts; CSV import, adding and dropping columns and
+  indexes, emptying tables and deleting keyspaces work too.
+
 ## v0.9.0 — 2026-11-23
 
 ### Added

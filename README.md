@@ -1,10 +1,10 @@
 # GoTable
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB, ClickHouse, MongoDB and Redis, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse, MongoDB, Redis and Cassandra, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, CrateDB, QuestDB,
 TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
-FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet). A Go backend with a web UI, shipped as one binary that opens in a native window
+FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -38,6 +38,7 @@ inspector and a Data / Structure / Definition switch.
 | ClickHouse | native protocol. No transactions, foreign keys or auto-increment; rows change through synchronous mutations; tables get an engine (MergeTree by default) and a sort key |
 | MongoDB (4.4+, Atlas; tested on 4.4–8.0) | a document database: see [below](#mongodb) |
 | Redis, Valkey (tested on Redis 7, Valkey 8) | a key-value store: see [below](#redis) |
+| Cassandra, ScyllaDB (tested on Cassandra 5, ScyllaDB 2026.3) | CQL: see [below](#cassandra) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -366,12 +367,40 @@ Valkey, KeyDB and Dragonfly speak the same protocol):
 - **Export** writes the keys as commands with their expiry (`.redis`, for
   `redis-cli < file` or Import script); keys can also go to CSV or JSON.
 
+### Cassandra
+
+Keyspaces are the schemas; a table's primary key is its partition key, then
+its clustering columns (the Structure tab says which). `cassandra://` and
+`scylla://` URLs paste in; ScyllaDB speaks the same protocol.
+
+- **Rows**: CQL has no OFFSET and filters or sorts on the server only by
+  key, so a page is read by skipping rows, and the filter bar and column
+  sorts work here over up to 100,000 rows. A CQL filter (WHERE) runs on the
+  server, with ALLOW FILTERING added; put the partition key in it for big
+  tables. Collections show as CQL (`{'a', 'b'}`, `[1, 2]`, `{'k': 1}`) and
+  are edited the same way.
+- **Editing** writes each type as CQL and uses lightweight transactions
+  (`UPDATE … IF EXISTS`, `INSERT … IF NOT EXISTS`, `DELETE … IF EXISTS`),
+  so a row changed or deleted meanwhile is reported. There are no
+  transactions: each change commits on its own. Key columns can't change.
+- **Structure**: columns can be added or dropped, indexes added or dropped,
+  the comment set and the table emptied; the key and the column types are
+  fixed. New tables are made with CREATE TABLE in the query editor, which
+  New table opens with an example; keyspaces with CREATE KEYSPACE.
+  Deleting a keyspace is DROP KEYSPACE.
+- **The query editor** runs CQL (`USE` switches keyspace). Export writes the
+  tables as CQL (`DESCRIBE`) and rows as INSERTs, for Import or
+  `cqlsh -f`; CSV imports and exports work too.
+- GoTable talks to the host it is given, which coordinates the cluster: the
+  other nodes' addresses needn't be reachable (an SSH tunnel works).
+
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
 ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, Redis, Valkey, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore, CrateDB, QuestDB,
-                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet (the analytical ones are big images)
+                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet, Cassandra, ScyllaDB
+                                  # (the analytical ones are big images)
 ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
                                   # MongoDB standalone, replica set, sharded cluster, TLS + X.509
 scripts/test-mongo-srv.sh         # mongodb+srv:// with SRV/TXT records from a DNS container
@@ -468,7 +497,7 @@ goes into `key.go`, and copies with the old key take no more updates).
 
 ## Not implemented yet
 
-Other engines (IBM Db2, Cassandra, …), ER
+Other engines (IBM Db2, DynamoDB, …), ER
 diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 

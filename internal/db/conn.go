@@ -60,6 +60,8 @@ type Conn struct {
 	mongoClosed bool
 	// redis replaces db and conn on a Redis connection (redis*.go).
 	redis *redisState
+	// cass replaces db and conn on a Cassandra connection (cassandra.go).
+	cass *cassState
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -106,6 +108,9 @@ func (c *Conn) Close() error {
 	if c.redis != nil {
 		return c.closeRedis()
 	}
+	if c.cass != nil {
+		return c.closeCass()
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -135,6 +140,13 @@ func (c *Conn) lock(ctx context.Context) error {
 	}
 	if c.redis != nil { // so does Redis's
 		if c.redis.closed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		return nil
+	}
+	if c.cass != nil { // and gocql
+		if c.cass.closed {
 			c.mu.Unlock()
 			return ErrClosed
 		}
@@ -187,6 +199,13 @@ func (c *Conn) Ping(ctx context.Context) error {
 			return err
 		}
 		return cl.Ping(ctx).Err()
+	}
+	if c.cass != nil {
+		s, err := c.cassFor("")
+		if err != nil {
+			return err
+		}
+		return s.Query("SELECT release_version FROM system.local").WithContext(ctx).Exec()
 	}
 	return c.conn.PingContext(ctx)
 }
@@ -280,8 +299,8 @@ func (c *Conn) ColumnNames(ctx context.Context, t TableRef) ([]string, error) {
 	if c.mongo != nil {
 		return c.mongoQuickFields(ctx, t)
 	}
-	if c.redis != nil {
-		return nil, nil
+	if c.redis != nil { // keys, not columns
+		return []string{}, nil
 	}
 	cols, err := c.Columns(ctx, t)
 	if err != nil {
@@ -364,6 +383,9 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.redis != nil {
 		return c.redisFetchRows(ctx, t, p)
 	}
+	if c.cass != nil {
+		return c.cassFetchRows(ctx, t, p)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -388,6 +410,9 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.redis != nil {
 		return c.redisCountRows(ctx, t, p)
 	}
+	if c.cass != nil {
+		return c.cassCountRows(ctx, t, p)
+	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
 		return 0, err
@@ -409,6 +434,9 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	}
 	if c.redis != nil {
 		return c.redisApplyChanges(ctx, t, changes)
+	}
+	if c.cass != nil {
+		return c.cassApplyChanges(ctx, t, changes)
 	}
 	if err := questNoDelete(c, changes); err != nil {
 		return err
@@ -459,6 +487,9 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	if c.redis != nil {
 		return c.redisPreviewChanges(ctx, t, changes)
 	}
+	if c.cass != nil {
+		return c.cassPreviewChanges(ctx, t, changes)
+	}
 	if err := questNoDelete(c, changes); err != nil {
 		return nil, err
 	}
@@ -489,6 +520,9 @@ func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int)
 	}
 	if c.redis != nil {
 		return c.redisExecuteIn(ctx, schema, script, rowCap)
+	}
+	if c.cass != nil {
+		return c.cassExecuteIn(ctx, schema, script, rowCap)
 	}
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {

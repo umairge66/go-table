@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isMongo, mongoExtras } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isCassandra, isMongo, mongoExtras } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
@@ -73,7 +73,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   const columnMenu = (e: React.MouseEvent, c: Column, i: number) => {
     const isText = /char|text|enum|set/i.test(c.type)
     menu.open(e, [
-      { label: mongo ? 'Rename…' : 'Edit…', icon: <Pencil />, disabled: mongo && c.primaryKey, onSelect: () => editColumn(c) },
+      ...(isCassandra(driver) ? [] : [{ label: mongo ? 'Rename…' : 'Edit…', icon: <Pencil />, disabled: mongo && c.primaryKey, onSelect: () => editColumn(c) }]),
       'sep',
       ...(pkChangeable(!!pk) ? [
         { label: pk ? 'Make it the primary key' : 'Primary key', icon: <KeyRound />, disabled: pk?.columns.length === 1 && pk.columns[0] === c.name, onSelect: () => setPrimary([c.name]) },
@@ -152,7 +152,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
                 {!readOnly && (
                   <td className="px-2 py-1 text-right">
                     <span className="inline-flex gap-0.5 opacity-60 group-hover:opacity-100">
-                      <IconButton label={`Edit ${c.name}`} disabled={mongo && c.primaryKey} onClick={() => editColumn(c)}><Pencil className="size-3.5" /></IconButton>
+                      {!isCassandra(driver) && <IconButton label={`Edit ${c.name}`} disabled={mongo && c.primaryKey} onClick={() => editColumn(c)}><Pencil className="size-3.5" /></IconButton>}
                       <IconButton label={`Drop ${c.name}`} disabled={columns.length === 1 || (mongo && c.primaryKey)} onClick={() => dropColumns([c.name])}><Trash2 className="size-3.5" /></IconButton>
                       <IconButton label={`More for ${c.name}`} onClick={(e) => columnMenu(e, c, i)}><MoreHorizontal className="size-3.5" /></IconButton>
                     </span>
@@ -431,11 +431,11 @@ function TableOperations({ session, table, info, run, onRenamed }: {
       <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">{isMongo(driver) ? 'Collection' : 'Table'}</h3>
       <div className="space-y-4 rounded-xl border border-line p-4">
         {info?.options && <div className="text-[12.5px] text-fg-2" data-testid="collection-options">{info.options[0].toUpperCase() + info.options.slice(1)}.</div>}
-        <div className="flex items-end gap-2">
+        {!isCassandra(driver) && <div className="flex items-end gap-2">
           <Field label={isMongo(driver) ? 'Rename collection' : 'Rename table'} className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>
-        </div>
+        </div>}
         {features(driver).comments && (
           <div className="flex items-end gap-2">
             <Field label="Table comment" className="flex-1"><Input value={comment} placeholder="optional" aria-label="Table comment" onChange={(e) => setComment(e.target.value)} /></Field>

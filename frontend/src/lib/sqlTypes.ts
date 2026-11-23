@@ -184,6 +184,28 @@ const CATALOG: PerDriver<TypeGroup[]> = {
   // Never offered: a collection has no column types (see StructureView).
   mongodb: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   redis: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
+  cassandra: [
+    { label: 'Numeric', types: [
+      { name: 'int', hint: '4 bytes', traits: ['int'] }, { name: 'bigint', hint: '8 bytes', traits: ['int'] },
+      { name: 'smallint', hint: '2 bytes', traits: ['int'] }, { name: 'tinyint', hint: '1 byte', traits: ['int'] },
+      { name: 'varint', hint: 'any size' }, { name: 'decimal', hint: 'exact number' },
+      { name: 'double', hint: 'approximate, 8 bytes' }, { name: 'float', hint: 'approximate, 4 bytes' },
+      { name: 'counter', hint: 'changes only by + or −; a table of counters only' },
+    ] },
+    { label: 'Text', types: [{ name: 'text', hint: 'UTF-8', traits: ['text'] }, { name: 'ascii', hint: 'US-ASCII', traits: ['text'] }] },
+    { label: 'Date and time', types: [
+      { name: 'timestamp', hint: 'milliseconds, UTC' }, { name: 'date', hint: 'YYYY-MM-DD' }, { name: 'time', hint: 'nanoseconds of the day' },
+      { name: 'duration', hint: 'e.g. 1h30m' },
+    ] },
+    { label: 'Ids and other', types: [
+      { name: 'uuid', hint: 'random id' }, { name: 'timeuuid', hint: 'time-ordered id' }, { name: 'boolean', hint: 'true or false' },
+      { name: 'blob', hint: 'bytes (0x…)' }, { name: 'inet', hint: 'IP address' },
+    ] },
+    { label: 'Collections', types: [
+      { name: 'list<text>', hint: 'ordered, with repeats' }, { name: 'set<text>', hint: 'unique values, sorted' },
+      { name: 'map<text, text>', hint: 'keys to values' }, { name: 'frozen<list<text>>', hint: 'written as a whole' },
+    ] },
+  ],
   duckdb: [
     { label: 'Numeric', types: [
       { name: 'INTEGER', hint: '4 bytes', traits: ['int'] },

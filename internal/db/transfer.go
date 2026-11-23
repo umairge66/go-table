@@ -23,6 +23,9 @@ func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
 	if c.redis != nil {
 		return c.redisExec(ctx, stmt)
 	}
+	if c.cass != nil {
+		return c.cassExec(ctx, stmt)
+	}
 	if err := c.lock(ctx); err != nil {
 		return 0, err
 	}
@@ -65,6 +68,9 @@ func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []str
 	}
 	if c.redis != nil {
 		return c.redisStreamRows(ctx, t, p, fn)
+	}
+	if c.cass != nil {
+		return c.cassStreamRows(ctx, t, p, fn)
 	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
@@ -162,6 +168,9 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	}
 	if c.redis != nil {
 		return c.redisImportScript(ctx, r, o, progress)
+	}
+	if c.cass != nil {
+		return c.cassImportScript(ctx, r, o, progress)
 	}
 	if o.MaxErrors <= 0 {
 		o.MaxErrors = 200
@@ -335,6 +344,9 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	if c.redis != nil {
 		return 0, errors.New("CSV has rows, Redis has keys: import a script of commands instead")
 	}
+	if c.cass != nil {
+		return c.cassImportCSV(ctx, r, t, o, progress)
+	}
 	if len(o.Columns) == 0 || len(o.Columns) != len(o.Mapping) {
 		return 0, errors.New("choose at least one column to import")
 	}
@@ -475,6 +487,9 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	}
 	if c.redis != nil {
 		return c.redisDump(ctx, w, o, progress)
+	}
+	if c.cass != nil {
+		return c.cassDump(ctx, w, o, progress)
 	}
 	if o.BatchSize <= 0 {
 		o.BatchSize = 200

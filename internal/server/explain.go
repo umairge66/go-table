@@ -23,6 +23,14 @@ func Explain(err error) Friendly {
 		return false
 	}
 	switch {
+	case has("no hosts available in the pool", "unable to connect to initial hosts", "unable to discover protocol version"):
+		return Friendly{"Can't reach the server", "No Cassandra node answered on that host and port (9042 by default). Is it running, and does it listen on that address (rpc_address)?"}
+	case has("provided username") && has("incorrect"), has("authentication") && has("cassandra"):
+		return Friendly{"Wrong user name or password", "The Cassandra server rejected them."}
+	case has("might involve data filtering", "allow filtering"):
+		return Friendly{"Cassandra won't filter on that", "A WHERE on columns outside the primary key needs ALLOW FILTERING (GoTable adds it to the table's CQL filter), and reads the whole table: narrow it by the partition key if you can."}
+	case has("unconfigured table"):
+		return Friendly{"No such table", "The table isn't in this keyspace: check the name, or the keyspace (USE <keyspace>)."}
 	case has("wrongpass", "invalid username-password pair"):
 		return Friendly{"Wrong user name or password", "The Redis server rejected them. Leave the user empty for the default user."}
 	case has("noauth authentication required"):

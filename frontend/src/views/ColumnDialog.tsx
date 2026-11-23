@@ -21,6 +21,7 @@ export const TYPES: PerDriver<string[]> = {
     'BINARY_DOUBLE', 'RAW(16)', 'TIMESTAMP WITH TIME ZONE', 'BOOLEAN', 'JSON'],
   mongodb: ['string'],
   redis: ['string'],
+  cassandra: ['text', 'int', 'bigint', 'double', 'boolean', 'timestamp', 'date', 'uuid', 'timeuuid', 'blob', 'list<text>', 'set<text>', 'map<text, text>'],
   duckdb: ['VARCHAR', 'INTEGER', 'BIGINT', 'DECIMAL(18,3)', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'UUID', 'DOUBLE',
     'JSON', 'BLOB', 'INTEGER[]', 'VARCHAR[]', 'TIME', 'INTERVAL'],
   clickhouse: ['String', 'Int32', 'Int64', 'UInt64', 'Float64', 'Decimal(18,4)', 'Bool', 'Date', 'DateTime', 'DateTime64(3)',
@@ -36,6 +37,7 @@ export const EXPRESSIONS: PerDriver<string[]> = {
   oracle: ['SYSDATE', 'SYSTIMESTAMP', 'CURRENT_TIMESTAMP', 'SYS_GUID()'],
   mongodb: [],
   redis: [],
+  cassandra: ['now()', 'uuid()', 'toTimestamp(now())'],
   duckdb: ['current_timestamp', 'current_date', 'uuid()'],
   clickhouse: ['now()', 'today()', 'generateUUIDv4()', 'now64(3)'],
 }

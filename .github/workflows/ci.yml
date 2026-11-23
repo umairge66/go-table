@@ -340,6 +340,9 @@ jobs:
           - group: CrateDB and QuestDB
             engines: cratedb questdb
             run: TestCrateDB$|TestQuestDB$
+          - group: Cassandra and ScyllaDB
+            engines: cassandra scylla
+            run: TestCassandra
           - group: StarRocks
             engines: starrocks
             run: TestStarRocks$

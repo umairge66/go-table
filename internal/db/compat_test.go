@@ -24,9 +24,12 @@ type compatCaps struct {
 	textType string // for the added column; VARCHAR(50) by default
 	// nullNotEqual: NULL <> 'x' is true (QuestDB), not unknown as in SQL.
 	nullNotEqual bool
-	addCol       bool
-	csv          bool
-	dump         bool // a SQL dump loads back
+	// editor: two statements that run, and a script whose second fails
+	// (the defaults are SQL).
+	editorOK, editorStop string
+	addCol               bool
+	csv                  bool
+	dump                 bool // a SQL dump loads back
 }
 
 func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
@@ -100,7 +103,7 @@ func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
 			t.Fatalf("%+v", objs)
 		}
 		cols, err := c.Columns(ctx, ref)
-		if err != nil || len(cols) != 4 || cols[0].Name != "id" || cols[1].Name != "name" || caps.pk != cols[0].PrimaryKey {
+		if err != nil || len(cols) != 4 || cols[0].Name != "id" || !slices.ContainsFunc(cols, func(c Column) bool { return c.Name == "name" }) || caps.pk != cols[0].PrimaryKey {
 			t.Fatalf("%+v %v", cols, err)
 		}
 		if _, err := c.Indexes(ctx, ref); err != nil {
@@ -196,11 +199,16 @@ func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
 	})
 
 	t.Run("query editor", func(t *testing.T) {
-		res, err := c.Execute(ctx, "SELECT name FROM gt_c WHERE score > 80 ORDER BY name;\nSELECT COUNT(*) AS n FROM gt_c", 0)
+		ok, stop := caps.editorOK, caps.editorStop
+		if ok == "" {
+			ok = "SELECT name FROM gt_c WHERE score > 80 ORDER BY name;\nSELECT COUNT(*) AS n FROM gt_c"
+			stop = "SELECT 1 AS a;\nSELECT * FROM gt_no_such_table;\nSELECT 2 AS b"
+		}
+		res, err := c.Execute(ctx, ok, 0)
 		if err != nil || len(res) != 2 || res[0].Set == nil || res[1].Set.Rows[0][0].Text == "" {
 			t.Fatal(res, err)
 		}
-		res, _ = c.Execute(ctx, "SELECT 1 AS a;\nSELECT * FROM gt_no_such_table;\nSELECT 2 AS b", 0)
+		res, _ = c.Execute(ctx, stop, 0)
 		if len(res) != 2 || res[1].Err == nil {
 			t.Fatalf("an error should stop the script: %+v", res)
 		}

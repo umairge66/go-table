@@ -54,6 +54,8 @@ func BuildDropDatabase(d Dialect, dd DropDatabase) (string, error) {
 		return "", errors.New("a SQLite database is a file: delete the file, or remove the connection")
 	case model.DriverRedis:
 		return "", errors.New("Redis's numbered databases can't be deleted: empty one with FLUSHDB in the query editor")
+	case model.DriverCassandra:
+		return "DROP KEYSPACE " + d.QuoteIdent(name) + ";", nil
 	case model.DriverOracle:
 		return "", errors.New("on Oracle a schema is a user: drop it with DROP USER … CASCADE in the SQL editor (it needs the privilege to)")
 	case model.DriverDuckDB:
@@ -92,6 +94,12 @@ func (c *Conn) DropDatabase(ctx context.Context, dd DropDatabase) (string, error
 		}
 		defer c.mu.Unlock()
 		return stmt, c.mongo.Database(name).Drop(ctx)
+	}
+	if c.cass != nil {
+		if name == c.schema {
+			return "", fmt.Errorf("GoTable is using %s: open another keyspace first, then delete this one", name)
+		}
+		return stmt, c.cassRunAll(ctx, []string{stmt})
 	}
 	if (dd.Kind == "" || dd.Kind == "database") && (c.Dialect.family == model.DriverPostgres || c.Dialect.family == model.DriverMSSQL) {
 		if cur := c.CurrentDatabase(ctx); strings.EqualFold(cur, name) {

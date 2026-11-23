@@ -891,6 +891,9 @@ func (c *Conn) Alter(ctx context.Context, t TableRef, ops []AlterOp, dryRun bool
 	if c.redis != nil {
 		return nil, errRedisNoSQL
 	}
+	if c.cass != nil {
+		return c.cassAlter(ctx, t, ops, dryRun)
+	}
 	if c.mongo != nil {
 		stmts, err := buildMongoAlter(t, ops)
 		if err != nil || dryRun {

@@ -205,6 +205,9 @@ func (c *Conn) AddColumn(ctx context.Context, t TableRef, def ColumnDef) ([]stri
 	if c.redis != nil {
 		return nil, errRedisNoSQL
 	}
+	if c.cass != nil {
+		return c.cassAddColumn(ctx, t, def)
+	}
 	if c.mongo != nil {
 		return nil, errMongoNoColumns
 	}
@@ -268,6 +271,9 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 	}
 	if d.family == model.DriverRedis {
 		return buildRedisDrop(objs)
+	}
+	if d.family == model.DriverCassandra {
+		return buildCassDrop(d, objs), nil
 	}
 	var views, tables []string
 	for _, o := range objs {
@@ -356,6 +362,9 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 	}
 	if c.redis != nil {
 		return c.redisDrop(ctx, objs)
+	}
+	if c.cass != nil {
+		return c.cassDrop(ctx, objs)
 	}
 	if err := c.lock(ctx); err != nil {
 		return nil, err
