@@ -157,7 +157,7 @@ func TestSnowflakeKey(t *testing.T) {
 		{write("d", "ENCRYPTED PRIVATE KEY", enc), "", "passphrase"},
 		{write("e", "ENCRYPTED PRIVATE KEY", enc), "no", "passphrase is wrong"},
 		{write("f", "PUBLIC KEY", pub), "", "public key"},
-		{filepath.Join(dir, "none"), "", "no such file"},
+		{filepath.Join(dir, "none"), "", "the private key: open"},
 	} {
 		got, err := snowflakeKey(c.path, c.pass)
 		if c.err != "" {

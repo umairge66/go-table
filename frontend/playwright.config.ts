@@ -7,7 +7,8 @@ export default defineConfig({
   timeout: 60_000,
   workers: 1,
   fullyParallel: false,
-  reporter: [['list']],
+  // On GitHub, failures also show as annotations, readable without the log.
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   use: {
