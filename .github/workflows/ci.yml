@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -45,12 +45,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false # per-job cache below; a shared key keeps only one job's builds
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -80,12 +80,12 @@ jobs:
     steps:
       - name: Install the cross compiler
         run: dnf install -y -q git tar gzip ucrt64-gcc-c++
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -101,7 +101,7 @@ jobs:
           CXX: x86_64-w64-mingw32ucrt-g++
           GOFLAGS: -buildvcs=false
         run: go test -c -ldflags=-extldflags=-static -o tests/ ./internal/db ./internal/model ./internal/update ./internal/export
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: windows-tests
           path: tests/
@@ -113,7 +113,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: windows-tests
           path: tests
@@ -240,12 +240,12 @@ jobs:
       GOTABLE_TEST_VALKEY_HOST: 127.0.0.1
       GOTABLE_TEST_VALKEY_PORT: "6380"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -278,12 +278,12 @@ jobs:
       GOTABLE_TEST_ORACLE_PASSWORD: gotable-test
       GOTABLE_TEST_ORACLE_DB: FREEPDB1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -305,12 +305,12 @@ jobs:
       matrix:
         version: ["4.4", "8.0"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -354,12 +354,12 @@ jobs:
             engines: doris
             run: TestDoris$
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -415,19 +415,19 @@ jobs:
         options: >-
           --health-cmd "clickhouse-client --user gotable --password gotable-test -q 'SELECT 1'" --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
           key: go-e2e-${{ hashFiles('go.sum') }}
           restore-keys: go-e2e-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -455,7 +455,7 @@ jobs:
         run: npx playwright test
       - name: Keep the end-to-end traces of a failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-results
           path: frontend/test-results

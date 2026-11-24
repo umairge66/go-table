@@ -39,12 +39,12 @@ jobs:
             # still targets macOS 11+ (MACOSX_DEPLOYMENT_TARGET in package.sh).
             os: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false # per-target cache below
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -53,14 +53,14 @@ jobs:
           key: go-package-${{ matrix.target }}-${{ hashFiles('go.sum') }}
           restore-keys: go-package-${{ matrix.target }}-
       # linuxdeploy and its GTK plugin (scripts/package.sh fetches them once).
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         if: matrix.target == 'linux'
         with:
           path: |
             build/linuxdeploy
             build/linuxdeploy-plugin-gtk.sh
           key: appimage-tools-${{ hashFiles('scripts/package.sh') }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -75,7 +75,7 @@ jobs:
         run: scripts/package.sh ${{ matrix.target }} "$VERSION"
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: gotable-${{ matrix.target }}
           path: dist/*
@@ -91,21 +91,21 @@ jobs:
     steps:
       - name: Install the build tools
         run: dnf install -y -q git tar gzip zip findutils which ucrt64-gcc-c++ mingw32-nsis
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The checkout belongs to another user than the container's root.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
           key: go-package-windows-cgo-${{ hashFiles('go.sum') }}
           restore-keys: go-package-windows-cgo-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -117,7 +117,7 @@ jobs:
         run: scripts/package.sh windows "$VERSION"
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: gotable-windows
           path: dist/*
@@ -131,18 +131,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # the notes read the commits since the previous tag
       - name: Write the release notes
         run: scripts/release-notes.sh "${{ github.ref_name }}" > "$RUNNER_TEMP/notes.md"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
       # GoTable installs an update only if SHA256SUMS is signed with the key
       # it holds (internal/update); without the secret the release stops here.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: false
@@ -150,7 +150,7 @@ jobs:
         env:
           GOTABLE_RELEASE_KEY: ${{ secrets.GOTABLE_RELEASE_KEY }}
         run: go run ./cmd/release-sign dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body_path: ${{ runner.temp }}/notes.md
