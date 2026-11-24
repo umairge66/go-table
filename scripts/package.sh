@@ -47,9 +47,10 @@ linux)
 	cp build/linux/gotable packaging/gotable.desktop packaging/gotable.png LICENSE README.md "$stage/"
 	tar -C build/linux -czf "dist/gotable-$pkgver-linux-amd64.tar.gz" "gotable-$pkgver"
 
-	# Debian/Ubuntu and Fedora packages.
+	# Debian/Ubuntu and Fedora packages. nfpm can need a newer Go than
+	# GoTable does; setup-go sets GOTOOLCHAIN=local, which would refuse it.
 	for p in deb rpm; do
-		VERSION=$pkgver go run "$NFPM" package --config packaging/nfpm.yaml --packager "$p" --target dist/
+		VERSION=$pkgver GOTOOLCHAIN=auto go run "$NFPM" package --config packaging/nfpm.yaml --packager "$p" --target dist/
 	done
 
 	# AppImage, self-contained: GoTable plus WebKitGTK, GTK and their
