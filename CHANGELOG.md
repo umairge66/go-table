@@ -3,6 +3,16 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## Unreleased
+
+### Fixed
+
+- The update notice closes: OK, Later, Close and × did nothing once an update
+  was downloaded, installed or had failed. After Later, Settings → Updates
+  still offers the restart.
+- Settings → Panels applies to the connections already open, not only to the
+  next one opened.
+
 ## v0.11.0 — 2026-11-23
 
 ### Added

@@ -139,6 +139,15 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const [sidebarHidden, setSidebarHidden] = useState(() => !panelOpen(getSettings(), 'sidebar'))
   const toggleRail = useCallback(() => setRailHidden((v) => { rememberPanel('rail', v); return !v }), [])
   const toggleSidebar = useCallback(() => setSidebarHidden((v) => { rememberPanel('sidebar', v); return !v }), [])
+  // A choice changed in Settings → Panels applies here too, not only to the next connection.
+  const panelChoices = useRef(settings.panels)
+  useEffect(() => {
+    const was = panelChoices.current
+    panelChoices.current = settings.panels
+    if (was.rail !== settings.panels.rail) setRailHidden(!panelOpen(settings, 'rail'))
+    if (was.sidebar !== settings.panels.sidebar) setSidebarHidden(!panelOpen(settings, 'sidebar'))
+    if (was.inspector !== settings.panels.inspector) setInspector(panelOpen(settings, 'inspector'))
+  }, [settings])
   const [naming, setNaming] = useState<{ tabId: string; sql: string } | null>(null)
   const [creatingDb, setCreatingDb] = useState(false)
   const queryCounter = useRef(tabs.length)

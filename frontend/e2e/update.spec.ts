@@ -97,5 +97,37 @@ test('a newer release is found, skipped, brought back and installed', async ({ p
   await expect(notice).toContainText('GoTable 0.9.0 is installed', { timeout: 15_000 })
   await expect(notice.getByRole('button', { name: 'Restart now' })).toBeVisible()
   expect(readFileSync(target, 'utf8')).toBe('#!new gotable 0.9.0\n')
+
+  // Later hides it; Settings still offers the restart.
+  await notice.getByRole('button', { name: 'Later' }).click()
+  await expect(notice).toBeHidden()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await dlg.getByRole('button', { name: 'Updates' }).click()
+  await expect(dlg.getByRole('button', { name: 'Restart now' })).toBeEnabled()
   expect(errors).toEqual([])
 })
+
+// A package (.deb, .rpm) goes to the system's installer, and an update can
+// fail: each card closes with its button and with the ×.
+for (const [phase, text, button] of [['opened', 'is downloaded', 'OK'], ['failed', 'No luck', 'Close'], ['ready', 'is installed', 'Later']] as const) {
+  for (const close of [button, 'Dismiss']) {
+    test(`update notice, ${phase}: ${close} closes it`, async ({ page }) => {
+      const progress = { phase, done: 1, total: 1, version: 'v0.9.0', ...(phase === 'failed' ? { error: { title: 'No luck' } } : {}) }
+      await page.route('**/api/update/install', (r) => r.fulfill({ json: { ...progress, phase: 'downloading' } }))
+      await page.route('**/api/update/progress', (r) => r.fulfill({ json: progress }))
+      await page.goto(url)
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      const dlg = page.getByRole('dialog', { name: 'Settings' })
+      await dlg.getByRole('button', { name: 'Updates' }).click()
+      await dlg.getByRole('button', { name: 'Check now' }).click()
+      await dlg.getByRole('button', { name: 'Update', exact: true }).click()
+      await dlg.getByRole('button', { name: 'Done' }).click()
+      const notice = page.getByTestId('update-notice')
+      await expect(notice).toContainText(text)
+      await notice.getByRole('button', { name: close, exact: true }).click()
+      await expect(notice).toBeHidden()
+      await page.waitForTimeout(1000) // and it stays closed
+      await expect(notice).toBeHidden()
+    })
+  }
+}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Input, Kbd, Modal } from '../components/ui'
 import { ACCENTS, DEFAULTS, FONT_SIZES, accentColors, flushSettings, updateSettings, useSettings, type Panel, type PanelChoice, type ThemeChoice } from '../lib/settings'
-import { KIND_LABELS, checkForUpdates, installUpdate, openRelease, plainVersion, unskipUpdate, useUpdates } from '../lib/updates'
+import { KIND_LABELS, checkForUpdates, installUpdate, openRelease, plainVersion, restartToUpdate, unskipUpdate, useUpdates } from '../lib/updates'
 import { Notes } from '../components/UpdateNotice'
 import { FIXED, RESERVED, SHORTCUTS, binding, comboOf, conflicts, def, label, type ShortcutDef } from '../lib/shortcuts'
 
@@ -141,7 +141,7 @@ function Panels() {
   const s = useSettings()
   const choices: [PanelChoice, string][] = [['open', 'Open'], ['closed', 'Closed'], ['last', 'As I left it']]
   return (
-    <Group title="When a connection opens" hint="How each panel starts. You can still show or hide it at any time with its button or keys.">
+    <Group title="When a connection opens" hint="How each panel starts. A change also applies to the connections open now. You can still show or hide it at any time with its button or keys.">
       <div className="overflow-hidden rounded-xl border border-line">
         {PANEL_INFO.map(([p, name, what, shortcut, icon]) => (
           <div key={p} className="flex items-center gap-3 border-b border-line-2 px-3 py-2.5 last:border-0" data-testid={`panel-${p}`}>
@@ -373,10 +373,11 @@ function Updates() {
                   <ArrowUpCircle className="size-4 text-accent" />
                   <span className="flex-1 text-[13px] font-semibold">GoTable {plainVersion(u.check.latest)}</span>
                   <Button size="sm" variant="ghost" icon={<ExternalLink className="size-3.5" />} onClick={openRelease}>On GitHub</Button>
-                  <Button size="sm" variant="primary" disabled={busy || u.progress.phase === 'ready'} onClick={installUpdate}>
-                    {u.progress.phase === 'ready' ? 'Installed' : busy ? 'Installing…' : u.info?.how === 'installer' ? 'Download & install' : 'Update'}
+                  <Button size="sm" variant="primary" disabled={busy || u.restarting} onClick={u.progress.phase === 'ready' ? restartToUpdate : installUpdate}>
+                    {u.progress.phase === 'ready' ? 'Restart now' : busy ? 'Installing…' : u.info?.how === 'installer' ? 'Download & install' : 'Update'}
                   </Button>
                 </div>
+                {u.progress.phase === 'ready' && <div className="mt-1 text-[12px] text-muted">Installed: restart to use it. Commit or discard open edits first.</div>}
                 {u.check.notes && <div className="mt-2 max-h-56 overflow-auto rounded-md bg-panel-2 p-2.5"><Notes text={u.check.notes} /></div>}
               </div>
             )}

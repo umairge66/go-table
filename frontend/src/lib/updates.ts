@@ -13,7 +13,7 @@ export interface UpdateState {
   checking: boolean
   checkError?: string
   progress: UpdateProgress
-  /** dismissed: "Later" hides the notice until the next launch. */
+  /** dismissed: "Later", OK or × hides the notice until the next launch, the next install or a check by hand. */
   dismissed: boolean
   restarting: boolean
 }
@@ -57,7 +57,7 @@ export async function installUpdate() {
     set({ progress: await api.updateInstall(), dismissed: false })
   } catch (e) {
     const [title, detail] = errorParts(e)
-    set({ progress: { phase: 'failed', done: 0, total: 0, error: { title, detail } } })
+    set({ progress: { phase: 'failed', done: 0, total: 0, error: { title, detail } }, dismissed: false })
     return
   }
   clearInterval(polling)
@@ -75,7 +75,7 @@ export async function restartToUpdate() {
   set({ restarting: true })
   try { await api.updateRestart() } catch (e) {
     const [title, detail] = errorParts(e)
-    set({ restarting: false, progress: { ...state.progress, phase: 'failed', error: { title, detail } } })
+    set({ restarting: false, progress: { ...state.progress, phase: 'failed', error: { title, detail } }, dismissed: false })
   }
 }
 
@@ -91,10 +91,13 @@ export const unskipUpdate = () => updateSettings({ updates: { ...getSettings().u
 
 export const openRelease = () => api.updateOpenRelease().catch(() => {})
 
-/** showNotice: whether the corner notice is up (an update found, or one under way). */
+/** showNotice: whether the corner notice is up (an update found, under way, or over and not dismissed). */
 export function showNotice(s: UpdateState, skipped: string) {
-  if (s.restarting || s.progress.phase !== 'idle') return true
-  return !!s.check?.available && !s.dismissed && s.check.latest !== skipped
+  const { phase } = s.progress
+  // While it works there is nothing to dismiss.
+  if (s.restarting || phase === 'downloading' || phase === 'installing') return true
+  if (s.dismissed) return false
+  return phase !== 'idle' || (!!s.check?.available && s.check.latest !== skipped)
 }
 
 /** KIND_LABELS name how GoTable was installed. */
