@@ -186,8 +186,11 @@ if has questdb; then
 	export_env QUESTDB "$(port questdb 8812)" admin quest qdb
 fi
 if has starrocks; then
-	wait_ready starrocks in_container starrocks mysql -uroot -h127.0.0.1 -P9030 -e 'SELECT 1'
-	in_container starrocks mysql -uroot -h127.0.0.1 -P9030 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
+	# SELECT 1 answers before the backend that stores tables has joined: wait
+	# until a table can be made and written to.
+	wait_ready starrocks in_container starrocks mysql -uroot -h127.0.0.1 -P9030 -e "CREATE DATABASE IF NOT EXISTS gotable;
+		CREATE TABLE IF NOT EXISTS gotable.gt_ready (id INT NOT NULL) PRIMARY KEY (id) DISTRIBUTED BY HASH(id) PROPERTIES ('replication_num' = '1');
+		INSERT INTO gotable.gt_ready VALUES (1); DROP TABLE gotable.gt_ready"
 	export_env STARROCKS "$(port starrocks 9030)" root "" gotable
 fi
 if has doris; then # ready when its backend is

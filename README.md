@@ -9,7 +9,7 @@ FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB). A Go b
 on macOS).
 
 <p align="center">
-  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download GoTable" src="https://img.shields.io/github/v/release/umairge66/go-table?label=Download&logo=github&style=for-the-badge&color=5b5bd6"></a>
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download GoTable" src="docs/download.svg" width="232" height="44"></a>
 </p>
 <p align="center">
   <b>Linux:</b> <code>.deb</code> (Ubuntu/Debian) · <code>.rpm</code> (Fedora) · <code>.AppImage</code> (any distro)
@@ -246,7 +246,7 @@ Download the file for your system from the [latest release](https://github.com/u
 | Fedora 36+ | `gotable-<version>-1.x86_64.rpm` | `sudo dnf install ./gotable-*.x86_64.rpm` |
 | Any Linux | `GoTable-<version>-x86_64.AppImage` | `chmod +x GoTable-*.AppImage`, then run it — self-contained (WebKitGTK included) |
 | Windows 10 / 11 | `gotable-<version>-windows-amd64-setup.exe` | run it: installs GoTable for your account (no administrator needed), with a Start menu shortcut and an entry in Settings → Apps to uninstall it |
-| Windows, portable | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | run it: nothing is installed |
+| Windows, portable | `gotable-<version>-windows-amd64.exe` (or the `.zip`) | no setup needed: double-click the `.exe` to start GoTable (unzip the `.zip` first). Connections and settings are kept in `%AppData%\gotable` |
 | macOS 11+ (Apple silicon and Intel) | `GoTable-<version>-macos-universal.dmg` (or the `.zip`) | open it and drag GoTable to Applications |
 
 The `.deb` and `.rpm` pull in WebKitGTK and add GoTable to the app menu.

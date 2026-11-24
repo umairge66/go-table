@@ -43,7 +43,7 @@ jobs:
   vet:
     name: Go vet
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,7 +58,11 @@ jobs:
           key: go-vet-${{ hashFiles('go.sum') }}
           restore-keys: go-vet-
       - name: Install WebKitGTK
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev
+        # Ubuntu's mirrors are slow at times (30 s to 15 min): give up on a
+        # stalled download and retry it, and skip what vet doesn't need.
+        run: |
+          apt="sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          $apt update && $apt install -y --no-install-recommends libwebkit2gtk-4.1-dev
       - name: Go vet (desktop and browser builds)
         run: |
           go vet -tags desktop,production,webkit2_41 ./...

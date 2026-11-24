@@ -3,7 +3,7 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
-## Unreleased
+## v0.11.1 — 2026-11-24
 
 ### Fixed
 
@@ -12,6 +12,7 @@ release pages on GitHub also carry the full commit messages.
   still offers the restart.
 - Settings → Panels applies to the connections already open, not only to the
   next one opened.
+- The README's download button no longer depends on another site to load.
 
 ## v0.11.0 — 2026-11-23
 
