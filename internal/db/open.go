@@ -66,6 +66,12 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	if cfg.Driver.Family() == model.DriverDynamoDB {
 		return openDynamo(ctx, cfg, addr, cred.Password, tunnel)
 	}
+	if cfg.Driver.Family() == model.DriverElasticsearch {
+		return openElastic(ctx, cfg, addr, cred.Password, tunnel)
+	}
+	if cfg.Driver.Family() == model.DriverInfluxDB {
+		return openInflux(ctx, cfg, addr, cred.Password, tunnel)
+	}
 	var (
 		sqlDB *sql.DB
 		eng   engine
@@ -80,11 +86,18 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 			eng = crateEngine{}
 		case model.DriverQuestDB:
 			eng = questEngine{}
+		case model.DriverGreenplum:
+			eng = greenplumEngine{}
 		}
 	case model.DriverMySQL:
 		sqlDB, err = openMySQL(cfg, addr, cred.Password)
 		eng = mysqlEngine{}
 	case model.DriverSQLite:
+		if cfg.Driver.IsLibSQL() {
+			sqlDB, err = openLibSQL(cfg, addr, cred.Password, tunnel != nil)
+			eng = libsqlEngine{}
+			break
+		}
 		sqlDB, err = openSQLite(cfg.Path)
 		eng = sqliteEngine{}
 	case model.DriverMSSQL:
@@ -124,7 +137,7 @@ var openers = map[model.Driver]func(cfg *model.Connection, addr, password string
 // Supported reports whether this build can open connections of driver d.
 func Supported(d model.Driver) bool {
 	switch d.Family() {
-	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra, model.DriverDynamoDB:
+	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra, model.DriverDynamoDB, model.DriverElasticsearch, model.DriverInfluxDB:
 		return true
 	}
 	_, ok := openers[d.Family()]

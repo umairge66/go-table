@@ -49,6 +49,11 @@ func ParseURL(raw string) (*Connection, string, error) {
 	if strings.HasPrefix(strings.ToLower(raw), "dynamodb://") {
 		return parseDynamoURL(raw)
 	}
+	for _, s := range []string{"libsql://", "turso://"} {
+		if strings.HasPrefix(strings.ToLower(raw), s) {
+			return parseLibSQLURL(raw)
+		}
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid URL: %w", err)
@@ -73,6 +78,8 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverNeon
 	case "supabase":
 		d = DriverSupabase
+	case "greenplum", "gpdb":
+		d = DriverGreenplum
 	case "percona":
 		d = DriverPercona
 	case "singlestore", "memsql":
@@ -91,6 +98,12 @@ func ParseURL(raw string) (*Connection, string, error) {
 		d = DriverCassandra
 	case "scylla", "scylladb":
 		d = DriverScyllaDB
+	case "elasticsearch", "elastic", "elasticsearch+https":
+		d = DriverElasticsearch
+	case "opensearch", "opensearch+https":
+		d = DriverOpenSearch
+	case "influxdb", "influxdb3", "influxdb+https":
+		d = DriverInfluxDB
 	case "sqlserver", "mssql":
 		d = DriverMSSQL
 	case "clickhouse", "ch":
@@ -156,6 +169,27 @@ func ParseURL(raw string) (*Connection, string, error) {
 		if strings.EqualFold(q.Get("TrustServerCertificate"), "true") {
 			c.SSLMode = "trust"
 		}
+	}
+	if d.Family() == DriverElasticsearch {
+		c.DBName = ""
+		if strings.HasSuffix(strings.ToLower(u.Scheme), "+https") || strings.EqualFold(q.Get("ssl"), "true") {
+			c.SSLMode = "require"
+		}
+		if strings.EqualFold(q.Get("verify"), "false") {
+			c.SSLMode = "skip-verify"
+		}
+	}
+	if d == DriverInfluxDB {
+		if strings.HasSuffix(strings.ToLower(u.Scheme), "+https") || strings.EqualFold(q.Get("ssl"), "true") {
+			c.SSLMode = "require"
+		}
+		if t := q.Get("token"); t != "" {
+			password = t
+		}
+		if password == "" { // influxdb://TOKEN@host/db
+			password = c.User
+		}
+		c.User = ""
 	}
 	if d == DriverOracle && strings.EqualFold(q.Get("ssl"), "true") {
 		c.SSLMode = "require"
@@ -372,4 +406,38 @@ func parseDynamoURL(raw string) (*Connection, string, error) {
 		c.Name = "DynamoDB @ " + c.Host
 	}
 	return c, password, nil
+}
+
+// parseLibSQLURL reads libsql://host[:port][?authToken=…][&tls=0], as
+// libSQL's clients take it: TLS unless tls=0. The token is the password.
+func parseLibSQLURL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Hostname() == "" {
+		return nil, "", fmt.Errorf("the URL has no host")
+	}
+	d := DriverLibSQL
+	if strings.EqualFold(u.Scheme, "turso") || strings.HasSuffix(strings.ToLower(u.Hostname()), ".turso.io") {
+		d = DriverTurso
+	}
+	c := NewConnection(d)
+	c.Host = u.Hostname()
+	q := u.Query()
+	c.SSLMode, c.Port = "require", 443
+	if q.Get("tls") == "0" && d == DriverLibSQL {
+		c.SSLMode, c.Port = "disable", d.DefaultPort()
+	}
+	if p := u.Port(); p != "" {
+		if c.Port, err = strconv.Atoi(p); err != nil || c.Port <= 0 || c.Port > 65535 {
+			return nil, "", fmt.Errorf("invalid port %q", p)
+		}
+	}
+	token := q.Get("authToken")
+	if token == "" && u.User != nil {
+		token, _ = u.User.Password()
+	}
+	c.Name = c.Host
+	return c, token, nil
 }

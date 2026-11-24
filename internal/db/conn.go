@@ -67,6 +67,9 @@ type Conn struct {
 	cass *cassState
 	// dyn replaces db and conn on a DynamoDB connection (dynamodb.go).
 	dyn *dynState
+	// remote replaces db and conn on an engine of its own (remote.go).
+	remote       remote
+	remoteClosed bool
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -119,6 +122,9 @@ func (c *Conn) Close() error {
 	if c.dyn != nil {
 		return c.closeDyn()
 	}
+	if c.remote != nil {
+		return c.closeRemote()
+	}
 	if c.conn == nil {
 		return nil
 	}
@@ -162,6 +168,13 @@ func (c *Conn) lock(ctx context.Context) error {
 	}
 	if c.dyn != nil { // DynamoDB is requests, not a connection
 		if c.dyn.closed {
+			c.mu.Unlock()
+			return ErrClosed
+		}
+		return nil
+	}
+	if c.remote != nil { // nor are these
+		if c.remoteClosed {
 			c.mu.Unlock()
 			return ErrClosed
 		}
@@ -225,6 +238,9 @@ func (c *Conn) Ping(ctx context.Context) error {
 	if c.dyn != nil {
 		_, err := c.dyn.cl.ListTables(ctx, &dynamodb.ListTablesInput{Limit: aws.Int32(1)})
 		return dynErr(err)
+	}
+	if c.remote != nil {
+		return c.remote.ping(ctx, c)
 	}
 	return c.conn.PingContext(ctx)
 }
@@ -408,6 +424,13 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.dyn != nil {
 		return c.dynFetchRows(ctx, t, p)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer c.mu.Unlock()
+		return c.remote.fetchRows(ctx, c, t, p)
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -438,6 +461,13 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 	if c.dyn != nil {
 		return c.dynCountRows(ctx, t, p)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return 0, err
+		}
+		defer c.mu.Unlock()
+		return c.remote.countRows(ctx, c, t, p)
+	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
 		return 0, err
@@ -465,6 +495,13 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	}
 	if c.dyn != nil {
 		return c.dynApplyChanges(ctx, t, changes)
+	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return err
+		}
+		defer c.mu.Unlock()
+		return c.remote.applyChanges(ctx, c, t, changes)
 	}
 	if err := questNoDelete(c, changes); err != nil {
 		return err
@@ -521,6 +558,13 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	if c.dyn != nil {
 		return c.dynPreviewChanges(ctx, t, changes)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer c.mu.Unlock()
+		return c.remote.previewChanges(ctx, c, t, changes)
+	}
 	if err := questNoDelete(c, changes); err != nil {
 		return nil, err
 	}
@@ -557,6 +601,9 @@ func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int)
 	}
 	if c.dyn != nil {
 		return c.dynExecuteIn(ctx, script, rowCap)
+	}
+	if c.remote != nil {
+		return c.remoteExecuteIn(ctx, schema, script, rowCap)
 	}
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {
@@ -813,6 +860,9 @@ func (c *Conn) CurrentDatabase(ctx context.Context) string {
 		}
 		return c.Config.DBName
 	case model.DriverSQLite, model.DriverDuckDB:
+		if c.Config.Driver.IsLibSQL() {
+			return c.Config.Host
+		}
 		return c.Config.Path[strings.LastIndexAny(c.Config.Path, `/\`)+1:]
 	}
 	return c.Schema()

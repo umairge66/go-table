@@ -184,6 +184,8 @@ const CATALOG: PerDriver<TypeGroup[]> = {
   // Never offered: a collection has no column types (see StructureView).
   mongodb: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   redis: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
+  elasticsearch: [{ label: 'Fields', types: [{ name: 'keyword', hint: '' }, { name: 'text', hint: '' }, { name: 'long', hint: '' }, { name: 'double', hint: '' }, { name: 'boolean', hint: '' }, { name: 'date', hint: '' }, { name: 'object', hint: '' }] }],
+  influxdb: [{ label: 'Columns', types: [{ name: 'tag', hint: 'part of the key' }, { name: 'float64', hint: '' }, { name: 'int64', hint: '' }, { name: 'uint64', hint: '' }, { name: 'utf8', hint: 'text' }, { name: 'boolean', hint: '' }] }],
   dynamodb: [{ label: 'Keys', types: [{ name: 'S', hint: 'string' }, { name: 'N', hint: 'number' }, { name: 'B', hint: 'binary' }] }],
   cassandra: [
     { label: 'Numeric', types: [

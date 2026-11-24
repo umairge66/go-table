@@ -206,7 +206,7 @@ func runCompatSuite(t *testing.T, c *Conn, caps compatCaps) {
 			stop = "SELECT 1 AS a;\nSELECT * FROM gt_no_such_table;\nSELECT 2 AS b"
 		}
 		res, err := c.Execute(ctx, ok, 0)
-		if err != nil || len(res) != 2 || res[0].Set == nil || res[1].Set.Rows[0][0].Text == "" {
+		if err != nil || len(res) != 2 || res[0].Set == nil || res[1].Set.Rows[0][0].Text == "" || res[0].Duration <= 0 {
 			t.Fatal(res, err)
 		}
 		res, _ = c.Execute(ctx, stop, 0)

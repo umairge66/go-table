@@ -11,7 +11,7 @@ import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, error
 import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
 import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
-import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isMongo, isRedis, usesCommands } from '../types'
+import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isElastic, isMongo, isRedis, noInserts, usesCommands } from '../types'
 import { escapeKey, isPattern, keyLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
@@ -265,7 +265,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     menu.open(e, [
       { label: 'Copy value', icon: <Copy />, kbd: 'Ctrl C', onSelect: () => navigator.clipboard?.writeText(v ?? 'NULL') },
       { label: rs.length > 1 ? `Copy ${rs.length} rows as JSON` : 'Copy row as JSON', onSelect: () => navigator.clipboard?.writeText(JSON.stringify(rs.length > 1 ? rs.map(rowObject) : rowObject(r), null, 2)) },
-      ...(mongo || redis || isDynamo(session.connection.driver) ? [] : [{ label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) }]),
+      ...(redis || noInserts(session.connection.driver) ? [] : [{ label: 'Copy row as INSERT', onSelect: () => navigator.clipboard?.writeText(rs.map((x) => `INSERT INTO ${object.name} (${names.join(', ')}) VALUES (${names.map((_, i) => sqlLiteral(cell(x, i).value)).join(', ')});`).join('\n')) }]),
       'sep',
       ...(columns?.[c]?.references && v !== null && onOpenReference ? (() => {
         const fk = columns[c].references!
@@ -377,8 +377,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               ))}
               {!redis && <div className="flex items-center gap-1.5">
                 <span className="w-[13px]" />
-                <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">{mongo ? 'Query filter (optional)' : isCassandra(session.connection.driver) ? 'WHERE (CQL, on the server)' : isDynamo(session.connection.driver) ? 'WHERE (PartiQL, on the server)' : 'WHERE (raw SQL, optional)'}</span>
-                <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder={mongo ? '{ age: { $gt: 30 } }' : isCassandra(session.connection.driver) ? "user_id = 1b4e28ba-2fa1-11d2-883f-0016d3cca427" : isDynamo(session.connection.driver) ? `"user_id" = 'u1'` : "created_at > now() - interval '7 days'"} onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
+                <span className="w-[calc(11rem+0.375rem+9rem)] shrink-0 font-mono text-[11.5px] font-semibold text-muted">{mongo ? 'Query filter (optional)' : isCassandra(session.connection.driver) ? 'WHERE (CQL, on the server)' : isDynamo(session.connection.driver) ? 'WHERE (PartiQL, on the server)' : isElastic(session.connection.driver) ? 'Query (Lucene or JSON)' : 'WHERE (raw SQL, optional)'}</span>
+                <Input mono className="flex-1" aria-label="Raw WHERE" value={rawWhere} placeholder={mongo ? '{ age: { $gt: 30 } }' : isCassandra(session.connection.driver) ? "user_id = 1b4e28ba-2fa1-11d2-883f-0016d3cca427" : isDynamo(session.connection.driver) ? `"user_id" = 'u1'` : isElastic(session.connection.driver) ? 'status:active AND age:>30   or   {"term": {"status": "active"}}' : "created_at > now() - interval '7 days'"} onChange={(e) => setRawWhere(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && apply()} />
                 <Button size="sm" variant="ghost" onClick={clearFilters}>Clear</Button>
                 <Button size="sm" variant="primary" onClick={apply} kbd={applyKeys}>Apply</Button>
               </div>}
@@ -493,7 +493,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
           </>
         )}
         {mode !== 'data' && <div className="flex-1" />}
-        <Button size="sm" variant="ghost" onClick={() => openQuery(redis ? redisQuery() : isDynamo(session.connection.driver) ? `SELECT * FROM "${object.name}"` : mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{usesCommands(session.connection.driver) ? 'Open in query' : 'Open in SQL'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => openQuery(redis ? redisQuery() : isElastic(session.connection.driver) ? `GET /${object.name}/_search\n{\n  "size": 100,\n  "query": { "match_all": {} }\n}` : isDynamo(session.connection.driver) ? `SELECT * FROM "${object.name}"` : mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{usesCommands(session.connection.driver) ? 'Open in query' : 'Open in SQL'}</Button>
       </div>
 
       {review && (

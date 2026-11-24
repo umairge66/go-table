@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, 
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, isDynamo, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, isDynamo, isElastic, isInflux, isLibSQL, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
@@ -63,6 +63,8 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
       ...x, driver: d,
       // DynamoDB has no host unless it's a local one: AWS is found by region.
       host: isDynamo(d) && x.host === '127.0.0.1' ? '' : !isDynamo(d) && !x.host && isDynamo(x.driver) ? '127.0.0.1' : x.host,
+      // A libSQL server takes a token only.
+      ...(isLibSQL(d) ? { user: '', database: '' } : isElastic(d) ? { database: '' } : isInflux(d) ? { user: '' } : {}),
       port: !x.port || x.port === prevDefault ? driverInfo(d).port : x.port,
       ssl_mode: forDriver(SSL_MODES, d).includes(x.ssl_mode ?? '') ? x.ssl_mode : forDriver(SSL_MODES, d)[0],
     }
@@ -216,11 +218,19 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
               <Field label={isDynamo(c.driver) ? 'Endpoint host (DynamoDB Local)' : 'Host'}><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
               <Field label="Port"><Input inputMode="numeric" value={c.srv ? '' : c.port || ''} disabled={c.srv} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
             </div>
+            {isInflux(c.driver) ? <>
+              <Field label="Token" hint="An admin or database token. Leave empty for a server started without authentication.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+              <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+            </> : isLibSQL(c.driver) ? (
+              <Field label="Authentication token" hint={c.driver === 'libsql' ? 'Leave empty for a server that asks for none.' : undefined}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+            ) : <>
             <div className="grid grid-cols-2 gap-3">
               <Field label={isDynamo(c.driver) ? 'Access key ID' : 'User'}><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
               <Field label={isDynamo(c.driver) ? 'Secret access key' : 'Password'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
             </div>
-            <Field label={isDynamo(c.driver) ? 'Region' : 'Database'}><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>
+            {!isElastic(c.driver) && <Field label={isDynamo(c.driver) ? 'Region' : 'Database'}><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>}
+            </>}
+            {isElastic(c.driver) && <p className="text-[12px] text-muted">For an API key, leave User empty and enter the encoded key as the password.</p>}
             {isDynamo(c.driver) && (
               <Field label="Options" hint="Without an access key, GoTable signs in as the AWS CLI does (environment, ~/.aws, SSO); profile=name picks a profile. Reading tables on AWS is billed to the account.">
                 <Input mono value={c.options ?? ''} placeholder="profile=default" onChange={(e) => set('options', e.target.value)} />

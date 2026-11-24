@@ -1,9 +1,9 @@
-export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb'
-  | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase'
+export type Driver = 'postgres' | 'mysql' | 'mariadb' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb' | 'elasticsearch' | 'influxdb'
+  | 'cockroachdb' | 'yugabytedb' | 'timescaledb' | 'neon' | 'supabase' | 'greenplum' | 'libsql' | 'turso' | 'opensearch'
   | 'tidb' | 'percona' | 'singlestore' | 'planetscale' | 'starrocks' | 'doris' | 'cratedb' | 'questdb'
   | 'ferretdb' | 'documentdb' | 'valkey' | 'dragonfly' | 'keydb' | 'garnet' | 'scylladb'
 /** Family: the engine whose protocol and SQL dialect a driver uses. */
-export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb'
+export type Family = 'postgres' | 'mysql' | 'sqlite' | 'sqlserver' | 'oracle' | 'duckdb' | 'clickhouse' | 'mongodb' | 'redis' | 'cassandra' | 'dynamodb' | 'elasticsearch' | 'influxdb'
 
 /** family maps compatible servers and services to the engine they follow. */
 export const family = (d: Driver): Family => driverInfo(d).family
@@ -17,8 +17,18 @@ export const mongoExtras = (d: Driver) => isMongo(d) && d !== 'ferretdb'
 export const isCassandra = (d: Driver) => family(d) === 'cassandra'
 /** isDynamo: an AWS web service: PartiQL, items without fixed attributes, a region and AWS keys. */
 export const isDynamo = (d: Driver) => family(d) === 'dynamodb'
+/** isElastic: documents in indices: requests (and SQL) instead of tables and SQL statements. */
+export const isElastic = (d: Driver) => family(d) === 'elasticsearch'
+/** isInflux: time series: SQL reads, writes are line protocol; a point's key is its tags and time. */
+export const isInflux = (d: Driver) => family(d) === 'influxdb'
+/** fixedStructure: columns and indexes can't be changed from the structure view. */
+export const fixedStructure = (d: Driver) => isDynamo(d) || isElastic(d) || isInflux(d)
+/** noInserts: rows don't fit SQL INSERT statements. */
+export const noInserts = (d: Driver) => usesCommands(d) || isCassandra(d) || isDynamo(d) || isInflux(d)
+/** isLibSQL: SQLite's SQL on a server, reached over HTTP with a token. */
+export const isLibSQL = (d: Driver) => d === 'libsql' || d === 'turso'
 /** usesCommands: the query editor takes the server's own commands, not SQL. */
-export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d)
+export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d) || isElastic(d)
 
 /** PerDriver: a value for each family, optionally overridden for one driver. */
 export type PerDriver<T> = Record<Family, T> & Partial<Record<Driver, T>>
@@ -81,12 +91,21 @@ export const FEATURES: Record<Family, Features> = {
   // Keys are fixed when a table is made; a commit is one transaction.
   dynamodb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false, autoIncrement: false,
     comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
+  // Each document is written by itself; mappings change through requests.
+  elasticsearch: { ...BASE, transactions: false, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false, autoIncrement: false,
+    comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
+  // Points are added and their fields replaced; nothing else changes.
+  influxdb: { ...BASE, foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, uniqueIndexes: false, autoIncrement: false,
+    comments: false, collations: false, createDatabase: false, importTransaction: false, onUpdate: false },
 }
 /** DRIVER_FEATURES: where a server differs from its family's engine. */
 const DRIVER_FEATURES: Partial<Record<Driver, Partial<Features> & { tableOptions?: boolean }>> = {
   // A distributed database: no foreign keys or CHECKs; the primary key is
   // the shard key, and table options are fixed at creation.
   singlestore: { foreignKeys: false, checks: false, renameIndex: false, primaryKey: false, tableOptions: false },
+  // A server, not a file: no ATTACH, and databases are made by its own tools.
+  libsql: { file: false, createDatabase: false },
+  turso: { file: false, createDatabase: false },
   // Every column is indexed by CrateDB itself; no foreign keys or transactions.
   cratedb: { transactions: false, importTransaction: false, foreignKeys: false, renameIndex: false, uniqueIndexes: false, primaryKey: false,
     autoIncrement: false, comments: false, collations: false, cascade: false, createDatabase: false, onUpdate: false, indexMethods: [] },
@@ -274,11 +293,14 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'redis', label: 'Redis', family: 'redis', port: 6379, color: '#d82c20', user: 'optional', database: 'number, e.g. 0' },
   { id: 'cassandra', label: 'Cassandra', family: 'cassandra', port: 9042, color: '#1287b1', user: 'optional', database: 'keyspace, optional' },
   { id: 'dynamodb', label: 'DynamoDB', family: 'dynamodb', port: 8000, color: '#4053d6', user: 'empty: your AWS profile', host: 'empty: AWS', database: 'us-east-1' },
+  { id: 'elasticsearch', label: 'Elasticsearch', family: 'elasticsearch', port: 9200, color: '#00788a', user: 'empty: API key' },
+  { id: 'influxdb', label: 'InfluxDB 3', family: 'influxdb', port: 8181, color: '#7a2bbf', user: '', database: 'empty: the first one' },
   { id: 'cockroachdb', label: 'CockroachDB', family: 'postgres', port: 26257, color: '#6933ff', user: 'root' },
   { id: 'yugabytedb', label: 'YugabyteDB', family: 'postgres', port: 5433, color: '#c4471f', user: 'yugabyte' },
   { id: 'timescaledb', label: 'TimescaleDB', family: 'postgres', port: 5432, color: '#a3610b', user: 'postgres' },
   { id: 'neon', label: 'Neon', family: 'postgres', port: 5432, color: '#047857', user: 'neondb_owner', hosted: true, host: 'ep-…-pooler.region.aws.neon.tech' },
   { id: 'supabase', label: 'Supabase', family: 'postgres', port: 5432, color: '#1f7a4f', user: 'postgres', hosted: true, host: 'db.<project>.supabase.co' },
+  { id: 'greenplum', label: 'Greenplum', family: 'postgres', port: 5432, color: '#2f7d32', user: 'gpadmin', database: 'postgres' },
   { id: 'tidb', label: 'TiDB', family: 'mysql', port: 4000, color: '#c0130a', user: 'root' },
   { id: 'percona', label: 'Percona Server', family: 'mysql', port: 3306, color: '#b5341a', user: 'root' },
   { id: 'singlestore', label: 'SingleStore', family: 'mysql', port: 3306, color: '#7a1fa2', user: 'root' },
@@ -295,10 +317,14 @@ export const DRIVERS: { id: Driver; label: string; family: Family; port: number;
   { id: 'keydb', label: 'KeyDB', family: 'redis', port: 6379, color: '#c2410c', user: 'optional', database: 'number, e.g. 0' },
   { id: 'garnet', label: 'Garnet', family: 'redis', port: 6379, color: '#9f1239', user: 'optional', database: 'number, e.g. 0' },
   { id: 'scylladb', label: 'ScyllaDB', family: 'cassandra', port: 9042, color: '#53389e', user: 'optional', database: 'keyspace, optional' },
+  { id: 'opensearch', label: 'OpenSearch', family: 'elasticsearch', port: 9200, color: '#005eb8', user: 'optional' },
+  { id: 'libsql', label: 'libSQL', family: 'sqlite', port: 8080, color: '#1f7a6b', user: '' },
+  { id: 'turso', label: 'Turso (untested)', family: 'sqlite', port: 443, color: '#0f766e', user: '', hosted: true, host: '<database>-<organization>.turso.io',
+    note: "Untested: GoTable hasn't been tried against Turso's cloud. It uses the same protocol as a libSQL server, which is tested. Create a token with “turso db tokens create <database>”. Please report what doesn't work." },
 ]
 
 /** ENGINES come first in the picker; the rest are compatible with one of them. */
-export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb', 'redis', 'cassandra', 'dynamodb']
+export const ENGINES: Driver[] = ['postgres', 'mysql', 'mariadb', 'sqlite', 'sqlserver', 'oracle', 'duckdb', 'clickhouse', 'mongodb', 'redis', 'cassandra', 'dynamodb', 'elasticsearch', 'influxdb']
 
 export const driverInfo = (d: Driver) => DRIVERS.find((x) => x.id === d) ?? DRIVERS[0]
 
@@ -327,10 +353,14 @@ export const SSL_MODES: PerDriver<string[]> = {
   redis: ['disable', 'require', 'skip-verify'],
   cassandra: ['disable', 'require', 'skip-verify'],
   dynamodb: ['disable', 'require', 'skip-verify'],
+  elasticsearch: ['disable', 'require', 'skip-verify'],
+  influxdb: ['disable', 'require', 'skip-verify'],
   neon: ['require', 'verify-full', 'verify-ca'],
   supabase: ['require', 'verify-full', 'verify-ca'],
   planetscale: ['required', 'verify_identity', 'verify_ca'],
   documentdb: ['require', 'skip-verify'],
+  libsql: ['disable', 'require', 'skip-verify'],
+  turso: ['require'],
 }
 
 export const FILTER_OPS: FilterOp[] = ['=', '<>', '<', '>', '<=', '>=', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL', 'BETWEEN',

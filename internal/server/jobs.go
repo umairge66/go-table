@@ -477,6 +477,9 @@ func (s *Server) exportTableJob(se *session, in jobRequest) (*Job, error) {
 	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverDynamoDB {
 		return nil, errors.New("SQL INSERTs don't fit DynamoDB's types: export CSV or JSON, or the tables as a GoTable script")
 	}
+	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverElasticsearch {
+		return nil, errors.New("Elasticsearch has no INSERT: export CSV or JSON, or the indices as requests")
+	}
 	if in.Format == "sql" && se.c().Config.Driver.Family() == model.DriverCassandra {
 		return nil, errors.New("SQL INSERTs don't fit CQL's types: export CSV or JSON, or the keyspace as a CQL script")
 	}
@@ -587,6 +590,9 @@ func (s *Server) exportDatabaseJob(se *session, in jobRequest) (*Job, error) {
 			}
 			if c.Config.Driver.Family() == model.DriverDynamoDB {
 				ext = ".partiql" // CREATE TABLE … WITH and PUT lines
+			}
+			if c.Config.Driver.Family() == model.DriverElasticsearch {
+				ext = ".es" // requests
 			}
 			f, err := s.resultFile(j, base+ext)
 			if err != nil {

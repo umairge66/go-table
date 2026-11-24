@@ -36,6 +36,15 @@ const (
 	// DriverDynamoDB is an AWS web service: a region (DBName) and AWS
 	// credentials; Host is only for another endpoint (DynamoDB Local).
 	DriverDynamoDB Driver = "dynamodb"
+	// DriverElasticsearch: documents in indices, over HTTP.
+	DriverElasticsearch Driver = "elasticsearch"
+	DriverOpenSearch    Driver = "opensearch" // Elasticsearch's API
+	// DriverInfluxDB: InfluxDB 3, SQL over HTTP and writes as line protocol.
+	DriverInfluxDB Driver = "influxdb"
+
+	// libSQL servers run SQLite's SQL over HTTP: sqld, and Turso's cloud.
+	DriverLibSQL Driver = "libsql"
+	DriverTurso  Driver = "turso"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -43,6 +52,8 @@ const (
 	DriverTimescaleDB Driver = "timescaledb"
 	DriverNeon        Driver = "neon"
 	DriverSupabase    Driver = "supabase"
+	// PostgreSQL spread over segments (6 is PostgreSQL 9.4, 7 is 12).
+	DriverGreenplum Driver = "greenplum"
 	// Servers that speak the MySQL protocol and SQL dialect.
 	DriverTiDB        Driver = "tidb"
 	DriverPercona     Driver = "percona"
@@ -76,47 +87,53 @@ type driverSpec struct {
 }
 
 var specs = map[Driver]driverSpec{
-	DriverPostgres:    {"PostgreSQL", DriverPostgres, 5432, false},
-	DriverMySQL:       {"MySQL", DriverMySQL, 3306, false},
-	DriverMariaDB:     {"MariaDB", DriverMySQL, 3306, false},
-	DriverSQLite:      {"SQLite", DriverSQLite, 0, false},
-	DriverMSSQL:       {"SQL Server", DriverMSSQL, 1433, false},
-	DriverDuckDB:      {"DuckDB", DriverDuckDB, 0, false},
-	DriverClickHouse:  {"ClickHouse", DriverClickHouse, 9000, false},
-	DriverOracle:      {"Oracle", DriverOracle, 1521, false},
-	DriverMongoDB:     {"MongoDB", DriverMongoDB, 27017, false},
-	DriverRedis:       {"Redis", DriverRedis, 6379, false},
-	DriverCassandra:   {"Cassandra", DriverCassandra, 9042, false},
-	DriverDynamoDB:    {"DynamoDB", DriverDynamoDB, 8000, false},
-	DriverScyllaDB:    {"ScyllaDB", DriverCassandra, 9042, false},
-	DriverValkey:      {"Valkey", DriverRedis, 6379, false},
-	DriverCockroachDB: {"CockroachDB", DriverPostgres, 26257, false},
-	DriverYugabyteDB:  {"YugabyteDB", DriverPostgres, 5433, false},
-	DriverTimescaleDB: {"TimescaleDB", DriverPostgres, 5432, false},
-	DriverNeon:        {"Neon", DriverPostgres, 5432, true},
-	DriverSupabase:    {"Supabase", DriverPostgres, 5432, true},
-	DriverTiDB:        {"TiDB", DriverMySQL, 4000, false},
-	DriverPercona:     {"Percona Server", DriverMySQL, 3306, false},
-	DriverSingleStore: {"SingleStore", DriverMySQL, 3306, false},
-	DriverPlanetScale: {"PlanetScale", DriverMySQL, 3306, true},
-	DriverDragonfly:   {"Dragonfly", DriverRedis, 6379, false},
-	DriverKeyDB:       {"KeyDB", DriverRedis, 6379, false},
-	DriverGarnet:      {"Garnet", DriverRedis, 6379, false},
-	DriverFerretDB:    {"FerretDB", DriverMongoDB, 27017, false},
-	DriverDocumentDB:  {"Amazon DocumentDB", DriverMongoDB, 27017, true},
-	DriverStarRocks:   {"StarRocks", DriverMySQL, 9030, false},
-	DriverDoris:       {"Apache Doris", DriverMySQL, 9030, false},
-	DriverCrateDB:     {"CrateDB", DriverPostgres, 5432, false},
-	DriverQuestDB:     {"QuestDB", DriverPostgres, 8812, false},
+	DriverPostgres:      {"PostgreSQL", DriverPostgres, 5432, false},
+	DriverMySQL:         {"MySQL", DriverMySQL, 3306, false},
+	DriverMariaDB:       {"MariaDB", DriverMySQL, 3306, false},
+	DriverSQLite:        {"SQLite", DriverSQLite, 0, false},
+	DriverMSSQL:         {"SQL Server", DriverMSSQL, 1433, false},
+	DriverDuckDB:        {"DuckDB", DriverDuckDB, 0, false},
+	DriverClickHouse:    {"ClickHouse", DriverClickHouse, 9000, false},
+	DriverOracle:        {"Oracle", DriverOracle, 1521, false},
+	DriverMongoDB:       {"MongoDB", DriverMongoDB, 27017, false},
+	DriverRedis:         {"Redis", DriverRedis, 6379, false},
+	DriverCassandra:     {"Cassandra", DriverCassandra, 9042, false},
+	DriverDynamoDB:      {"DynamoDB", DriverDynamoDB, 8000, false},
+	DriverLibSQL:        {"libSQL", DriverSQLite, 8080, false},
+	DriverTurso:         {"Turso", DriverSQLite, 443, true},
+	DriverElasticsearch: {"Elasticsearch", DriverElasticsearch, 9200, false},
+	DriverOpenSearch:    {"OpenSearch", DriverElasticsearch, 9200, false},
+	DriverInfluxDB:      {"InfluxDB", DriverInfluxDB, 8181, false},
+	DriverScyllaDB:      {"ScyllaDB", DriverCassandra, 9042, false},
+	DriverValkey:        {"Valkey", DriverRedis, 6379, false},
+	DriverCockroachDB:   {"CockroachDB", DriverPostgres, 26257, false},
+	DriverYugabyteDB:    {"YugabyteDB", DriverPostgres, 5433, false},
+	DriverTimescaleDB:   {"TimescaleDB", DriverPostgres, 5432, false},
+	DriverNeon:          {"Neon", DriverPostgres, 5432, true},
+	DriverSupabase:      {"Supabase", DriverPostgres, 5432, true},
+	DriverGreenplum:     {"Greenplum", DriverPostgres, 5432, false},
+	DriverTiDB:          {"TiDB", DriverMySQL, 4000, false},
+	DriverPercona:       {"Percona Server", DriverMySQL, 3306, false},
+	DriverSingleStore:   {"SingleStore", DriverMySQL, 3306, false},
+	DriverPlanetScale:   {"PlanetScale", DriverMySQL, 3306, true},
+	DriverDragonfly:     {"Dragonfly", DriverRedis, 6379, false},
+	DriverKeyDB:         {"KeyDB", DriverRedis, 6379, false},
+	DriverGarnet:        {"Garnet", DriverRedis, 6379, false},
+	DriverFerretDB:      {"FerretDB", DriverMongoDB, 27017, false},
+	DriverDocumentDB:    {"Amazon DocumentDB", DriverMongoDB, 27017, true},
+	DriverStarRocks:     {"StarRocks", DriverMySQL, 9030, false},
+	DriverDoris:         {"Apache Doris", DriverMySQL, 9030, false},
+	DriverCrateDB:       {"CrateDB", DriverPostgres, 5432, false},
+	DriverQuestDB:       {"QuestDB", DriverPostgres, 8812, false},
 }
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB,
-	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB, DriverElasticsearch, DriverInfluxDB,
+	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase, DriverGreenplum,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverStarRocks, DriverDoris,
 	DriverCrateDB, DriverQuestDB, DriverFerretDB, DriverDocumentDB,
-	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet, DriverScyllaDB}
+	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet, DriverScyllaDB, DriverOpenSearch, DriverLibSQL, DriverTurso}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
 // DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
@@ -144,15 +161,23 @@ func (d Driver) DefaultPort() int { return specs[d].port }
 // IsFileBased reports whether the driver opens a local file instead of a
 // network server.
 func (d Driver) IsFileBased() bool {
-	f := d.Family()
-	return f == DriverSQLite || f == DriverDuckDB
+	return d == DriverSQLite || d == DriverDuckDB
 }
+
+// IsLibSQL reports a libSQL server: SQLite's SQL, but over the network.
+func (d Driver) IsLibSQL() bool { return d == DriverLibSQL || d == DriverTurso }
 
 // IsHosted reports a cloud service, which only accepts TLS connections.
 func (d Driver) IsHosted() bool { return specs[d].hosted }
 
 // SSLModes returns the SSL modes the driver accepts, first entry is default.
 func (d Driver) SSLModes() []string {
+	switch d {
+	case DriverLibSQL:
+		return []string{"disable", "require", "skip-verify"}
+	case DriverTurso:
+		return []string{"require"}
+	}
 	var modes []string
 	switch d.Family() {
 	case DriverPostgres:
@@ -162,7 +187,7 @@ func (d Driver) SSLModes() []string {
 	case DriverMSSQL:
 		// go-mssqldb's encrypt setting; "trust" accepts a self-signed certificate.
 		modes = []string{"optional", "disable", "required", "trust", "strict"}
-	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB:
+	case DriverClickHouse, DriverOracle, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB, DriverElasticsearch, DriverInfluxDB:
 		modes = []string{"disable", "require", "skip-verify"}
 	default:
 		return nil
@@ -321,7 +346,7 @@ func (c *Connection) Validate() error {
 		}
 	default:
 		// MongoDB, Redis and Cassandra servers run without users unless told otherwise.
-		if c.User == "" && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra && c.Driver.Family() != DriverDynamoDB {
+		if c.User == "" && !c.Driver.IsLibSQL() && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra && c.Driver.Family() != DriverDynamoDB && c.Driver.Family() != DriverElasticsearch && c.Driver.Family() != DriverInfluxDB {
 			return fmt.Errorf("user is required")
 		}
 		if c.Port < 0 || c.Port > 65535 {

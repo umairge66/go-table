@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, isCassandra, isDynamo, isMongo, mongoExtras } from '../types'
+import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, fixedStructure, isCassandra, isMongo, mongoExtras } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
@@ -55,8 +55,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
   useEffect(() => { setChecked((cs) => cs.filter((c) => columns.some((x) => x.name === c))) }, [columns])
   // A collection has no column definitions: a field can only be renamed or removed.
   const mongo = isMongo(driver)
-  // DynamoDB: attributes belong to items, and AWS manages indexes.
-  const fixed = isDynamo(driver)
+  // DynamoDB: attributes belong to items, and AWS manages indexes. Elasticsearch: mappings change through requests.
+  const fixed = fixedStructure(driver)
   const editColumn = (c: Column) => setDialog(mongo ? { kind: 'renameField', name: c.name } : { kind: 'column', editing: c })
   const pk = indexes.find((x) => x.primary)
   const inOrder = (names: string[]) => columns.map((c) => c.name).filter((n) => names.includes(n))
@@ -433,7 +433,7 @@ function TableOperations({ session, table, info, run, onRenamed }: {
       <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wider text-muted">{isMongo(driver) ? 'Collection' : 'Table'}</h3>
       <div className="space-y-4 rounded-xl border border-line p-4">
         {info?.options && <div className="text-[12.5px] text-fg-2" data-testid="collection-options">{info.options[0].toUpperCase() + info.options.slice(1)}.</div>}
-        {!isCassandra(driver) && !isDynamo(driver) && <div className="flex items-end gap-2">
+        {!isCassandra(driver) && !fixedStructure(driver) && <div className="flex items-end gap-2">
           <Field label={isMongo(driver) ? 'Rename collection' : 'Rename table'} className="flex-1"><Input value={name} aria-label="New table name" onChange={(e) => setName(e.target.value)} /></Field>
           <Button disabled={!name.trim() || name.trim() === table.name}
             onClick={() => run([{ kind: 'rename_table', newName: name.trim() }], `Rename ${table.name} to ${name.trim()}`, { done: 'Table renamed', after: () => onRenamed(name.trim()) })}>Rename</Button>

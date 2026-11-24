@@ -54,6 +54,10 @@ func BuildDropDatabase(d Dialect, dd DropDatabase) (string, error) {
 		return "", errors.New("a SQLite database is a file: delete the file, or remove the connection")
 	case model.DriverRedis:
 		return "", errors.New("Redis's numbered databases can't be deleted: empty one with FLUSHDB in the query editor")
+	case model.DriverInfluxDB:
+		return "", errors.New("delete a database in the query editor: DROP DATABASE name")
+	case model.DriverElasticsearch:
+		return "", errors.New("a cluster can't be deleted: delete its indices")
 	case model.DriverDynamoDB:
 		return "", errors.New("a region can't be deleted: delete its tables")
 	case model.DriverCassandra:

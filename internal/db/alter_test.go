@@ -124,8 +124,9 @@ func runAlterSuite(t *testing.T, c *Conn) {
 			apply(parent, AlterOp{Kind: AlterDropIndex, Name: "gt_alter_name_uq"})
 			return
 		}
-		// SingleStore: a unique key must contain the shard key (id).
-		uq := c.Config.Driver != model.DriverSingleStore
+		// SingleStore and Greenplum: a unique key must contain the shard or
+		// distribution key (id).
+		uq := c.Config.Driver != model.DriverSingleStore && c.Config.Driver != model.DriverGreenplum
 		apply(parent, AlterOp{Kind: AlterAddIndex, Index: &IndexDef{Name: "gt_alter_name", Columns: []string{"name"}, Unique: uq}})
 		apply(parent, AlterOp{Kind: AlterRenameIndex, Name: "gt_alter_name", NewName: "gt_alter_name_uq"})
 		x, ok := findIndex(state(parent), "gt_alter_name_uq")
@@ -171,7 +172,8 @@ func runAlterSuite(t *testing.T, c *Conn) {
 		if r := exec("DELETE FROM gt_alter WHERE id = 1"); r.Err != nil {
 			t.Fatal(r.Err)
 		}
-		if v := value("SELECT COUNT(*) FROM gt_alter_child"); v != "1" {
+		// Greenplum keeps foreign keys without enforcing them.
+		if v := value("SELECT COUNT(*) FROM gt_alter_child"); v != "1" && c.Config.Driver != model.DriverGreenplum {
 			t.Errorf("cascade left %s child rows", v)
 		}
 		apply(child, AlterOp{Kind: AlterDropForeignKey, Name: fks[0].Name})

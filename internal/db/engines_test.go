@@ -456,3 +456,90 @@ func testCassandraTypes(t *testing.T, name string, d model.Driver) {
 	}
 	must("DROP TABLE gt_t; DROP TABLE gt_t2")
 }
+
+func TestGreenplum(t *testing.T) {
+	ran := false
+	for _, env := range []string{"GREENPLUM", "GREENPLUM6"} {
+		if os.Getenv("GOTABLE_TEST_"+env+"_HOST") == "" {
+			continue
+		}
+		ran = true
+		t.Run(strings.ToLower(env), func(t *testing.T) {
+			cfg, pw := serverConfig(t, env, model.DriverGreenplum)
+			c := openTest(t, cfg, pw)
+			if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "Greenplum ") {
+				t.Errorf("version %q", v)
+			}
+			runSuite(t, c)
+			t.Run("distribution", func(t *testing.T) { testGreenplumDistribution(t, c) })
+		})
+	}
+	if !ran {
+		t.Skip("GOTABLE_TEST_GREENPLUM_HOST not set")
+	}
+}
+
+// A table's distribution is in its definition and in a dump, which loads
+// back with it.
+func testGreenplumDistribution(t *testing.T, c *Conn) {
+	ctx := context.Background()
+	exec := func(q string) {
+		t.Helper()
+		res, err := c.Execute(ctx, q, 0)
+		if err != nil || res[len(res)-1].Err != nil {
+			t.Fatalf("%s: %v %+v", q, err, res)
+		}
+	}
+	tables := map[string]string{"gt_by_region": "DISTRIBUTED BY (region)", "gt_random": "DISTRIBUTED RANDOMLY", "gt_everywhere": "DISTRIBUTED REPLICATED"}
+	drop := func() {
+		for n := range tables {
+			c.Execute(ctx, "DROP TABLE IF EXISTS "+n, 0)
+		}
+	}
+	drop()
+	defer drop()
+	var objs []Object
+	for n, dist := range tables {
+		exec("CREATE TABLE " + n + " (id serial, region text, note text DEFAULT 'a)\n);') " + dist)
+		exec("INSERT INTO " + n + " (region, note) VALUES ('eu', 'x'), ('us', NULL)")
+		objs = append(objs, Object{Schema: c.Schema(), Name: n, Kind: KindTable})
+	}
+	check := func() {
+		t.Helper()
+		for _, o := range objs {
+			def, err := c.Definition(ctx, o)
+			if err != nil || !strings.Contains(def, "\n"+tables[o.Name]) {
+				t.Errorf("%s: %v %s", o.Name, err, def)
+			}
+			ti, err := c.TableInfo(ctx, TableRef{Schema: o.Schema, Name: o.Name})
+			if err != nil || ti.Options != strings.ToLower(tables[o.Name]) {
+				t.Errorf("%s: %v %+v", o.Name, err, ti)
+			}
+		}
+	}
+	check()
+	var dump strings.Builder
+	if err := c.Dump(ctx, &dump, DumpOptions{Objects: objs, Structure: true, Data: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	drop()
+	res, err := c.ImportSQL(ctx, strings.NewReader(dump.String()), ImportOptions{Transaction: true}, nil)
+	if err != nil || len(res.Errors) > 0 {
+		t.Fatalf("import: %v %+v\n%s", err, res, dump.String())
+	}
+	check()
+	exec("INSERT INTO gt_random (region) VALUES ('next')") // the sequence goes on
+	r, _ := c.Execute(ctx, "SELECT max(id), count(*) FROM gt_random", 0)
+	if got := r[0].Set.Rows[0]; got[1].Text != "3" {
+		t.Errorf("rows after reload: %v", got)
+	}
+}
+
+func TestLibSQL(t *testing.T) {
+	cfg, pw := serverConfig(t, "LIBSQL", model.DriverLibSQL)
+	c := openTest(t, cfg, pw)
+	if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "libSQL ") || !strings.Contains(v, "SQLite 3.") {
+		t.Errorf("version %q", v)
+	}
+	runSuite(t, c)
+}

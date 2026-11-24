@@ -239,6 +239,9 @@ func runSuite(t *testing.T, c *Conn) {
 				NewColumn{ColumnDef: ColumnDef{Name: "qty", Type: "int unsigned", Nullable: true}})
 		case kind == model.DriverPostgres && c.Config.Driver != model.DriverCockroachDB: // CockroachDB rejects "C"
 			cols[1].Collation = "C"
+			if c.Config.Driver == model.DriverGreenplum {
+				cols[1].Index = "index" // a unique key must contain the distribution key (id)
+			}
 		case kind == model.DriverSQLite:
 			cols[1].Collation = "NOCASE"
 			if info.Strict {
@@ -257,7 +260,7 @@ func runSuite(t *testing.T, c *Conn) {
 			t.Fatal(err)
 		}
 		var unique, plain bool
-		unique = c.Config.Driver == model.DriverSingleStore
+		unique = c.Config.Driver == model.DriverSingleStore || c.Config.Driver == model.DriverGreenplum
 		for _, ix := range idx {
 			if len(ix.Columns) == 1 && ix.Columns[0] == "email" && ix.Unique {
 				unique = true

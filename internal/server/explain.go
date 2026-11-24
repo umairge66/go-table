@@ -31,6 +31,10 @@ func Explain(err error) Friendly {
 		return Friendly{"Not allowed", "This AWS user's policy doesn't permit that DynamoDB action."}
 	case has("failed to refresh cached credentials", "no ec2 imds role found", "failed to get shared config profile"):
 		return Friendly{"No AWS credentials", "Enter an access key, or set up the AWS CLI (aws configure, aws sso login); profile=name in Options picks a profile."}
+	case has("security_exception") && has("unauthorized", "no permissions"):
+		return Friendly{"Not allowed", "This user (or API key) doesn't have the right to do that on the server."}
+	case has("security_exception", "authentication finally failed"):
+		return Friendly{"Wrong user name, password or API key", "The server rejected them. For an API key, leave the user empty and enter the encoded key as the password."}
 	case has("no hosts available in the pool", "unable to connect to initial hosts", "unable to discover protocol version"):
 		return Friendly{"Can't reach the server", "No Cassandra node answered on that host and port (9042 by default). Is it running, and does it listen on that address (rpc_address)?"}
 	case has("provided username") && has("incorrect"), has("authentication") && has("cassandra"):

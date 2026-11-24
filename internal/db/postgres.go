@@ -151,8 +151,14 @@ func (postgresEngine) objects(ctx context.Context, c *Conn, schema string) ([]Ob
 }
 
 func (postgresEngine) columns(ctx context.Context, c *Conn, t TableRef) ([]Column, error) {
+	return pgColumns(ctx, c, t, "a.attidentity <> ''")
+}
+
+// pgColumns describes a table's columns; identity says which are identity
+// columns (PostgreSQL before 10 has none).
+func pgColumns(ctx context.Context, c *Conn, t TableRef, identityExpr string) ([]Column, error) {
 	rows, err := c.conn.QueryContext(ctx, `SELECT a.attname, format_type(a.atttypid, a.atttypmod),
-			NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity <> '',
+			NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), `+identityExpr+`,
 			COALESCE((SELECT co.collname FROM pg_collation co JOIN pg_type ty ON ty.oid = a.atttypid
 				WHERE co.oid = a.attcollation AND a.attcollation <> ty.typcollation), ''),
 			EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)),
@@ -233,6 +239,10 @@ func (postgresEngine) indexes(ctx context.Context, c *Conn, t TableRef) ([]Index
 }
 
 func (e postgresEngine) definition(ctx context.Context, c *Conn, o Object) (string, error) {
+	return pgDefinition(ctx, c, o, e.columns)
+}
+
+func pgDefinition(ctx context.Context, c *Conn, o Object, columns func(context.Context, *Conn, TableRef) ([]Column, error)) (string, error) {
 	t := TableRef{Schema: o.Schema, Name: o.Name}
 	name := c.Dialect.QualifiedName(t)
 	if o.Kind == KindView {
@@ -248,7 +258,7 @@ func (e postgresEngine) definition(ctx context.Context, c *Conn, o Object) (stri
 		}
 		return "CREATE OR REPLACE VIEW " + name + " AS\n" + def, nil
 	}
-	cols, err := e.columns(ctx, c, t)
+	cols, err := columns(ctx, c, t)
 	if err != nil {
 		return "", err
 	}
@@ -279,7 +289,7 @@ func (e postgresEngine) definition(ctx context.Context, c *Conn, o Object) (stri
 		lines = append(lines, "  CONSTRAINT "+c.Dialect.QuoteIdent(cn)+" "+def)
 	}
 	rows.Close()
-	ddl := "CREATE TABLE " + name + " (\n" + strings.Join(lines, ",\n") + "\n);"
+	ddl := "CREATE TABLE " + name + " (\n" + strings.Join(lines, ",\n") + "\n)" + greenplumDistribution(ctx, c, t) + ";"
 	idx, err := c.queryStrings(ctx, `SELECT pg_get_indexdef(ix.indexrelid) FROM pg_index ix
 		JOIN pg_class tb ON tb.oid = ix.indrelid JOIN pg_namespace n ON n.oid = tb.relnamespace
 		WHERE n.nspname = $1 AND tb.relname = $2

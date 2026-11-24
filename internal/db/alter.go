@@ -438,6 +438,16 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			}
 			return out, nil
 		}
+		if d.kind == model.DriverGreenplum { // 6 can't reuse the key's name in one statement
+			var out []string
+			if has {
+				out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(pk.Name)+";")
+			}
+			if len(op.Columns) > 0 {
+				out = append(out, alter+"ADD PRIMARY KEY ("+quoteList(d, op.Columns)+");")
+			}
+			return out, nil
+		}
 		var parts []string
 		if has {
 			if d.mysqlLike() {
@@ -896,6 +906,13 @@ func (c *Conn) Alter(ctx context.Context, t TableRef, ops []AlterOp, dryRun bool
 	}
 	if c.dyn != nil {
 		return c.dynAlter(ctx, t, ops, dryRun)
+	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return nil, err
+		}
+		defer c.mu.Unlock()
+		return c.remote.alter(ctx, c, t, ops, dryRun)
 	}
 	if c.mongo != nil {
 		stmts, err := buildMongoAlter(t, ops)

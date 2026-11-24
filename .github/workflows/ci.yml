@@ -347,6 +347,15 @@ jobs:
           - group: Cassandra and ScyllaDB
             engines: cassandra scylla
             run: TestCassandra
+          - group: Greenplum and libSQL
+            engines: greenplum greenplum6 libsql
+            run: TestGreenplum$|TestLibSQL
+          - group: Elasticsearch
+            engines: elastic
+            run: TestElastic
+          - group: OpenSearch and InfluxDB
+            engines: opensearch influx
+            run: TestElastic|TestInflux
           - group: StarRocks
             engines: starrocks
             run: TestStarRocks$

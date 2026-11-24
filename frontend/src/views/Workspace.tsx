@@ -9,7 +9,7 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isMongo, isRedis } from '../types'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
 import { isPattern, keyLabel as redisLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
@@ -96,7 +96,7 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   const production = conn.tag === 'production'
   const mongo = isMongo(conn.driver)
   const redis = isRedis(conn.driver)
-  const tableWord = mongo ? 'collection' : redis ? 'key' : 'table'
+  const tableWord = mongo ? 'collection' : redis ? 'key' : isElastic(conn.driver) ? 'index' : 'table'
   const [creatingCollection, setCreatingCollection] = useState<OpenDb | null>(null)
 
   const mainSchema = session.schema || session.schemas[0] || ''
@@ -212,6 +212,31 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
   // newTable opens a "New table" tab for designing a table in db.
   const newTable = useCallback((db: OpenDb) => {
     if (mongo) { setCreatingCollection(db); return } // nothing to design: fields come with the documents
+    if (isElastic(conn.driver)) {
+      newQuery(`# An index with its fields; more are added as documents bring them.
+PUT /products
+{
+  "mappings": {
+    "properties": {
+      "name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "price": { "type": "double" },
+      "in_stock": { "type": "boolean" },
+      "added": { "type": "date" }
+    }
+  }
+}
+`, db.key)
+      return
+    }
+    if (isInflux(conn.driver)) {
+      newQuery(`-- Tags identify a series; every table has a time. Writing a point makes a table too.
+CREATE TABLE "sensors" ("site" TAG, "temp" FLOAT64, "ok" BOOLEAN);
+
+WRITE
+sensors,site=roof temp=21.5,ok=true
+`, db.key)
+      return
+    }
     if (isDynamo(conn.driver)) {
       newQuery(`-- Only the key is declared (types S, N, B); items bring their other attributes.
 CREATE TABLE "events" ("user_id" S PARTITION KEY, "at" N SORT KEY);
@@ -719,7 +744,7 @@ CREATE TABLE ${quote('events', conn.driver)} (
   ], [dbs, activeDb, activeTab, theme, inspector, sessions, session.id, refresh, sidebarHidden, railHidden, settings.shortcuts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isOpen = (database: string, schema: string) => dbs.some((d) => d.info.database === database && d.schema === schema)
-  const schemaGroup = pg ? `Schemas in ${activeDb.info.database}` : family(conn.driver) === 'sqlite' ? 'Attached databases' : fileDb ? 'Schemas' : 'Databases'
+  const schemaGroup = pg ? `Schemas in ${activeDb.info.database}` : fileDb && family(conn.driver) === 'sqlite' ? 'Attached databases' : fileDb ? 'Schemas' : 'Databases'
   const databaseCommands: Command[] = [
     ...schemaList.map((s) => ({ id: 'schema:' + s, label: s, group: schemaGroup, icon: <Database />,
       active: s === activeDb.schema, hint: s !== activeDb.schema && isOpen(activeDb.info.database, s) ? 'open' : pg ? 'schema' : undefined,
@@ -828,7 +853,7 @@ CREATE TABLE ${quote('events', conn.driver)} (
                     <div className="px-3 py-6 text-center text-[12px] text-muted">
                       {q ? `Nothing matches “${filter}”.` : <>
                         This database has no tables yet.
-                        <div className="mt-2.5 flex justify-center"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => newTable(d)}>Create a {tableWord}</Button></div>
+                        <div className="mt-2.5 flex justify-center"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => newTable(d)}>Create {tableWord === 'index' ? 'an' : 'a'} {tableWord}</Button></div>
                       </>}
                     </div>
                   )}

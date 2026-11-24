@@ -22,6 +22,8 @@
 #   cratedb  CrateDB        questdb   QuestDB        (PostgreSQL protocol)
 #   starrocks StarRocks     doris     Apache Doris   (MySQL protocol)
 #   cassandra Cassandra     scylla    ScyllaDB       (CQL)
+#   greenplum Greenplum 7   greenplum6 Greenplum 6   libsql    libSQL server
+#   elastic  Elasticsearch  opensearch OpenSearch     influx    InfluxDB 3 Core
 #   dynamodb DynamoDB Local
 #                           s2        SingleStore    (MySQL, needs 4 GB RAM)
 # Set KEEP=1 to leave the containers running afterwards.
@@ -54,11 +56,17 @@ STARROCKS_IMAGE=${STARROCKS_IMAGE:-starrocks/allin1-ubuntu:latest}
 DORIS_IMAGE=${DORIS_IMAGE:-apache/doris:doris-all-in-one-2.1.0}
 CASSANDRA_IMAGE=${CASSANDRA_IMAGE:-cassandra:5}
 SCYLLA_IMAGE=${SCYLLA_IMAGE:-scylladb/scylla:latest}
+GREENPLUM_IMAGE=${GREENPLUM_IMAGE:-andruche/greenplum:7}
+GREENPLUM6_IMAGE=${GREENPLUM6_IMAGE:-andruche/greenplum:6}
+LIBSQL_IMAGE=${LIBSQL_IMAGE:-ghcr.io/tursodatabase/libsql-server:latest}
+ELASTIC_IMAGE=${ELASTIC_IMAGE:-elasticsearch:9.5.5}
+OPENSEARCH_IMAGE=${OPENSEARCH_IMAGE:-opensearchproject/opensearch:3}
+INFLUX_IMAGE=${INFLUX_IMAGE:-influxdb:3-core}
 DYNAMODB_IMAGE=${DYNAMODB_IMAGE:-amazon/dynamodb-local:latest}
 DOCKER=${DOCKER:-$(command -v docker || command -v podman)}
 PW=gotable-test
 MSSQL_PW=GoTable-test1 # SQL Server wants upper case, lower case and digits
-ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey dragonfly keydb garnet ferretdb cratedb questdb starrocks doris cassandra scylla dynamodb crdb yb ts tidb percona s2"
+ALL="pg mysql mariadb mssql oracle ch mongodb mongors mongoshard mongotls redis valkey dragonfly keydb garnet ferretdb cratedb questdb starrocks doris cassandra scylla dynamodb greenplum greenplum6 libsql elastic opensearch influx crdb yb ts tidb percona s2"
 [[ "$ENGINES" == all ]] && ENGINES=$ALL
 
 cleanup() {
@@ -96,6 +104,15 @@ has starrocks && run starrocks -p 127.0.0.1::9030 "$STARROCKS_IMAGE"
 has doris && run doris -p 127.0.0.1::9030 "$DORIS_IMAGE"
 # Small heaps: a test needs little, and CI runners have 16 GB.
 has dynamodb && run dynamodb -p 127.0.0.1::8000 "$DYNAMODB_IMAGE"
+has greenplum && run greenplum -p 127.0.0.1::5432 "$GREENPLUM_IMAGE"
+has greenplum6 && run greenplum6 -p 127.0.0.1::5432 "$GREENPLUM6_IMAGE"
+has libsql && run libsql -p 127.0.0.1::8080 "$LIBSQL_IMAGE"
+# One node, no security, and a disk that may be fuller than they like.
+has elastic && run elastic -p 127.0.0.1::9200 -e discovery.type=single-node -e xpack.security.enabled=false \
+	-e cluster.routing.allocation.disk.threshold_enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" "$ELASTIC_IMAGE"
+has opensearch && run opensearch -p 127.0.0.1::9200 -e discovery.type=single-node -e DISABLE_INSTALL_DEMO_CONFIG=true -e DISABLE_SECURITY_PLUGIN=true \
+	-e cluster.routing.allocation.disk.threshold_enabled=false -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" "$OPENSEARCH_IMAGE"
+has influx && run influx -p 127.0.0.1::8181 "$INFLUX_IMAGE" influxdb3 serve --node-id n1 --object-store memory --without-auth
 has cassandra && run cassandra -p 127.0.0.1::9042 -e MAX_HEAP_SIZE=512M -e HEAP_NEWSIZE=128M "$CASSANDRA_IMAGE"
 has scylla && run scylla -p 127.0.0.1::9042 "$SCYLLA_IMAGE" --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
 has crdb && run crdb -p 127.0.0.1::26257 "$CRDB_IMAGE" start-single-node --insecure
@@ -197,6 +214,28 @@ if has doris; then # ready when its backend is
 	wait_ready doris sh -c "'$DOCKER' exec gotable-doris mysql -uroot -h127.0.0.1 -P9030 -N -e 'SHOW BACKENDS' | grep -q true"
 	in_container doris mysql -uroot -h127.0.0.1 -P9030 -e 'CREATE DATABASE IF NOT EXISTS gotable' >/dev/null
 	export_env DORIS "$(port doris 9030)" root "" gotable
+fi
+for g in greenplum greenplum6; do
+	if has $g; then
+		wait_ready $g in_container $g su - gpadmin -c 'psql -h 127.0.0.1 -d postgres -c "CREATE TABLE IF NOT EXISTS gt_ready (id int); DROP TABLE gt_ready"'
+		export_env "${g^^}" "$(port $g 5432)" gpadmin "" postgres
+	fi
+done
+if has libsql; then
+	wait_ready libsql curl -sf "http://127.0.0.1:$(port libsql 8080)/health"
+	export_env LIBSQL "$(port libsql 8080)" "" "" ""
+fi
+if has elastic; then
+	wait_ready elastic curl -sf "http://127.0.0.1:$(port elastic 9200)/_cluster/health?wait_for_status=yellow&timeout=1s"
+	export_env ELASTIC "$(port elastic 9200)" "" "" ""
+fi
+if has opensearch; then
+	wait_ready opensearch curl -sf "http://127.0.0.1:$(port opensearch 9200)/_cluster/health?wait_for_status=yellow&timeout=1s"
+	export_env OPENSEARCH "$(port opensearch 9200)" "" "" ""
+fi
+if has influx; then
+	wait_ready influx curl -sf "http://127.0.0.1:$(port influx 8181)/ping"
+	export_env INFLUX "$(port influx 8181)" "" "" gotable
 fi
 if has dynamodb; then # any HTTP answer will do: requests must be signed
 	wait_ready dynamodb curl -s -o /dev/null "http://127.0.0.1:$(port dynamodb 8000)"

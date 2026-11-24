@@ -1069,3 +1069,28 @@ func TestSettingsAPI(t *testing.T) {
 		t.Fatal(res.StatusCode)
 	}
 }
+
+// A DynamoDB connection without a host is AWS's own endpoint: filling in
+// 127.0.0.1 made AWS unreachable from the app.
+func TestNormalizeHost(t *testing.T) {
+	c := model.NewConnection(model.DriverDynamoDB)
+	c.DBName = "us-east-1"
+	normalize(c)
+	if c.Host != "" || c.Name != "DynamoDB us-east-1" {
+		t.Errorf("host %q, name %q", c.Host, c.Name)
+	}
+	if err := c.Validate(); err != nil {
+		t.Error(err)
+	}
+	for _, d := range model.Drivers {
+		if d.IsFileBased() || d.Family() == model.DriverDynamoDB {
+			continue
+		}
+		c := model.NewConnection(d)
+		c.Host = ""
+		normalize(c)
+		if c.Host != "127.0.0.1" {
+			t.Errorf("%s: host %q", d, c.Host)
+		}
+	}
+}

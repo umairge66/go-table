@@ -3,6 +3,25 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## v0.12.0 — 2026-11-24
+
+### Added
+
+- **Elasticsearch** (tested on 9.5) and **OpenSearch** (tested on 3): documents as rows,
+  filters and sorts on the server, edits that keep each field's type, and an
+  editor that takes requests as Kibana's Dev Tools does, SQL and ES|QL.
+- **InfluxDB 3** (tested on Core 3.12): points as rows with nanosecond times,
+  editing fields and adding points, SQL, and line protocol in the editor.
+- **Greenplum** (tested on 6 and 7), with each table's distribution.
+- **libSQL** servers (tested on sqld 0.24) and **Turso** (untested), over HTTP.
+
+### Fixed
+
+- DynamoDB on AWS couldn't be reached from the app: an empty host was saved
+  as 127.0.0.1 (since v0.11.0). A connection saved meanwhile needs its
+  Endpoint host cleared.
+- Queries on Redis, Cassandra and DynamoDB always showed 0.0 ms.
+
 ## v0.11.1 — 2026-11-24
 
 ### Fixed

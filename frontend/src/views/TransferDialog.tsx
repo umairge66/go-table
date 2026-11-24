@@ -6,7 +6,7 @@ import { FilePicker, pickedName, type PickedFile } from '../components/FilePicke
 import { JobProgress, UploadProgress, useJob } from '../components/Progress'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, timestamp, type SaveTarget } from '../lib/saveFile'
-import { family, features, type DbObject, type FileSource, type SessionInfo, isCassandra, isDynamo, isMongo, isRedis } from '../types'
+import { family, features, type DbObject, type FileSource, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
 import { saveJobAs } from './ExportDialog'
 
 type Tab = 'export' | 'import'
@@ -49,6 +49,7 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
   const redis = isRedis(session.connection.driver)
   const cql = isCassandra(session.connection.driver)
   const dynamo = isDynamo(session.connection.driver)
+  const elastic = isElastic(session.connection.driver)
   const toast = useToast()
   const [selected, setSelected] = useState<Set<string>>(() => new Set(preselect ?? objects.map((o) => o.name)))
   const [filter, setFilter] = useState('')
@@ -80,7 +81,7 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
   const start = async () => {
     try {
       // Ask where to save first, like any desktop app.
-      const ext = format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : cql ? 'cql' : dynamo ? 'partiql' : 'sql') : 'zip'
+      const ext = format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : cql ? 'cql' : dynamo ? 'partiql' : elastic ? 'es' : 'sql') : 'zip'
       const t = await chooseSaveLocation(`${session.connection.name.replace(/[^\w.-]+/g, '_')}-${timestamp()}.${ext}`, ext)
       if (!t) return
       target.current = t
@@ -101,7 +102,7 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
     return (
       <div className="space-y-4">
         <JobProgress job={job} label={savedTo ? `Saved to ${savedTo}` : undefined} onCancel={() => api.cancelJob(job.id)}
-          onDownload={() => saveJobAs(job.id, target.current?.name ?? job.file ?? 'export', format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : cql ? 'cql' : dynamo ? 'partiql' : 'sql') : 'zip')} />
+          onDownload={() => saveJobAs(job.id, target.current?.name ?? job.file ?? 'export', format === 'sql' ? (mongo ? 'js' : redis ? 'redis' : cql ? 'cql' : dynamo ? 'partiql' : elastic ? 'es' : 'sql') : 'zip')} />
         {job.status !== 'running' && (
           <div className="flex justify-end"><Button size="sm" onClick={() => { setJobId(null); onBusy(false) }}>Export again</Button></div>
         )}
@@ -112,10 +113,12 @@ function ExportDatabase({ session, schema, objects, preselect, onBusy }: { sessi
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Export format">
-        {([['sql', FileCode2, mongo ? 'Shell script' : redis ? 'Redis commands' : cql ? 'CQL script' : dynamo ? 'GoTable script' : 'SQL dump', mongo ? 'Collections, indexes, documents and views, each value keeping its type'
+        {([['sql', FileCode2, mongo ? 'Shell script' : redis ? 'Redis commands' : cql ? 'CQL script' : dynamo ? 'GoTable script' : elastic ? 'Requests' : isInflux(session.connection.driver) ? 'GoTable script' : 'SQL dump', mongo ? 'Collections, indexes, documents and views, each value keeping its type'
             : redis ? 'Every key with its value and expiry, as commands (redis-cli < file)'
             : cql ? 'Tables, views and rows as CQL (cqlsh -f file)'
-            : dynamo ? 'Keys, indexes and every item with its types — read by GoTable’s Import' : 'Tables, data and views — load it into any database of this kind'],
+            : dynamo ? 'Keys, indexes and every item with its types — read by GoTable’s Import'
+            : elastic ? 'Indices with their settings and mappings, and every document — requests for GoTable’s Import or Kibana'
+            : isInflux(session.connection.driver) ? 'Tables and every point as line protocol — read by GoTable’s Import' : 'Tables, data and views — load it into any database of this kind'],
           ['csv-zip', FileArchive, 'CSV files (ZIP)', redis ? 'One CSV per key pattern: key, type, TTL and value' : 'One spreadsheet-friendly CSV per table']] as const).map(([id, Icon, label, desc]) => (
           <button key={id} role="radio" aria-checked={format === id} onClick={() => setFormat(id)}
             className={clsx('flex gap-3 rounded-xl border p-3 text-left transition-all', format === id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}>
@@ -227,10 +230,12 @@ function ImportSQL({ session, schema, onBusy, onImported }: { session: SessionIn
   }
   return (
     <div className="space-y-4">
-      <FilePicker accept={isMongo(session.connection.driver) ? '.js,.mongodb,.txt' : isRedis(session.connection.driver) ? '.redis,.txt' : isCassandra(session.connection.driver) ? '.cql,.txt' : isDynamo(session.connection.driver) ? '.partiql,.txt' : '.sql,.txt,.dump'} hint={isMongo(session.connection.driver) ? 'Shell commands, such as an export from GoTable — any size'
+      <FilePicker accept={isMongo(session.connection.driver) ? '.js,.mongodb,.txt' : isRedis(session.connection.driver) ? '.redis,.txt' : isCassandra(session.connection.driver) ? '.cql,.txt' : isDynamo(session.connection.driver) ? '.partiql,.txt' : isElastic(session.connection.driver) ? '.es,.txt' : '.sql,.txt,.dump'} hint={isMongo(session.connection.driver) ? 'Shell commands, such as an export from GoTable — any size'
         : isRedis(session.connection.driver) ? 'Redis commands, one a line, such as an export from GoTable — any size'
         : isCassandra(session.connection.driver) ? 'CQL statements, such as an export from GoTable or cqlsh — any size'
-        : isDynamo(session.connection.driver) ? 'A GoTable export, or PartiQL statements — any size' : 'SQL scripts and dumps (pg_dump plain format, mysqldump, sqlite .dump) — any size'} value={file} onChange={setFile} />
+        : isDynamo(session.connection.driver) ? 'A GoTable export, or PartiQL statements — any size'
+        : isElastic(session.connection.driver) ? 'A GoTable export, or requests as in Kibana’s Dev Tools — any size'
+        : isInflux(session.connection.driver) ? 'A GoTable export, or WRITE followed by line protocol — any size' : 'SQL scripts and dumps (pg_dump plain format, mysqldump, sqlite .dump) — any size'} value={file} onChange={setFile} />
       <div className="space-y-2" role="radiogroup" aria-label="If a statement fails">
         <div className="text-[11.5px] font-medium text-muted">If a statement fails</div>
         {([['transaction', 'Stop and undo everything', mysql

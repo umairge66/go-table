@@ -22,6 +22,10 @@ export function cellKind(type = '', values: string[] | undefined, driver: Driver
   const trueFalse = { kind: 'choice' as const, options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
   if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse' || f === 'mongodb') && (t === 'boolean' || t === 'bool')) return trueFalse
   if (f === 'sqlserver' && t === 'bit') return trueFalse
+  // Elasticsearch dates come in formats of the mapping's choosing, with a time.
+  if (f === 'elasticsearch') return t === 'boolean' ? trueFalse : { kind: 'text' }
+  // InfluxDB's times have nanoseconds.
+  if (f === 'influxdb') return t === 'boolean' ? trueFalse : { kind: 'text' }
   if (/^(tinyint\(1\)|bool|boolean)(\s+unsigned)?$/.test(t)) return { kind: 'choice', options: [{ value: '1', label: '1 (true)' }, { value: '0', label: '0 (false)' }] }
   if (t === 'date' && (f === 'oracle' || f === 'mongodb')) return { kind: 'datetime' } // their dates have a time of day
   if (t === 'date' || t === 'date32') return { kind: 'date' }

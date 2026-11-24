@@ -146,7 +146,7 @@ func normalize(c *model.Connection) {
 		c.Host, c.Port, c.User, c.DBName, c.SSLMode, c.UseSSHTunnel = "", 0, "", "", "", false
 	} else {
 		c.Path = ""
-		if c.Host == "" {
+		if c.Host == "" && c.Driver.Family() != model.DriverDynamoDB { // no host: AWS itself
 			c.Host = "127.0.0.1"
 		}
 	}
@@ -158,6 +158,8 @@ func normalize(c *model.Connection) {
 				base = base[:i]
 			}
 			c.Name = base
+		case c.Driver.Family() == model.DriverDynamoDB && c.Host == "":
+			c.Name = strings.TrimSpace(c.Driver.Label() + " " + c.DBName)
 		case c.DBName != "":
 			c.Name = c.DBName + " @ " + c.Host
 		default:

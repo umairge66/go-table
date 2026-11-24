@@ -9,7 +9,9 @@ import { Decoration, EditorView, GutterMarker, drawSelection, gutterLineClass, h
 import { tags as t } from '@lezer/highlight'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { mongoCompletions, mongoStatementAt, mongoStatementRange, pickStatement, trimRange } from '../lib/mongoShell'
-import { forDriver, isMongo, isRedis, type Driver, type PerDriver } from '../types'
+import { elasticCompletions, elasticLanguage, elasticStatementRange } from '../lib/elasticConsole'
+import { influxStatementRange } from '../lib/influx'
+import { forDriver, isElastic, isInflux, isMongo, isRedis, type Driver, type PerDriver } from '../types'
 import { redisCompletions, redisLanguage, redisStatementAt, redisStatementRange } from '../lib/redisShell'
 import { useSettings } from '../lib/settings'
 import { codemirrorKey, combosFor, label } from '../lib/shortcuts'
@@ -26,12 +28,13 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL, cassandra: PostgreSQL, dynamodb: PostgreSQL }
+const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL, cassandra: PostgreSQL, dynamodb: PostgreSQL, elasticsearch: PostgreSQL, influxdb: PostgreSQL }
 
 /** language: MongoDB's commands are written in the JavaScript of its shell; Redis's are command lines. */
 const language = (driver: Driver, tables?: Record<string, string[]>) => isMongo(driver)
   ? [javascript(), javascriptLanguage.data.of({ autocomplete: mongoCompletions(tables) })]
   : isRedis(driver) ? [redisLanguage, redisLanguage.data.of({ autocomplete: redisCompletions })]
+  : isElastic(driver) ? [elasticLanguage, elasticLanguage.data.of({ autocomplete: elasticCompletions(tables) })]
   : sql({ dialect: forDriver(dialects, driver), schema: tables && cleanSchema(tables), upperCaseKeywords: true })
 
 /** cleanSchema drops tables without a column list: CodeMirror's SQL
@@ -41,7 +44,7 @@ const cleanSchema = (tables: Record<string, string[]>) =>
 
 /** rangeAt: the statement the cursor is at, the way the driver's commands are written. */
 const rangeAt = (driver: Driver, text: string, pos: number, withSemicolon = false) =>
-  isMongo(driver) ? mongoStatementRange(text, pos) : isRedis(driver) ? redisStatementRange(text, pos) : statementRange(text, pos, withSemicolon)
+  isMongo(driver) ? mongoStatementRange(text, pos) : isRedis(driver) ? redisStatementRange(text, pos) : isElastic(driver) ? elasticStatementRange(text, pos) : isInflux(driver) ? influxStatementRange(text, pos, (t, p) => statementRange(t, p, withSemicolon)) : statementRange(text, pos, withSemicolon)
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */

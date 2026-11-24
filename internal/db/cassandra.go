@@ -945,8 +945,8 @@ func (c *Conn) cassExecuteIn(ctx context.Context, schema, script string, rowCap 
 }
 
 // cassRun runs one statement. Callers hold c.mu.
-func (c *Conn) cassRun(ctx context.Context, stmt string, rowCap int) Result {
-	r := Result{Statement: stmt}
+func (c *Conn) cassRun(ctx context.Context, stmt string, rowCap int) (r Result) {
+	r = Result{Statement: stmt}
 	start := time.Now()
 	defer func() { r.Duration = time.Since(start) }()
 	if m := cassUse.FindStringSubmatch(stmt); m != nil {

@@ -1379,8 +1379,8 @@ func (c *Conn) redisExecuteIn(ctx context.Context, schema, script string, rowCap
 }
 
 // redisRun runs one command line. Callers hold c.mu.
-func (c *Conn) redisRun(ctx context.Context, conn *redis.Conn, line string, rowCap int) Result {
-	r := Result{Statement: line}
+func (c *Conn) redisRun(ctx context.Context, conn *redis.Conn, line string, rowCap int) (r Result) {
+	r = Result{Statement: line}
 	start := time.Now()
 	defer func() { r.Duration = time.Since(start) }()
 	args, err := splitRedisArgs(line)

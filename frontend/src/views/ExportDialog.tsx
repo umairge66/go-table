@@ -5,7 +5,7 @@ import { api, type PageReq, type TableRef } from '../api'
 import { JobProgress, useJob } from '../components/Progress'
 import { Button, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
 import { chooseSaveLocation, saveJob, type SaveTarget } from '../lib/saveFile'
-import { isCassandra, isDynamo, isMongo, usesCommands, type SessionInfo } from '../types'
+import { isMongo, noInserts, type SessionInfo } from '../types'
 
 export type ExportSource = { table: TableRef; page: PageReq; columns: string[] }
 
@@ -19,7 +19,7 @@ const FORMATS = [
 export function ExportDialog({ session, title, source, onClose }: { session: SessionInfo; title: string; source: ExportSource; onClose: () => void }) {
   const toast = useToast()
   const [format, setFormat] = useState<'csv' | 'json' | 'sql'>('csv')
-  const formats = FORMATS.filter((f) => f.id !== 'sql' || !usesCommands(session.connection.driver) && !isCassandra(session.connection.driver) && !isDynamo(session.connection.driver))
+  const formats = FORMATS.filter((f) => f.id !== 'sql' || !noInserts(session.connection.driver))
   const [allRows, setAllRows] = useState(true)
   const [header, setHeader] = useState(true)
   const [delimiter, setDelimiter] = useState(',')
@@ -134,7 +134,7 @@ export function ExportDialog({ session, title, source, onClose }: { session: Ses
 }
 
 /** saveJobAs asks for a location and saves a finished export there. */
-export async function saveJobAs(jobId: string, name: string, kind: 'sql' | 'js' | 'redis' | 'cql' | 'partiql' | 'csv' | 'json' | 'zip') {
+export async function saveJobAs(jobId: string, name: string, kind: 'sql' | 'js' | 'redis' | 'cql' | 'partiql' | 'es' | 'csv' | 'json' | 'zip') {
   const t = await chooseSaveLocation(name, kind)
   if (t) await saveJob(t, jobId)
   return t

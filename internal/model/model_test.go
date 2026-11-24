@@ -353,3 +353,69 @@ func TestDynamoURLs(t *testing.T) {
 		t.Fatal("a tunnel to AWS itself")
 	}
 }
+
+func TestLibSQLURLs(t *testing.T) {
+	for raw, want := range map[string]struct {
+		d     Driver
+		host  string
+		port  int
+		ssl   string
+		token string
+	}{
+		"libsql://127.0.0.1:8080?tls=0":                  {DriverLibSQL, "127.0.0.1", 8080, "disable", ""},
+		"libsql://localhost?tls=0":                       {DriverLibSQL, "localhost", 8080, "disable", ""},
+		"libsql://db.example.com?authToken=a.b%2Bc":      {DriverLibSQL, "db.example.com", 443, "require", "a.b+c"},
+		"libsql://shop-me.turso.io?authToken=tok":        {DriverTurso, "shop-me.turso.io", 443, "require", "tok"},
+		"turso://shop-me.aws-eu-west-1.turso.io":         {DriverTurso, "shop-me.aws-eu-west-1.turso.io", 443, "require", ""},
+		"libsql://shop-me.turso.io?tls=0&authToken=tok2": {DriverTurso, "shop-me.turso.io", 443, "require", "tok2"}, // never a token in the clear
+	} {
+		c, token, err := ParseURL(raw)
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		if c.Driver != want.d || c.Host != want.host || c.Port != want.port || c.SSLMode != want.ssl || token != want.token {
+			t.Errorf("%s: %+v token %q", raw, c, token)
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	if _, _, err := ParseURL("libsql://"); err == nil {
+		t.Error("a URL without a host")
+	}
+	if DriverLibSQL.IsFileBased() || DriverTurso.IsFileBased() || !DriverSQLite.IsFileBased() {
+		t.Error("file based")
+	}
+	if c, _, err := ParseURL("greenplum://gpadmin:x@gp:5432/dw"); err != nil || c.Driver != DriverGreenplum || c.DBName != "dw" {
+		t.Error(c, err)
+	}
+}
+
+func TestElasticAndInfluxURLs(t *testing.T) {
+	for raw, want := range map[string]struct {
+		d                       Driver
+		host, user, db, ssl, pw string
+		port                    int
+	}{
+		"elasticsearch://elastic:pw@es:9200":               {DriverElasticsearch, "es", "elastic", "", "disable", "pw", 9200},
+		"elasticsearch+https://elastic:pw@es:9243/ignored": {DriverElasticsearch, "es", "elastic", "", "require", "pw", 9243},
+		"elasticsearch://es?ssl=true&verify=false":         {DriverElasticsearch, "es", "", "", "skip-verify", "", 9200},
+		"opensearch://admin:pw@os":                         {DriverOpenSearch, "os", "admin", "", "disable", "pw", 9200},
+		"influxdb://127.0.0.1:8181/metrics":                {DriverInfluxDB, "127.0.0.1", "", "metrics", "disable", "", 8181},
+		"influxdb://apiv3_tok@ix/metrics":                  {DriverInfluxDB, "ix", "", "metrics", "disable", "apiv3_tok", 8181},
+		"influxdb+https://ix:443/m?token=apiv3_a":          {DriverInfluxDB, "ix", "", "m", "require", "apiv3_a", 443},
+	} {
+		c, pw, err := ParseURL(raw)
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		if c.Driver != want.d || c.Host != want.host || c.User != want.user || c.DBName != want.db || c.SSLMode != want.ssl || pw != want.pw || c.Port != want.port {
+			t.Errorf("%s: %+v, password %q", raw, c, pw)
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+}

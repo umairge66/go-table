@@ -37,10 +37,10 @@
 </p>
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra and DynamoDB, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra, DynamoDB, Elasticsearch and InfluxDB, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, CrateDB, QuestDB,
 TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
-FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB). A Go backend with a web UI, shipped as one binary that opens in a native window
+FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB, Greenplum, libSQL, Turso, OpenSearch). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -67,6 +67,9 @@ inspector and a Data / Structure / Definition switch.
 | Redis, Valkey (tested on Redis 7, Valkey 8) | a key-value store: see [below](#redis) |
 | Cassandra, ScyllaDB (tested on Cassandra 5, ScyllaDB 2026.3) | CQL: see [below](#cassandra) |
 | DynamoDB (tested on DynamoDB Local, not on AWS) | items without fixed attributes: see [below](#dynamodb) |
+| Elasticsearch (tested on 9.5), OpenSearch (tested on 3) | documents in indices: see [below](#elasticsearch) |
+| InfluxDB 3 Core (tested on 3.12) | time series: see [below](#influxdb) |
+| Greenplum (tested on 6 and 7), libSQL (tested on sqld 0.24), Turso (untested) | PostgreSQL's and SQLite's SQL: see [below](#greenplum-libsql-and-turso) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -141,6 +144,146 @@ A collection opens like a table, with each top-level field as a column:
   such as `replicaSet=rs0`, and Host a list such as `a:27017,b:27017`. Over an
   SSH tunnel GoTable talks to that one member. A database appears with its first
   collection: run `use mydb`, then `db.createCollection("first")`.
+
+### Redis
+
+Keys are shown the way tables are (`redis://` and `rediss://` URLs paste in;
+Valkey, KeyDB and Dragonfly speak the same protocol):
+
+- **Databases** are Redis's numbered ones, `db0`, `db1`…; the Database
+  field takes the number to start in.
+- **The sidebar** lists *All keys* and the namespaces found in the keys
+  (`user:*`, `session:*`). A pattern opens as a list of keys, with each one's
+  type, TTL (seconds) and value — short strings whole, other types by size.
+  The arrow on a key opens it: a hash's fields, a list's items, a set's
+  members, a sorted set's members and scores, a stream's entries, a string or
+  JSON value. Filters and search work on every column.
+- **Editing**: rename a key, change a string, set or clear a TTL, add a
+  string key, delete keys; in an opened key, change its fields, items,
+  members, scores or entries. Review shows the exact commands (`RENAME`,
+  `SET … KEEPTTL`, `HSET`, `LSET`, `ZADD`…). They run together in one
+  `MULTI/EXEC`, watched, so it is all or nothing; a value changed since you
+  loaded it is overwritten.
+- **The query editor** runs commands as redis-cli takes them, one a line
+  (`#` starts a comment): replies are tables (`HGETALL` as field/value,
+  `ZRANGE … WITHSCORES` as member/score, `INFO` by section, `SCAN` with the
+  next cursor). `MULTI…EXEC` and `SELECT` work across lines; `SUBSCRIBE` and
+  `MONITOR`, which never return, are refused.
+- **Export** writes the keys as commands with their expiry (`.redis`, for
+  `redis-cli < file` or Import script); keys can also go to CSV or JSON.
+
+### Cassandra
+
+Keyspaces are the schemas; a table's primary key is its partition key, then
+its clustering columns (the Structure tab says which). `cassandra://` and
+`scylla://` URLs paste in; ScyllaDB speaks the same protocol.
+
+- **Rows**: CQL has no OFFSET and filters or sorts on the server only by
+  key, so a page is read by skipping rows, and the filter bar and column
+  sorts work here over up to 100,000 rows. A CQL filter (WHERE) runs on the
+  server, with ALLOW FILTERING added; put the partition key in it for big
+  tables. Collections show as CQL (`{'a', 'b'}`, `[1, 2]`, `{'k': 1}`) and
+  are edited the same way.
+- **Editing** writes each type as CQL and uses lightweight transactions
+  (`UPDATE … IF EXISTS`, `INSERT … IF NOT EXISTS`, `DELETE … IF EXISTS`),
+  so a row deleted meanwhile is reported; another edit of
+  the same row is overwritten. There are no
+  transactions: each change commits on its own. Key columns can't change.
+- **Structure**: columns can be added or dropped, indexes added or dropped,
+  the comment set and the table emptied; the key and the column types are
+  fixed. New tables are made with CREATE TABLE in the query editor, which
+  New table opens with an example; keyspaces with CREATE KEYSPACE.
+  Deleting a keyspace is DROP KEYSPACE.
+- **The query editor** runs CQL (`USE` switches keyspace). Export writes the
+  tables as CQL (`DESCRIBE`) and rows as INSERTs, for Import or
+  `cqlsh -f`; CSV imports and exports work too.
+- GoTable talks to the host it is given, which coordinates the cluster: the
+  other nodes' addresses needn't be reachable (an SSH tunnel works).
+
+### DynamoDB
+
+A connection is a region and an AWS access key; without a key GoTable signs
+in as the AWS CLI does (environment, `~/.aws`, SSO; `profile=name` in
+Options). An endpoint host is for DynamoDB Local, which is never sent the
+machine's AWS keys. URLs: `dynamodb:///us-east-1`,
+`dynamodb://KEY:SECRET@localhost:8000/us-east-1`.
+
+- **Reads on AWS are billed.** A table's columns come from its first 500
+  items; a page is read by scanning up to it; the filter bar and sorts scan
+  the table (up to 100,000 items). A PartiQL condition (WHERE) runs on the
+  server: with the partition key in it, it reads only that. Tables over
+  100,000 items show AWS's approximate count.
+- **Types** are kept when edited; text that doesn't fit is refused. Lists
+  and maps are JSON; sets and nested binary are `{"$ss": ["a"]}`,
+  `{"$ns": [1]}`, `{"$bs": ["base64"]}`, `{"$b": "base64"}`. NULL removes
+  the attribute. Keys can't change.
+- **A commit** is one transaction per 100 changes. It fails if an item was
+  deleted meanwhile or a new key exists; another edit of the same attribute
+  is overwritten.
+- **The query editor** runs PartiQL, and for what that can't say:
+  `CREATE TABLE "t" ("id" S PARTITION KEY, "at" N SORT KEY)`,
+  `CREATE TABLE "t" WITH {the AWS CLI's create-table JSON}`, `DROP TABLE`
+  and `PUT "t" {item}`. Exports use these, so GoTable's Import reads them.
+  Exports include keys, indexes and capacity, but not TTL, streams, tags or
+  backups. Indexes are changed with the AWS console or CLI.
+
+### Elasticsearch
+
+Elasticsearch (tested on 9.5) and OpenSearch (tested on 3) over HTTP or HTTPS, with a user
+and password or an API key (User empty, the encoded key as the password).
+`elasticsearch://`, `opensearch://` and `…+https://` URLs paste in.
+
+- **Rows** are documents: `_id`, then the mapping's top-level fields; objects
+  and lists are cells of JSON. Aliases and data streams are read-only.
+- **Filters and sorts** run on the server. Whole-value comparisons, parts of
+  words and sorting use keyword fields (or a text field's keyword sub-field,
+  which by default leaves out text over 256 characters); text without one is
+  searched by words and can't be sorted. The query field takes Lucene
+  (`status:active AND age:>30`) or a JSON query. Rows past the 10,000th are
+  read by scrolling to them.
+- **Editing** keeps each field's type; a list or object is replaced as a
+  whole. Each document is written by itself (there are no transactions), and
+  one changed between reading it for the save and writing it is refused; an
+  edit made since you loaded the table is overwritten.
+- **The query editor** takes requests as Kibana's Dev Tools does (`GET
+  /index/_search` and a JSON body, NDJSON for `_bulk`), SQL, and on
+  Elasticsearch ES|QL (`FROM index | …`). Hits, `_cat` answers and
+  aggregations show as tables.
+- **Export** writes indices (settings, mappings, aliases) and documents as
+  requests, which Import runs; CSV goes both ways. Mappings are changed with
+  requests. Data streams aren't in the export.
+
+### InfluxDB
+
+InfluxDB 3 Core (tested on 3.12; Enterprise has the same API but wasn't tried) with a
+token. InfluxDB 1 and 2, and InfluxDB's cloud, aren't supported.
+`influxdb://TOKEN@host:8181/database` URLs paste in.
+
+- **Rows** are points, the newest first. The key is the tags and the time,
+  which has nanoseconds.
+- **Editing** writes line protocol: fields can be changed and points added,
+  all of a save or none of it. InfluxDB can't delete rows, set a field back
+  to NULL, or change a point's tags or time. Two people editing the same
+  field: the last save wins.
+- **The query editor** runs SQL, and for what InfluxDB's SQL can't say:
+  `WRITE` on a line of its own, then line protocol up to an empty line;
+  `CREATE TABLE "t" ("site" TAG, "temp" FLOAT64)`, `DROP TABLE`,
+  `CREATE DATABASE`, `DROP DATABASE`. Exports use these.
+- CSV imports need a column for the time.
+
+### Greenplum, libSQL and Turso
+
+- **Greenplum** (tested on 6 and 7) is PostgreSQL spread over segments: a
+  table's `DISTRIBUTED BY` shows, and is in its definition and exports. A
+  unique index must contain the distribution key; foreign keys are kept but
+  not enforced. Without a sort, rows come in no fixed order, so page by a
+  sorted column.
+- **libSQL** servers (tested on sqld 0.24) run SQLite's SQL over HTTP, with
+  a token if the server asks for one. They have no ATTACH, temporary tables
+  or VACUUM, and end a transaction left idle for some seconds: GoTable then
+  says so instead of going on outside it. `libsql://host?authToken=…` URLs
+  paste in (`&tls=0` for plain HTTP).
+- **Turso** uses the same protocol over TLS. It is untested.
 
 ## Features
 
@@ -369,94 +512,13 @@ For UI development: `bin/gotable -no-window -addr 127.0.0.1:7777`, then
 
 ## Tests
 
-### Redis
-
-Keys are shown the way tables are (`redis://` and `rediss://` URLs paste in;
-Valkey, KeyDB and Dragonfly speak the same protocol):
-
-- **Databases** are Redis's numbered ones, `db0`, `db1`…; the Database
-  field takes the number to start in.
-- **The sidebar** lists *All keys* and the namespaces found in the keys
-  (`user:*`, `session:*`). A pattern opens as a list of keys, with each one's
-  type, TTL (seconds) and value — short strings whole, other types by size.
-  The arrow on a key opens it: a hash's fields, a list's items, a set's
-  members, a sorted set's members and scores, a stream's entries, a string or
-  JSON value. Filters and search work on every column.
-- **Editing**: rename a key, change a string, set or clear a TTL, add a
-  string key, delete keys; in an opened key, change its fields, items,
-  members, scores or entries. Review shows the exact commands (`RENAME`,
-  `SET … KEEPTTL`, `HSET`, `LSET`, `ZADD`…). They run together in one
-  `MULTI/EXEC`, watched, so it is all or nothing; a value changed since you
-  loaded it is overwritten.
-- **The query editor** runs commands as redis-cli takes them, one a line
-  (`#` starts a comment): replies are tables (`HGETALL` as field/value,
-  `ZRANGE … WITHSCORES` as member/score, `INFO` by section, `SCAN` with the
-  next cursor). `MULTI…EXEC` and `SELECT` work across lines; `SUBSCRIBE` and
-  `MONITOR`, which never return, are refused.
-- **Export** writes the keys as commands with their expiry (`.redis`, for
-  `redis-cli < file` or Import script); keys can also go to CSV or JSON.
-
-### Cassandra
-
-Keyspaces are the schemas; a table's primary key is its partition key, then
-its clustering columns (the Structure tab says which). `cassandra://` and
-`scylla://` URLs paste in; ScyllaDB speaks the same protocol.
-
-- **Rows**: CQL has no OFFSET and filters or sorts on the server only by
-  key, so a page is read by skipping rows, and the filter bar and column
-  sorts work here over up to 100,000 rows. A CQL filter (WHERE) runs on the
-  server, with ALLOW FILTERING added; put the partition key in it for big
-  tables. Collections show as CQL (`{'a', 'b'}`, `[1, 2]`, `{'k': 1}`) and
-  are edited the same way.
-- **Editing** writes each type as CQL and uses lightweight transactions
-  (`UPDATE … IF EXISTS`, `INSERT … IF NOT EXISTS`, `DELETE … IF EXISTS`),
-  so a row deleted meanwhile is reported; another edit of
-  the same row is overwritten. There are no
-  transactions: each change commits on its own. Key columns can't change.
-- **Structure**: columns can be added or dropped, indexes added or dropped,
-  the comment set and the table emptied; the key and the column types are
-  fixed. New tables are made with CREATE TABLE in the query editor, which
-  New table opens with an example; keyspaces with CREATE KEYSPACE.
-  Deleting a keyspace is DROP KEYSPACE.
-- **The query editor** runs CQL (`USE` switches keyspace). Export writes the
-  tables as CQL (`DESCRIBE`) and rows as INSERTs, for Import or
-  `cqlsh -f`; CSV imports and exports work too.
-- GoTable talks to the host it is given, which coordinates the cluster: the
-  other nodes' addresses needn't be reachable (an SSH tunnel works).
-
-### DynamoDB
-
-A connection is a region and an AWS access key; without a key GoTable signs
-in as the AWS CLI does (environment, `~/.aws`, SSO; `profile=name` in
-Options). An endpoint host is for DynamoDB Local, which is never sent the
-machine's AWS keys. URLs: `dynamodb:///us-east-1`,
-`dynamodb://KEY:SECRET@localhost:8000/us-east-1`.
-
-- **Reads on AWS are billed.** A table's columns come from its first 500
-  items; a page is read by scanning up to it; the filter bar and sorts scan
-  the table (up to 100,000 items). A PartiQL condition (WHERE) runs on the
-  server: with the partition key in it, it reads only that. Tables over
-  100,000 items show AWS's approximate count.
-- **Types** are kept when edited; text that doesn't fit is refused. Lists
-  and maps are JSON; sets and nested binary are `{"$ss": ["a"]}`,
-  `{"$ns": [1]}`, `{"$bs": ["base64"]}`, `{"$b": "base64"}`. NULL removes
-  the attribute. Keys can't change.
-- **A commit** is one transaction per 100 changes. It fails if an item was
-  deleted meanwhile or a new key exists; another edit of the same attribute
-  is overwritten.
-- **The query editor** runs PartiQL, and for what that can't say:
-  `CREATE TABLE "t" ("id" S PARTITION KEY, "at" N SORT KEY)`,
-  `CREATE TABLE "t" WITH {the AWS CLI's create-table JSON}`, `DROP TABLE`
-  and `PUT "t" {item}`. Exports use these, so GoTable's Import reads them.
-  Exports include keys, indexes and capacity, but not TTL, streams, tags or
-  backups. Indexes are changed with the AWS console or CLI.
-
 ```sh
 make test       # Go unit + SQLite + SSH + HTTP API tests, and UI unit tests
 make test-dbs   # also PostgreSQL 15, MySQL 8.4 and MariaDB 11 in Docker
 ENGINES=all scripts/test-dbs.sh   # every server: + SQL Server, Oracle, ClickHouse, MongoDB, Redis, Valkey, CockroachDB,
                                   # YugabyteDB, TimescaleDB, TiDB, Percona, SingleStore, CrateDB, QuestDB,
-                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet, Cassandra, ScyllaDB, DynamoDB Local
+                                  # StarRocks, Doris, FerretDB, Dragonfly, KeyDB, Garnet, Cassandra, ScyllaDB, DynamoDB Local,
+                                  # Greenplum, libSQL, Elasticsearch, OpenSearch, InfluxDB
                                   # (the analytical ones are big images)
 ENGINES="mongodb mongors mongoshard mongotls" MONGODB_IMAGE=mongo:4.4 scripts/test-dbs.sh -run Mongo ./internal/...
                                   # MongoDB standalone, replica set, sharded cluster, TLS + X.509

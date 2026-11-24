@@ -29,6 +29,14 @@ func (c *Conn) Exec(ctx context.Context, stmt string) (int64, error) {
 	if c.dyn != nil {
 		return c.dynExec(ctx, stmt)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return 0, err
+		}
+		defer c.mu.Unlock()
+		r := c.remote.run(ctx, c, stmt, 1)
+		return r.RowsAffected, r.Err
+	}
 	if err := c.lock(ctx); err != nil {
 		return 0, err
 	}
@@ -77,6 +85,13 @@ func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []str
 	}
 	if c.dyn != nil {
 		return c.dynStreamRows(ctx, t, p, fn)
+	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return err
+		}
+		defer c.mu.Unlock()
+		return c.remote.streamRows(ctx, c, t, p, fn)
 	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
@@ -180,6 +195,9 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	}
 	if c.dyn != nil {
 		return c.dynImportScript(ctx, r, o, progress)
+	}
+	if c.remote != nil {
+		return c.remoteImportScript(ctx, r, o, progress)
 	}
 	if o.MaxErrors <= 0 {
 		o.MaxErrors = 200
@@ -359,6 +377,13 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	if c.dyn != nil {
 		return c.dynImportCSV(ctx, r, t, o, progress)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return 0, err
+		}
+		defer c.mu.Unlock()
+		return c.remote.importCSV(ctx, c, r, t, o, progress)
+	}
 	if len(o.Columns) == 0 || len(o.Columns) != len(o.Mapping) {
 		return 0, errors.New("choose at least one column to import")
 	}
@@ -506,6 +531,13 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 	if c.dyn != nil {
 		return c.dynDump(ctx, w, o, progress)
 	}
+	if c.remote != nil {
+		if err := c.lock(ctx); err != nil {
+			return err
+		}
+		defer c.mu.Unlock()
+		return c.remote.dump(ctx, c, w, o, progress)
+	}
 	if o.BatchSize <= 0 {
 		o.BatchSize = 200
 	}
@@ -563,7 +595,11 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			return err
 		}
 		for _, s := range seqs {
-			if !s.identity {
+			switch {
+			case s.identity:
+			case s.guard: // Greenplum 6 has no IF NOT EXISTS for sequences
+				sw.printf("DO $$ BEGIN CREATE SEQUENCE %s; EXCEPTION WHEN duplicate_table THEN NULL; END $$;\n", d.QuoteIdent(s.name))
+			default:
 				sw.printf("CREATE SEQUENCE IF NOT EXISTS %s;\n", d.QuoteIdent(s.name))
 			}
 		}
@@ -677,6 +713,7 @@ type pgSequence struct {
 	name     string
 	last     *int64
 	identity bool
+	guard    bool // created in a block that passes over an existing one
 }
 
 func (c *Conn) pgSequences(ctx context.Context, schema string) ([]pgSequence, error) {
@@ -687,6 +724,9 @@ func (c *Conn) pgSequences(ctx context.Context, schema string) ([]pgSequence, er
 		return nil, err
 	}
 	defer c.mu.Unlock()
+	if greenplumOld(ctx, c) {
+		return greenplumSequences(ctx, c, schema)
+	}
 	rows, err := c.conn.QueryContext(ctx, `SELECT s.sequencename, s.last_value,
 			EXISTS (SELECT 1 FROM pg_depend dp JOIN pg_class cl ON cl.oid = dp.objid
 				JOIN pg_namespace n ON n.oid = cl.relnamespace
@@ -727,8 +767,12 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 	}
 	switch c.Config.Driver.Family() {
 	case model.DriverPostgres:
+		identity := "a.attidentity::text, a.attgenerated::text"
+		if greenplumOld(ctx, c) {
+			identity = "'', ''"
+		}
 		rows, err := c.conn.QueryContext(ctx, `SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
-				pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text
+				pg_get_expr(d.adbin, d.adrelid), `+identity+`
 			FROM pg_attribute a JOIN pg_class cl ON cl.oid = a.attrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
 			LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 			WHERE n.nspname = $1 AND cl.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`, o.Schema, o.Name)
@@ -796,7 +840,7 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 			post = append(post, strings.Replace(s, " ON "+d.QuoteIdent(o.Schema)+".", " ON ", 1))
 			post[len(post)-1] = strings.Replace(post[len(post)-1], " ON "+o.Schema+".", " ON ", 1)
 		}
-		return "CREATE TABLE " + name + " (\n" + strings.Join(lines, ",\n") + "\n)", post, nil
+		return "CREATE TABLE " + name + " (\n" + strings.Join(lines, ",\n") + "\n)" + greenplumDistribution(ctx, c, TableRef{Schema: o.Schema, Name: o.Name}), post, nil
 	case model.DriverMySQL:
 		var tn, ddl string
 		if err := c.conn.QueryRowContext(ctx, "SHOW CREATE TABLE "+d.QualifiedName(TableRef{Schema: o.Schema, Name: o.Name})).Scan(&tn, &ddl); err != nil {

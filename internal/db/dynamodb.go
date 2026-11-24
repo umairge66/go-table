@@ -1062,8 +1062,8 @@ func dynUnquote(s string) string {
 }
 
 // dynRun runs PartiQL, or one of GoTable's own statements. Callers hold c.mu.
-func (c *Conn) dynRun(ctx context.Context, stmt string, rowCap int) Result {
-	r := Result{Statement: stmt}
+func (c *Conn) dynRun(ctx context.Context, stmt string, rowCap int) (r Result) {
+	r = Result{Statement: stmt}
 	start := time.Now()
 	defer func() { r.Duration = time.Since(start) }()
 	stmt = dynLeading.ReplaceAllString(stmt, "") // comments before it
