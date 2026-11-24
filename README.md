@@ -37,10 +37,10 @@
 </p>
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
-Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra, DynamoDB, Elasticsearch and InfluxDB, and the servers and cloud services compatible with
+Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra, DynamoDB, Elasticsearch, InfluxDB, Snowflake and BigQuery, and the servers and cloud services compatible with
 them (CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase, CrateDB, QuestDB,
 TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
-FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB, Greenplum, libSQL, Turso, OpenSearch). A Go backend with a web UI, shipped as one binary that opens in a native window
+FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB, Greenplum, libSQL, Turso, Cloudflare D1, OpenSearch). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
 
@@ -69,7 +69,9 @@ inspector and a Data / Structure / Definition switch.
 | DynamoDB (tested on DynamoDB Local, not on AWS) | items without fixed attributes: see [below](#dynamodb) |
 | Elasticsearch (tested on 9.5), OpenSearch (tested on 3) | documents in indices: see [below](#elasticsearch) |
 | InfluxDB 3 Core (tested on 3.12) | time series: see [below](#influxdb) |
-| Greenplum (tested on 6 and 7), libSQL (tested on sqld 0.24), Turso (untested) | PostgreSQL's and SQLite's SQL: see [below](#greenplum-libsql-and-turso) |
+| Snowflake (tested on the service) | a cloud warehouse: see [below](#snowflake) |
+| BigQuery (tested on its free tier) | Google's warehouse, rows read-only in the grid: see [below](#bigquery) |
+| Greenplum (tested on 6 and 7), libSQL (tested on sqld 0.24), Turso, Cloudflare D1 | PostgreSQL's and SQLite's SQL: see [below](#greenplum-libsql-and-turso), and [D1](#cloudflare-d1) |
 | CockroachDB, YugabyteDB, TimescaleDB, Neon, Supabase | PostgreSQL protocol and SQL; the top bar names the product |
 | TiDB, Percona Server, PlanetScale | MySQL protocol and SQL |
 | SingleStore | MySQL protocol, without foreign keys, CHECKs, index renames or primary key changes (the key is the shard key); case-insensitive search |
@@ -283,7 +285,80 @@ token. InfluxDB 1 and 2, and InfluxDB's cloud, aren't supported.
   or VACUUM, and end a transaction left idle for some seconds: GoTable then
   says so instead of going on outside it. `libsql://host?authToken=…` URLs
   paste in (`&tls=0` for plain HTTP).
-- **Turso** uses the same protocol over TLS. It is untested.
+- **Turso** uses the same protocol over TLS (tested on its cloud).
+
+### Cloudflare D1
+
+SQLite's SQL through Cloudflare's API (tested on the service): an account
+ID, an API token with the permission Account → D1 → Edit, and a database by
+name or ID. `d1://ACCOUNT_ID:API_TOKEN@cloudflare/database` URLs paste in.
+
+- **A save** is one batch, all of it or none; a row deleted meanwhile stops
+  it. A structure change, a CSV import and an import as one transaction are
+  a batch too, up to what D1 takes in one request.
+- **Foreign keys** are always enforced. Dropping a table deletes the rows
+  that reference it `ON DELETE CASCADE`, so GoTable refuses to rebuild a
+  table that others reference (a change of type, NULL, default or key), or
+  to delete it without them.
+- **Whole numbers past 2^53** are rounded by Cloudflare's API. Tables and
+  exports are read so that they are exact; in the query editor such a number
+  is marked with ≈ (`CAST(x AS TEXT)` shows it).
+- There is no BEGIN, ATTACH, temporary table or VACUUM, and a statement
+  takes at most 100,000 bytes. Reading counts towards the account's limits.
+
+### Snowflake
+
+Tested on the service, signing in with a key pair. Signing in with a
+password, an access token or the browser (single sign-on), and hybrid,
+Iceberg and external tables, are not tested. The account is written `ORGANIZATION-ACCOUNT`;
+`snowflake://user:password@account/database?warehouse=…&role=…` URLs paste
+in.
+
+- **What is billed**: reading rows runs the warehouse. Lists of databases,
+  tables, columns and keys, definitions and a table's own row count don't.
+  A view or a filtered table is counted only when you press *Count*.
+- **Keys aren't enforced** by Snowflake, so an edit that would change more
+  than one row is undone. It accepts a foreign key with `ON DELETE CASCADE`
+  and silently doesn't create it: GoTable refuses those. Tables are dropped
+  with `RESTRICT`, as `DROP TABLE` alone also drops other tables' keys.
+- **Values** are exact: 38 digits, nanoseconds, JSON, binary, geography and
+  vectors can be read, edited and exported, whatever the account's date
+  formats are.
+- **Names** written without quotes are stored in upper case; names typed in
+  GoTable's dialogs are kept as they are.
+- Schema changes commit one by one, there are no indexes, and a column's
+  default can only be removed. In the editor, a scripting block goes between
+  `$$` (`EXECUTE IMMEDIATE $$ BEGIN … END $$`), and PUT and GET, which copy
+  files, aren't run.
+- Snowflake's client would send telemetry: GoTable keeps it from being sent, and
+  from loading a native library.
+
+### BigQuery
+
+Tested on a project of the free tier, with a service account's key (a JSON
+file). Without one, GoTable uses the sign-in of `gcloud auth
+application-default login` (not tested). Datasets are the schemas, projects
+the databases. `bigquery://project/dataset?credentials_path=/path/key.json`
+URLs paste in.
+
+- **Rows can't be edited in the grid** yet. INSERT, UPDATE and DELETE run
+  from the query editor, in a project with billing (not tested: the free
+  tier refuses them).
+- **What is billed**: a query is billed for the columns it reads, whatever
+  its LIMIT, and 10 MB at least if it reads a table. Browsing a table without
+  filters or sorting, counting it, its structure, definition and exports are
+  free. A filter, a sort or a view is a query.
+- **A limit for each query** (10 GB unless the connection says otherwise):
+  BigQuery refuses a larger one, and nothing is billed. The editor shows
+  what its text would read before it runs.
+- **Scripts** with variables, transactions or temporary tables run as one,
+  with a result for each statement. A view's query must name the dataset of
+  its tables.
+- **CSV** is imported by a load job: free, and all or nothing.
+- **Exports** are SQL with one INSERT for many rows. Their rows were read
+  back exactly, but the INSERTs themselves need billing and haven't been run.
+- **Foreign keys**: dropping a table would drop other tables' keys to it, so
+  GoTable refuses while such a key is in the same dataset.
 
 ## Features
 

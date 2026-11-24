@@ -3,7 +3,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, 
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, isDynamo, isElastic, isInflux, isLibSQL, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, hostless, isBigQuery, isD1, isSnowflake, isDynamo, isElastic, isInflux, isLibSQL, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
 
@@ -61,8 +61,9 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
     const prevDefault = driverInfo(x.driver).port
     return {
       ...x, driver: d,
-      // DynamoDB has no host unless it's a local one: AWS is found by region.
-      host: isDynamo(d) && x.host === '127.0.0.1' ? '' : !isDynamo(d) && !x.host && isDynamo(x.driver) ? '127.0.0.1' : x.host,
+      // DynamoDB has no host unless it's a local one: AWS is found by region. D1 has none.
+      ...(isD1(d) || isSnowflake(d) || isBigQuery(d) ? { use_ssh_tunnel: false } : {}),
+      host: hostless(d) && x.host === '127.0.0.1' || isD1(d) ? '' : !hostless(d) && !x.host && hostless(x.driver) ? '127.0.0.1' : x.host,
       // A libSQL server takes a token only.
       ...(isLibSQL(d) ? { user: '', database: '' } : isElastic(d) ? { database: '' } : isInflux(d) ? { user: '' } : {}),
       port: !x.port || x.port === prevDefault ? driverInfo(d).port : x.port,
@@ -214,15 +215,63 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
           </Field>
         ) : (
           <>
-            <div className="grid grid-cols-[1fr_110px] gap-3">
+            {!isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && <div className="grid grid-cols-[1fr_110px] gap-3">
               <Field label={isDynamo(c.driver) ? 'Endpoint host (DynamoDB Local)' : 'Host'}><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
               <Field label="Port"><Input inputMode="numeric" value={c.srv ? '' : c.port || ''} disabled={c.srv} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
-            </div>
-            {isInflux(c.driver) ? <>
+            </div>}
+            {isD1(c.driver) ? <>
+              <Field label="Account ID" hint="The code in your Cloudflare dashboard's address: dash.cloudflare.com/<account ID>/…"><Input mono value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value.trim())} /></Field>
+              <Field label="API token" hint="Made under My Profile → API Tokens, with the permission Account → D1 → Edit.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+              <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+            </> : isBigQuery(c.driver) ? <>
+              <Field label="Credentials file" hint="A service account's JSON key. Empty: the sign-in of “gcloud auth application-default login”.">
+                <div className="flex gap-2">
+                  <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/keys/project-key.json" onChange={(e) => set('key_path', e.target.value)} />
+                  {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
+                    onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+                </div>
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Project"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value.trim())} /></Field>
+                <Field label="Limit of a query (GB)" hint="One that would read more is refused, unbilled. 0: no limit.">
+                  <Input inputMode="decimal" value={new URLSearchParams(c.options ?? '').get('limit') ?? ''} placeholder="10" onChange={(e) => { const v = e.target.value.replace(/[^\d.]/g, ''); set('options', v ? `limit=${v}` : '') }} /></Field>
+              </div>
+              <p className="text-[12px] text-muted">Queries are billed by what they read, 10 MB at least. Browsing a table without filters or sorting, its structure and exports are free.</p>
+            </> : isSnowflake(c.driver) ? <>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Account" hint="Organization and account, joined with a dash."><Input mono value={c.host ?? ''} placeholder={driverInfo(c.driver).host} onChange={(e) => set('host', e.target.value.trim())} /></Field>
+                <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Sign in with" hint={c.auth === 'browser' ? 'Your browser opens to sign in, each time GoTable connects.' : !c.auth ? 'Works only where the user needs no second factor code.' : undefined}>
+                  <Select value={c.auth ?? ''} aria-label="Sign in with" onChange={(e) => set('auth', e.target.value as Connection['auth'])}>
+                    <option value="">Password</option>
+                    <option value="key">Key pair</option>
+                    <option value="token">Access token</option>
+                    <option value="browser">Browser (SSO)</option>
+                  </Select>
+                </Field>
+                {c.auth !== 'browser' && <Field label={c.auth === 'key' ? 'Key passphrase' : c.auth === 'token' ? 'Access token' : 'Password'}>
+                  {secretInput('password', c.saved?.password, c.auth === 'key' ? 'if the key is encrypted' : 'stored in your system keyring')}</Field>}
+              </div>
+              {c.auth === 'key' && <Field label="Private key" hint="The .p8 (PEM) file whose public key is set on the user.">
+                <div className="flex gap-2">
+                  <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/.ssh/snowflake_key.p8" onChange={(e) => set('key_path', e.target.value)} />
+                  {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
+                    onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+                </div>
+              </Field>}
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+                <Field label="Warehouse"><Input value={c.warehouse ?? ''} placeholder="your default" onChange={(e) => set('warehouse', e.target.value)} /></Field>
+                <Field label="Role"><Input value={c.role ?? ''} placeholder="your default" onChange={(e) => set('role', e.target.value)} /></Field>
+              </div>
+              <p className="text-[12px] text-muted">Reading rows runs the warehouse, which Snowflake bills. Lists of tables, columns and keys don’t.</p>
+            </> : isInflux(c.driver) ? <>
               <Field label="Token" hint="An admin or database token. Leave empty for a server started without authentication.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
               <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
             </> : isLibSQL(c.driver) ? (
-              <Field label="Authentication token" hint={c.driver === 'libsql' ? 'Leave empty for a server that asks for none.' : undefined}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+              <Field label="Authentication token" hint={c.driver === 'libsql' ? 'Leave empty for a server that asks for none.' : 'Made with “turso db tokens create <database>”, or in the Turso dashboard.'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
             ) : <>
             <div className="grid grid-cols-2 gap-3">
               <Field label={isDynamo(c.driver) ? 'Access key ID' : 'User'}><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
@@ -248,7 +297,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
         )}
       </section>
 
-      {!file && (
+      {!file && !isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && (
         <details className="group mt-3 rounded-xl border border-line bg-panel">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium">
             <Shield className="size-4 text-muted" /> Security (SSL)
@@ -270,7 +319,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
         </details>
       )}
 
-      {!file && (
+      {!file && !isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && (
         <section className="mt-3 rounded-xl border border-line bg-panel p-4">
           <Switch checked={!!c.use_ssh_tunnel} onChange={(v) => set('use_ssh_tunnel', v)} label={<span className="font-medium">Connect through an SSH tunnel</span>} />
           {c.use_ssh_tunnel && (

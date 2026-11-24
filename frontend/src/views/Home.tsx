@@ -6,11 +6,14 @@ import { api } from '../api'
 import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { keys } from '../lib/platform'
-import { features, isDynamo, tagInfo, type Connection, type Group } from '../types'
+import { features, isBigQuery, isD1, isSnowflake, isDynamo, tagInfo, type Connection, type Group } from '../types'
 import { ConnectionForm, UrlDialog, newConnection } from './ConnectionForm'
 
 export function subtitle(c: Connection) {
   if (features(c.driver).file) return c.path ?? ''
+  if (isD1(c.driver)) return `Cloudflare · ${c.database ?? ''}`
+  if (isBigQuery(c.driver)) return `Google Cloud · ${c.database || 'the credentials’ project'}`
+  if (isSnowflake(c.driver)) return `${c.user ? c.user + '@' : ''}${c.host ?? ''}${c.database ? '/' + c.database : ''}`
   if (isDynamo(c.driver) && !c.host) return `AWS ${c.database ?? ''}`.trim()
   let s = `${c.host || '127.0.0.1'}${c.port ? ':' + c.port : ''}`
   if (c.user) s = `${c.user}@${s}`

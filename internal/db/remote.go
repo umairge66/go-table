@@ -47,9 +47,14 @@ func (c *Conn) remoteExecuteIn(ctx context.Context, schema, script string, rowCa
 	}
 	var out []Result
 	for _, sp := range spans {
-		r := c.remote.run(ctx, c, sp.SQL, rowCap)
-		out = append(out, r)
-		if r.Err != nil {
+		rs := []Result{}
+		if x, ok := c.remote.(*bigquery); ok { // a script has several
+			rs = x.runAll(ctx, c, sp.SQL, rowCap)
+		} else {
+			rs = append(rs, c.remote.run(ctx, c, sp.SQL, rowCap))
+		}
+		out = append(out, rs...)
+		if rs[len(rs)-1].Err != nil {
 			break
 		}
 	}

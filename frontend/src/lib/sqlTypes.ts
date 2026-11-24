@@ -186,6 +186,38 @@ const CATALOG: PerDriver<TypeGroup[]> = {
   redis: [{ label: 'Other', types: [{ name: 'string', hint: 'text' }] }],
   elasticsearch: [{ label: 'Fields', types: [{ name: 'keyword', hint: '' }, { name: 'text', hint: '' }, { name: 'long', hint: '' }, { name: 'double', hint: '' }, { name: 'boolean', hint: '' }, { name: 'date', hint: '' }, { name: 'object', hint: '' }] }],
   influxdb: [{ label: 'Columns', types: [{ name: 'tag', hint: 'part of the key' }, { name: 'float64', hint: '' }, { name: 'int64', hint: '' }, { name: 'uint64', hint: '' }, { name: 'utf8', hint: 'text' }, { name: 'boolean', hint: '' }] }],
+  bigquery: [
+    { label: 'Numeric', types: [
+      { name: 'INT64', hint: 'whole number, 8 bytes' }, { name: 'FLOAT64', hint: 'approximate, 8 bytes' },
+      { name: 'NUMERIC', hint: 'exact, 38 digits', param: { kind: 'precision', placeholder: '10, 2' } }, { name: 'BIGNUMERIC', hint: 'exact, 76 digits' },
+    ] },
+    { label: 'Text', types: [{ name: 'STRING', hint: 'text of any length, or up to the length', param: len('length'), traits: ['text'] }] },
+    { label: 'Date and time', types: [
+      { name: 'DATE', hint: 'calendar date' }, { name: 'DATETIME', hint: 'date and time, microseconds' }, { name: 'TIMESTAMP', hint: 'a moment, UTC' }, { name: 'TIME', hint: 'time of day' },
+      { name: 'INTERVAL', hint: 'a duration' }, { name: 'RANGE<DATE>', hint: 'a span of dates' },
+    ] },
+    { label: 'Nested', types: [
+      { name: 'JSON', hint: 'JSON document' }, { name: 'ARRAY<STRING>', hint: 'a list' }, { name: 'ARRAY<INT64>', hint: 'a list of numbers' }, { name: 'STRUCT<a INT64, b STRING>', hint: 'fields in a field' },
+    ] },
+    { label: 'Other', types: [{ name: 'BOOL', hint: 'true / false' }, { name: 'BYTES', hint: 'bytes' }, { name: 'GEOGRAPHY', hint: 'shapes on the globe' }] },
+  ],
+  snowflake: [
+    { label: 'Numeric', types: [
+      { name: 'NUMBER', hint: 'exact number; whole unless sized', param: { kind: 'precision', placeholder: '38,0' }, traits: ['int'] },
+      { name: 'INTEGER', hint: 'whole number, NUMBER(38,0)', traits: ['int'] },
+      { name: 'FLOAT', hint: 'approximate, 8 bytes' }, { name: 'DECFLOAT', hint: 'decimal floating point, 38 digits' },
+    ] },
+    { label: 'Text', types: [{ name: 'VARCHAR', hint: 'text of any length, or up to the length', param: len('length'), traits: ['text'] }] },
+    { label: 'Date and time', types: [
+      { name: 'DATE', hint: 'calendar date' }, { name: 'TIME', hint: 'time of day' },
+      { name: 'TIMESTAMP_NTZ', hint: 'date and time' }, { name: 'TIMESTAMP_LTZ', hint: "a moment, shown in the session's time zone" }, { name: 'TIMESTAMP_TZ', hint: 'date and time with its offset' },
+    ] },
+    { label: 'Semi-structured', types: [{ name: 'VARIANT', hint: 'any value, JSON' }, { name: 'OBJECT', hint: 'JSON object' }, { name: 'ARRAY', hint: 'JSON list' }] },
+    { label: 'Other', types: [
+      { name: 'BOOLEAN', hint: 'true / false' }, { name: 'BINARY', hint: 'bytes' },
+      { name: 'GEOGRAPHY', hint: 'shapes on the globe' }, { name: 'GEOMETRY', hint: 'shapes on a plane' }, { name: 'VECTOR(FLOAT, 256)', hint: 'embedding' },
+    ] },
+  ],
   dynamodb: [{ label: 'Keys', types: [{ name: 'S', hint: 'string' }, { name: 'N', hint: 'number' }, { name: 'B', hint: 'binary' }] }],
   cassandra: [
     { label: 'Numeric', types: [

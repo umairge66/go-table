@@ -11,7 +11,8 @@ import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, error
 import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
 import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
-import { FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isElastic, isMongo, isRedis, noInserts, usesCommands } from '../types'
+import { quote } from '../lib/quote'
+import { rowEdits, FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isElastic, isMongo, isRedis, noInserts, usesCommands } from '../types'
 import { escapeKey, isPattern, keyLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
@@ -57,7 +58,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   const confirm = useConfirm()
   const menu = useMenu()
   const table = useMemo(() => ({ schema: object.schema, name: object.name }), [object])
-  const readOnly = object.kind === 'view'
+  const isView = object.kind === 'view'
+  const readOnly = isView || !rowEdits(session.connection.driver)
   // Rows per page: picked in the footer and remembered for every table.
   const [pageSize, setPageSize] = useState(() => savedPageSize() || session.connection.rows_per_page || 300)
   const changePageSize = (n: number) => guard(() => {
@@ -116,7 +118,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     return { filters: fs, rawWhere: applied.rawWhere, sort, limit: pageSize, offset: o }
   }, [applied, sort, pageSize, offset])
 
-  const load = useCallback(async (o = offset, refreshStructure = false) => {
+  const load = useCallback(async (o = offset, refreshStructure = false, count = false) => {
     abort.current?.abort()
     const ac = new AbortController()
     abort.current = ac
@@ -132,7 +134,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         setForeignKeys(st.foreignKeys ?? [])
         setTableInfo(st.table ?? null)
       }
-      const res = await api.rows(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal)
+      const res = await api.rows(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal, count)
       // A collection's columns come from a sample of it: a page can hold more.
       if (mongo && res.columns.length > cols.length) {
         const known = cols
@@ -299,7 +301,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     return first === 'field' ? `HGETALL ${k}` : first === 'index' ? `LRANGE ${k} 0 -1` : first === 'member' ? (columns?.length === 2 ? `ZRANGE ${k} 0 -1 WITHSCORES` : `SMEMBERS ${k}`)
       : first === 'id' ? `XRANGE ${k} - + COUNT 100` : `TYPE ${k}\nGET ${k}`
   }
-  const pages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
+  const pages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize) + (data?.more ? 1 : 0))
   const page = Math.floor(offset / pageSize)
   const refName = (f: ForeignRef) => `${f.schema && f.schema !== object.schema ? f.schema + '.' : ''}${f.table}`
   const gridColumns = useMemo(() => (columns ?? []).map((c) => ({ name: c.name, type: c.type, pk: c.primaryKey,
@@ -349,7 +351,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} disabled={!sel} onClick={() => sel && deleteRows(sel.rows)}>Delete</Button>
             </>}
             <RefreshButton label="Refresh (Ctrl+R)" busy={loading} onRefresh={() => guard(() => load())} />
-            {!readOnly && <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} onClick={() => guard(() => setImportOpen(true))}>Import</Button>}
+            {!isView && <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} onClick={() => guard(() => setImportOpen(true))}>Import</Button>}
             <Button size="sm" variant="ghost" icon={<Download className="size-3.5" />} onClick={() => setExportOpen(true)}>Export</Button>
           </div>
 
@@ -452,7 +454,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                     Commit or discard the {pending} unsaved row change{pending === 1 ? '' : 's'} in Data before changing the structure.
                   </div>
                 )}
-                <StructureView session={session} table={table} readOnly={readOnly || pending > 0} columns={columns ?? []} indexes={indexes}
+                <StructureView session={session} table={table} readOnly={isView || pending > 0} columns={columns ?? []} indexes={indexes}
                   foreignKeys={foreignKeys} info={tableInfo} highlight={newColumn}
                   onChanged={(c) => { setNewColumn(c); load(0, true); onStructureChanged?.() }}
                   onRenamed={(name) => onRenamed?.(name)} />
@@ -476,7 +478,8 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         {mode === 'data' && data && (
           <>
             <span className="text-[12px] text-muted">
-              {data.total === 0 ? 'No rows' : `${fmt(offset + 1)}–${fmt(offset + data.rows.length)} of ${fmt(data.total)} rows`}
+              {data.total === 0 ? 'No rows' : `${fmt(offset + 1)}–${fmt(offset + data.rows.length)} of ${data.more ? 'more than ' : ''}${fmt(data.total)} rows`}
+              {data.more && <button type="button" className="ml-1.5 text-accent hover:underline" title="Counting reads the rows, which is billed" onClick={() => guard(() => load(offset, false, true))}>Count</button>}
               {activeFilterCount + (applied.quick ? 1 : 0) > 0 && <span className="ml-1.5 rounded bg-accent-soft px-1.5 py-0.5 text-[11px] font-medium text-accent">filtered</span>}
             </span>
             <div className="flex-1" />
@@ -487,13 +490,13 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
             </Select>
             <div className="flex items-center gap-0.5">
               <IconButton label="Previous page" disabled={page === 0} onClick={() => guard(() => load(offset - pageSize))}><ChevronLeft className="size-4" /></IconButton>
-              <span className="min-w-16 text-center text-[12px] text-muted">{page + 1} / {fmt(pages)}</span>
+              <span className="min-w-16 text-center text-[12px] text-muted">{page + 1} / {data.more ? '…' : fmt(pages)}</span>
               <IconButton label="Next page" disabled={page >= pages - 1} onClick={() => guard(() => load(offset + pageSize))}><ChevronRight className="size-4" /></IconButton>
             </div>
           </>
         )}
         {mode !== 'data' && <div className="flex-1" />}
-        <Button size="sm" variant="ghost" onClick={() => openQuery(redis ? redisQuery() : isElastic(session.connection.driver) ? `GET /${object.name}/_search\n{\n  "size": 100,\n  "query": { "match_all": {} }\n}` : isDynamo(session.connection.driver) ? `SELECT * FROM "${object.name}"` : mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${object.name}\nLIMIT 100;`)}>{usesCommands(session.connection.driver) ? 'Open in query' : 'Open in SQL'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => openQuery(redis ? redisQuery() : isElastic(session.connection.driver) ? `GET /${object.name}/_search\n{\n  "size": 100,\n  "query": { "match_all": {} }\n}` : isDynamo(session.connection.driver) ? `SELECT * FROM "${object.name}"` : mongo ? `${mongoColl(object.name)}.find({}).limit(100)` : `SELECT *\nFROM ${quote(object.name, session.connection.driver)}\nLIMIT 100;`)}>{usesCommands(session.connection.driver) ? 'Open in query' : 'Open in SQL'}</Button>
       </div>
 
       {review && (

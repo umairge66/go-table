@@ -19,7 +19,7 @@ export function dropKind(driver: Driver, level: 'server' | 'listed'): 'database'
   const f = family(driver)
   if (f === 'sqlite' || f === 'oracle') return null
   if (f === 'duckdb') return level === 'listed' ? 'schema' : null
-  if (f === 'postgres' || f === 'sqlserver') return level === 'server' ? 'database' : 'schema'
+  if (f === 'postgres' || f === 'sqlserver' || f === 'snowflake') return level === 'server' ? 'database' : 'schema'
   return level === 'listed' ? 'database' : null
 }
 

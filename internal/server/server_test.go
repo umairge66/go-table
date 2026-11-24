@@ -1083,7 +1083,7 @@ func TestNormalizeHost(t *testing.T) {
 		t.Error(err)
 	}
 	for _, d := range model.Drivers {
-		if d.IsFileBased() || d.Family() == model.DriverDynamoDB {
+		if d.IsFileBased() || d.IsHostless() {
 			continue
 		}
 		c := model.NewConnection(d)

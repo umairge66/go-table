@@ -58,7 +58,7 @@ export function FkLookup({ sid, fk, current, anchor, nullable, onPick, onText, o
         const idx = fk.columns.map((c) => r.columns.indexOf(c))
         const li = label ? r.columns.indexOf(label) : -1
         setOptions(r.rows.map((row) => ({ values: idx.map((i) => row[i]), label: li >= 0 ? row[li] : null })))
-        setTotal(r.total)
+        setTotal(r.more ? r.total + 1 : r.total)
         setHi(0)
         setError('')
       }).catch((e) => { if (!ctl.signal.aborted) setError(e instanceof Error ? e.message : String(e)) })

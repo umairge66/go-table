@@ -59,6 +59,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{sid}/definition", s.definition)
 	mux.HandleFunc("GET /api/sessions/{sid}/schema-analysis", s.schemaAnalysis)
 	mux.HandleFunc("POST /api/sessions/{sid}/rows", s.rows)
+	mux.HandleFunc("POST /api/sessions/{sid}/estimate", s.estimate)
 	mux.HandleFunc("POST /api/sessions/{sid}/changes", s.changes)
 	mux.HandleFunc("POST /api/sessions/{sid}/columns", s.addColumn)
 	mux.HandleFunc("POST /api/sessions/{sid}/alter", s.alterTable)
@@ -146,7 +147,7 @@ func normalize(c *model.Connection) {
 		c.Host, c.Port, c.User, c.DBName, c.SSLMode, c.UseSSHTunnel = "", 0, "", "", "", false
 	} else {
 		c.Path = ""
-		if c.Host == "" && c.Driver.Family() != model.DriverDynamoDB { // no host: AWS itself
+		if c.Host == "" && !c.Driver.IsHostless() { // no host: AWS itself, or Cloudflare
 			c.Host = "127.0.0.1"
 		}
 	}
@@ -158,7 +159,7 @@ func normalize(c *model.Connection) {
 				base = base[:i]
 			}
 			c.Name = base
-		case c.Driver.Family() == model.DriverDynamoDB && c.Host == "":
+		case c.Driver.IsHostless() && c.Host == "":
 			c.Name = strings.TrimSpace(c.Driver.Label() + " " + c.DBName)
 		case c.DBName != "":
 			c.Name = c.DBName + " @ " + c.Host
@@ -300,7 +301,7 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), db.SignInTime(c, 20*time.Second))
 	defer cancel()
 	start := time.Now()
 	version, err := db.Test(ctx, c, cred)
@@ -346,7 +347,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), db.SignInTime(&cfg, 30*time.Second))
 	defer cancel()
 	conn, err := db.Open(ctx, &cfg, cred)
 	if err != nil {
@@ -436,7 +437,7 @@ func (s *Server) forkSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), db.SignInTime(&cfg, 30*time.Second))
 	defer cancel()
 	conn, err := db.Open(ctx, &cfg, cred)
 	if err != nil {
@@ -770,6 +771,8 @@ func (s *Server) rows(w http.ResponseWriter, r *http.Request) {
 		Table   tableIn  `json:"table"`
 		Page    pageIn   `json:"page"`
 		Columns []string `json:"columns"`
+		// Count counts the rows even where that is billed.
+		Count bool `json:"count"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err)
@@ -783,13 +786,45 @@ func (s *Server) rows(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	total, err := se.c().CountRows(r.Context(), ref, page, in.Columns)
+	var total int64
+	more := false // there may be more rows than total
+	switch full := page.Limit > 0 && len(rs.Rows) >= page.Limit; {
+	case !in.Count && se.c().CountIsCostly(r.Context(), ref, page):
+		total = int64(page.Offset + len(rs.Rows))
+		more = full
+	default:
+		if total, err = se.c().CountRows(r.Context(), ref, page, in.Columns); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"columns": nonNil(rs.Columns), "types": nonNil(rs.Types), "rows": rowsOut(rs.Rows),
+		"total": total, "more": more, "ms": time.Since(start).Milliseconds()})
+}
+
+// estimate says how much a query would read, where that is billed.
+func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
+	se, err := s.session(r)
+	if err != nil {
+		writeErr(w, 410, err)
+		return
+	}
+	var in struct {
+		SQL    string `json:"sql"`
+		Schema string `json:"schema"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	n, err := se.c().Estimate(ctx, in.Schema, in.SQL)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"columns": nonNil(rs.Columns), "types": nonNil(rs.Types), "rows": rowsOut(rs.Rows),
-		"total": total, "ms": time.Since(start).Milliseconds()})
+	writeJSON(w, 200, map[string]any{"bytes": n})
 }
 
 func (s *Server) changes(w http.ResponseWriter, r *http.Request) {

@@ -49,6 +49,15 @@ func ParseURL(raw string) (*Connection, string, error) {
 	if strings.HasPrefix(strings.ToLower(raw), "dynamodb://") {
 		return parseDynamoURL(raw)
 	}
+	if strings.HasPrefix(strings.ToLower(raw), "d1://") {
+		return parseD1URL(raw)
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "bigquery://") {
+		return parseBigQueryURL(raw)
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "snowflake://") {
+		return parseSnowflakeURL(raw)
+	}
 	for _, s := range []string{"libsql://", "turso://"} {
 		if strings.HasPrefix(strings.ToLower(raw), s) {
 			return parseLibSQLURL(raw)
@@ -440,4 +449,95 @@ func parseLibSQLURL(raw string) (*Connection, string, error) {
 	}
 	c.Name = c.Host
 	return c, token, nil
+}
+
+// parseD1URL reads d1://ACCOUNT_ID:API_TOKEN@cloudflare/database (a name or
+// an ID).
+func parseD1URL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	c := NewConnection(DriverD1)
+	token := ""
+	if u.User != nil {
+		c.User = u.User.Username()
+		token, _ = u.User.Password()
+	}
+	c.DBName = strings.Trim(u.Path, "/")
+	if c.User == "" || c.DBName == "" {
+		return nil, "", fmt.Errorf("a D1 URL is d1://ACCOUNT_ID:API_TOKEN@cloudflare/database")
+	}
+	c.Name = "D1 " + c.DBName
+	return c, token, nil
+}
+
+// parseSnowflakeURL reads snowflake://user:password@account/database/schema
+// ?warehouse=…&role=…, as SQLAlchemy and Snowflake's Go client take it, with
+// authenticator and privateKeyPath (or private_key_path).
+func parseSnowflakeURL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	c := NewConnection(DriverSnowflake)
+	c.Host = u.Hostname()
+	if c.Host == "" {
+		return nil, "", fmt.Errorf("a Snowflake URL is snowflake://user:password@account/database?warehouse=name")
+	}
+	password := ""
+	if u.User != nil {
+		c.User = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	c.DBName, c.SelectedSchema, _ = strings.Cut(strings.Trim(u.Path, "/"), "/")
+	q := u.Query()
+	if a := q.Get("account"); a != "" { // …@host:443/db?account=a
+		c.Host = a
+	}
+	c.Warehouse, c.Role = q.Get("warehouse"), q.Get("role")
+	for _, k := range []string{"privateKeyPath", "private_key_path", "private_key_file"} {
+		if v := q.Get(k); v != "" {
+			c.Auth, c.KeyPath = AuthKey, v
+		}
+	}
+	switch strings.ToLower(q.Get("authenticator")) {
+	case "externalbrowser":
+		c.Auth = AuthBrowser
+	case "programmatic_access_token":
+		c.Auth = AuthToken
+		if t := q.Get("token"); t != "" {
+			password = t
+		}
+	case "snowflake_jwt":
+		c.Auth = AuthKey
+	}
+	c.Name = "Snowflake " + c.Host
+	if c.DBName != "" {
+		c.Name = c.DBName + " @ " + c.Host
+	}
+	return c, password, nil
+}
+
+// parseBigQueryURL reads bigquery://project/dataset?credentials_path=…, as
+// SQLAlchemy takes it.
+func parseBigQueryURL(raw string) (*Connection, string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid URL: %w", err)
+	}
+	c := NewConnection(DriverBigQuery)
+	c.DBName = u.Hostname()
+	c.SelectedSchema = strings.Trim(u.Path, "/")
+	q := u.Query()
+	for _, k := range []string{"credentials_path", "credentials", "keyfile"} {
+		if v := q.Get(k); v != "" {
+			c.KeyPath = v
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		c.Options = url.Values{"limit": {v}}.Encode()
+	}
+	c.Name = strings.TrimSpace("BigQuery " + c.DBName)
+	return c, "", nil
 }

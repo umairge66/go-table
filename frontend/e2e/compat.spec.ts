@@ -10,11 +10,13 @@ import { expect, test } from '@playwright/test'
 //   duckdb:///tmp/compat.duckdb
 //   greenplum://gpadmin@127.0.0.1:5432/postgres?sslmode=disable
 //   libsql://127.0.0.1:8080?tls=0
+//   libsql://<database>-<organization>.turso.io?authToken=…
+//   d1://ACCOUNT_ID:API_TOKEN@cloudflare/database
 //   mongodb://gotable:pw@127.0.0.1:27017/gotable?authSource=admin
 // scripts/test-dbs.sh with KEEP=1 prints the ports of its containers.
 const urls = (process.env.GOTABLE_E2E_COMPAT ?? '').split(/\s+/).filter(Boolean)
 const LABELS: Record<string, string> = { cockroachdb: 'CockroachDB', yugabytedb: 'YugabyteDB', tidb: 'TiDB', timescaledb: 'TimescaleDB',
-  percona: 'Percona Server', singlestore: 'SingleStore', sqlserver: 'SQL Server', oracle: 'Oracle', clickhouse: 'ClickHouse', duckdb: 'DuckDB', mongodb: 'MongoDB', greenplum: 'Greenplum', libsql: 'libSQL' }
+  percona: 'Percona Server', singlestore: 'SingleStore', sqlserver: 'SQL Server', oracle: 'Oracle', clickhouse: 'ClickHouse', duckdb: 'DuckDB', mongodb: 'MongoDB', greenplum: 'Greenplum', libsql: 'libSQL', d1: 'Cloudflare D1' }
 
 /** The test table in each database's own SQL. */
 const DDL: Record<string, string> = {
@@ -34,7 +36,7 @@ test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_CO
   for (const url of urls) {
     const scheme = url.slice(0, url.indexOf(':'))
     // Plain postgres:// and mysql:// URLs of cloud services are told apart by host.
-    const label = /\.neon\.tech[:/]/.test(url) ? 'Neon' : /\.supabase\.(co|com)[:/]/.test(url) ? 'Supabase' : /\.psdb\.cloud[:/]/.test(url) ? 'PlanetScale' : LABELS[scheme]
+    const label = /\.neon\.tech[:/]/.test(url) ? 'Neon' : /\.supabase\.(co|com)[:/]/.test(url) ? 'Supabase' : /\.psdb\.cloud[:/]/.test(url) ? 'PlanetScale' : /\.turso\.io/.test(url) ? 'Turso' : LABELS[scheme]
     await test.step(label ?? url, async () => {
       const page = await browser.newPage()
       const errors: string[] = []
@@ -92,6 +94,7 @@ INSERT INTO gt_compat VALUES (1, 'one', '2024-03-15 10:20:30'), (2, 'two', NULL)
       await expect(view.getByText(scheme === 'oracle' ? 'SEEN' : 'seen', { exact: true })).toBeVisible()
       await view.getByRole('tab', { name: 'Data' }).click()
       await runSQL(mongo ? 'db.gt_compat.drop()' : 'DROP TABLE gt_compat')
+      await expect(page.getByText(/OK — \d+ row\(s\) affected/).last()).toBeVisible()
       expect(errors).toEqual([])
       await page.close()
     })

@@ -140,8 +140,10 @@ export const api = {
   structure: (sid: string, t: TableRef) => call<{ columns: Column[]; indexes: Index[]; foreignKeys: ForeignRef[]; table: TableInfo }>('GET', `/api/sessions/${sid}/structure?${q({ schema: t.schema, table: t.name })}`),
   schemaAnalysis: (sid: string, t: TableRef, sample: number) => call<SchemaReport>('GET', `/api/sessions/${sid}/schema-analysis?${q({ schema: t.schema, table: t.name, sample: String(sample) })}`),
   definition: (sid: string, t: TableRef, kind: string) => call<{ ddl: string }>('GET', `/api/sessions/${sid}/definition?${q({ schema: t.schema, table: t.name, kind })}`),
-  rows: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal) =>
-    call<RowsResult>('POST', `/api/sessions/${sid}/rows`, { table, page, columns }, signal),
+  rows: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal, count = false) =>
+    call<RowsResult>('POST', `/api/sessions/${sid}/rows`, { table, page, columns, count }, signal),
+  estimate: (sid: string, sql: string, schema: string, signal?: AbortSignal) =>
+    call<{ bytes: number }>('POST', `/api/sessions/${sid}/estimate`, { sql, schema }, signal),
   changes: (sid: string, table: TableRef, changes: ChangeReq[], hasPK: boolean, dryRun: boolean) =>
     call<{ statements: string[]; ok?: boolean }>('POST', `/api/sessions/${sid}/changes`, { table, changes, hasPK, dryRun }),
   typeInfo: (sid: string, schema: string) => call<TypeInfo>('GET', `/api/sessions/${sid}/type-info?${q({ schema })}`),

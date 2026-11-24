@@ -26,6 +26,7 @@ var systemDatabases = map[model.Driver][]string{
 	model.DriverMSSQL:      {"master", "model", "msdb", "tempdb", "sys", "INFORMATION_SCHEMA", "dbo", "guest"},
 	model.DriverClickHouse: {"system", "information_schema", "INFORMATION_SCHEMA"},
 	model.DriverDuckDB:     {"main", "information_schema", "pg_catalog", "temp"},
+	model.DriverSnowflake:  {"SNOWFLAKE", "INFORMATION_SCHEMA"},
 	model.DriverMongoDB:    {"admin", "local", "config"},
 }
 
@@ -56,6 +57,8 @@ func BuildDropDatabase(d Dialect, dd DropDatabase) (string, error) {
 		return "", errors.New("Redis's numbered databases can't be deleted: empty one with FLUSHDB in the query editor")
 	case model.DriverInfluxDB:
 		return "", errors.New("delete a database in the query editor: DROP DATABASE name")
+	case model.DriverBigQuery:
+		return "", errors.New("delete a dataset in the query editor: DROP SCHEMA name (with CASCADE, its tables too)")
 	case model.DriverElasticsearch:
 		return "", errors.New("a cluster can't be deleted: delete its indices")
 	case model.DriverDynamoDB:
@@ -77,6 +80,8 @@ func BuildDropDatabase(d Dialect, dd DropDatabase) (string, error) {
 			return "", errors.New("SQL Server can only delete an empty schema: delete or move its tables first")
 		}
 	}
+	// Snowflake drops a schema with all it holds unless told RESTRICT, which
+	// only looks at foreign keys: DropDatabase checks that it's empty.
 	if kind == "schema" && d.family != model.DriverMSSQL {
 		cascade = " RESTRICT"
 		if dd.Cascade {
@@ -107,7 +112,7 @@ func (c *Conn) DropDatabase(ctx context.Context, dd DropDatabase) (string, error
 		}
 		return stmt, c.cassRunAll(ctx, []string{stmt})
 	}
-	if (dd.Kind == "" || dd.Kind == "database") && (c.Dialect.family == model.DriverPostgres || c.Dialect.family == model.DriverMSSQL) {
+	if (dd.Kind == "" || dd.Kind == "database") && (c.Dialect.family == model.DriverPostgres || c.Dialect.family == model.DriverMSSQL || c.Dialect.family == model.DriverSnowflake) {
 		if cur := c.CurrentDatabase(ctx); strings.EqualFold(cur, name) {
 			return "", fmt.Errorf("GoTable is connected to %s, so it can't delete it: connect to another database on the server and delete it from there", name)
 		}
@@ -116,6 +121,15 @@ func (c *Conn) DropDatabase(ctx context.Context, dd DropDatabase) (string, error
 		return "", err
 	}
 	defer c.mu.Unlock()
+	if c.Dialect.family == model.DriverSnowflake && dd.Kind == "schema" && !dd.Cascade {
+		objs, err := c.eng.objects(ctx, c, name)
+		if err != nil {
+			return "", err
+		}
+		if len(objs) > 0 {
+			return "", fmt.Errorf("the schema holds %d tables and views: delete what it holds too, or empty it first", len(objs))
+		}
+	}
 	_, err = c.conn.ExecContext(ctx, stmt)
 	return stmt, err
 }

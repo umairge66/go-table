@@ -496,7 +496,11 @@ func (s *Server) exportTableJob(se *session, in jobRequest) (*Job, error) {
 			page.Limit, page.Offset = 0, 0
 		}
 		j.update(func(j *Job) { j.Phase = "Counting rows" })
-		total, err := c.CountRows(ctx, ref, page, in.Columns)
+		var total int64
+		var err error
+		if !c.CountIsCostly(ctx, ref, page) {
+			total, err = c.CountRows(ctx, ref, page, in.Columns)
+		}
 		if err != nil {
 			return err
 		}
@@ -627,7 +631,11 @@ func (s *Server) exportDatabaseJob(se *session, in jobRequest) (*Job, error) {
 		zw := zip.NewWriter(cw)
 		var total int64
 		for _, o := range objs {
-			if n, err := c.CountRows(ctx, db.TableRef{Schema: o.Schema, Name: o.Name}, db.Page{}, nil); err == nil {
+			ref := db.TableRef{Schema: o.Schema, Name: o.Name}
+			if c.CountIsCostly(ctx, ref, db.Page{}) {
+				continue
+			}
+			if n, err := c.CountRows(ctx, ref, db.Page{}, nil); err == nil {
 				total += n
 			}
 		}

@@ -72,6 +72,9 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 	if cfg.Driver.Family() == model.DriverInfluxDB {
 		return openInflux(ctx, cfg, addr, cred.Password, tunnel)
 	}
+	if cfg.Driver.Family() == model.DriverBigQuery {
+		return openBigQuery(ctx, cfg)
+	}
 	var (
 		sqlDB *sql.DB
 		eng   engine
@@ -93,6 +96,11 @@ func Open(ctx context.Context, cfg *model.Connection, cred Credentials) (*Conn, 
 		sqlDB, err = openMySQL(cfg, addr, cred.Password)
 		eng = mysqlEngine{}
 	case model.DriverSQLite:
+		if cfg.Driver == model.DriverD1 {
+			sqlDB, err = openD1(ctx, cfg, cred.Password)
+			eng = d1Engine{}
+			break
+		}
 		if cfg.Driver.IsLibSQL() {
 			sqlDB, err = openLibSQL(cfg, addr, cred.Password, tunnel != nil)
 			eng = libsqlEngine{}
@@ -137,7 +145,7 @@ var openers = map[model.Driver]func(cfg *model.Connection, addr, password string
 // Supported reports whether this build can open connections of driver d.
 func Supported(d model.Driver) bool {
 	switch d.Family() {
-	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra, model.DriverDynamoDB, model.DriverElasticsearch, model.DriverInfluxDB:
+	case model.DriverPostgres, model.DriverMySQL, model.DriverSQLite, model.DriverMSSQL, model.DriverMongoDB, model.DriverRedis, model.DriverCassandra, model.DriverDynamoDB, model.DriverElasticsearch, model.DriverInfluxDB, model.DriverBigQuery:
 		return true
 	}
 	_, ok := openers[d.Family()]

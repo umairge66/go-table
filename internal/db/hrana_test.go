@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,10 @@ func TestHranaAuth(t *testing.T) {
 	if err := db.Ping(); err == nil || !strings.Contains(err.Error(), "authentication failed") {
 		t.Errorf("err %v", err)
 	}
+	turso, _ := hranaFake(t, "", func(string, string, string) (int, string) { return 400, "JWT error: InvalidToken" }) // Turso's words
+	if err := turso.Ping(); err == nil || !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("err %v", err)
+	}
 	// Something that isn't libSQL.
 	web, _ := hranaFake(t, "", func(string, string, string) (int, string) { return 404, "<html>nothing here</html>" })
 	if err := web.Ping(); err == nil || !strings.Contains(err.Error(), "is this a libSQL server") {
@@ -173,8 +178,13 @@ func TestHranaAuth(t *testing.T) {
 // On a real server: exact values, an idle stream, a long result, cancelling.
 func TestLibSQLSession(t *testing.T) {
 	cfg, pw := serverConfig(t, "LIBSQL", model.DriverLibSQL)
-	c := openTest(t, cfg, pw)
+	testLibSQLSession(t, openTest(t, cfg, pw), 60000)
+}
+
+// testLibSQLSession uses a table of many rows.
+func testLibSQLSession(t *testing.T, c *Conn, many int) {
 	ctx := context.Background()
+	total := strconv.Itoa(many)
 	one := func(q string) []Value {
 		t.Helper()
 		res, err := c.Execute(ctx, q, 0)
@@ -196,10 +206,10 @@ func TestLibSQLSession(t *testing.T) {
 	one("DROP TABLE IF EXISTS gt_many")
 	one("CREATE TABLE gt_many (id INTEGER PRIMARY KEY, pad TEXT)")
 	defer one("DROP TABLE gt_many")
-	one("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 60000) INSERT INTO gt_many SELECT i, hex(randomblob(150)) FROM n")
+	one("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < " + total + ") INSERT INTO gt_many SELECT i, hex(randomblob(150)) FROM n")
 	n := 0
 	err := c.StreamRows(ctx, TableRef{Schema: "main", Name: "gt_many"}, Page{}, nil, func(_, _ []string, _ []Value) error { n++; return nil })
-	if err != nil || n != 60000 {
+	if err != nil || n != many {
 		t.Fatalf("streamed %d rows: %v", n, err)
 	}
 	// Stopped early, the session goes on.
@@ -213,7 +223,7 @@ func TestLibSQLSession(t *testing.T) {
 	}); !errors.Is(err, stop) {
 		t.Errorf("stop: %v", err)
 	}
-	if v := one("SELECT count(*) FROM gt_many"); v[0].Text != "60000" {
+	if v := one("SELECT count(*) FROM gt_many"); v[0].Text != total {
 		t.Errorf("count %v", v)
 	}
 
@@ -235,9 +245,84 @@ func TestLibSQLSession(t *testing.T) {
 	if err == nil && res[0].Err == nil {
 		t.Error("a statement ran outside the transaction it belonged to")
 	}
-	if v := one("SELECT count(*) FROM gt_many"); v[0].Text != "60000" {
+	if v := one("SELECT count(*) FROM gt_many"); v[0].Text != total {
 		t.Errorf("count after the lost transaction: %v", v)
 	}
 	time.Sleep(12 * time.Second) // outside one, nobody notices
 	one("SELECT 1")
+}
+
+// A dump and a CSV, out and back in.
+func testLibSQLTransfer(t *testing.T, c *Conn) {
+	ctx := context.Background()
+	exec := func(q string) {
+		t.Helper()
+		res, err := c.Execute(ctx, q, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range res {
+			if r.Err != nil {
+				t.Fatalf("%s: %v", r.Statement, r.Err)
+			}
+		}
+	}
+	drop := func() {
+		c.Execute(ctx, "DROP VIEW IF EXISTS gt_tv; DROP TABLE IF EXISTS gt_tchild; DROP TABLE IF EXISTS gt_tparent", 0)
+	}
+	drop()
+	defer drop()
+	exec(`CREATE TABLE gt_tparent (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, data BLOB, big INTEGER, f REAL);
+CREATE TABLE gt_tchild (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES gt_tparent(id) ON DELETE CASCADE, note TEXT DEFAULT 'a;b');
+CREATE INDEX gt_tchild_note ON gt_tchild (note);
+CREATE TRIGGER gt_ttrig AFTER INSERT ON gt_tchild WHEN NEW.note = 'fire' BEGIN UPDATE gt_tchild SET note = 'fired'; END;
+CREATE VIEW gt_tv AS SELECT name FROM gt_tparent;
+INSERT INTO gt_tparent VALUES (1, 'it''s; "q" \ ü -- x', x'00ff10', 9007199254740993, -1.5), (2, '', NULL, NULL, 1e300);
+INSERT INTO gt_tchild VALUES (1, 1, 'line1
+line2'), (2, 2, NULL);`)
+	objs := []Object{{Schema: "main", Name: "gt_tchild", Kind: KindTable}, {Schema: "main", Name: "gt_tparent", Kind: KindTable}, {Schema: "main", Name: "gt_tv", Kind: KindView}}
+	state := func() string {
+		t.Helper()
+		var b strings.Builder
+		for _, o := range objs {
+			def, err := c.Definition(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Fprintln(&b, def)
+			if err := c.StreamRows(ctx, TableRef{Schema: o.Schema, Name: o.Name}, Page{}, nil, func(_, _ []string, row []Value) error { fmt.Fprintf(&b, "%q\n", fmt.Sprint(row)); return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return b.String()
+	}
+	before := state()
+	var dump strings.Builder
+	if err := c.Dump(ctx, &dump, DumpOptions{Objects: objs, Structure: true, Data: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range []bool{true, false} {
+		drop()
+		if res, err := c.ImportSQL(ctx, strings.NewReader(dump.String()), ImportOptions{Transaction: tx}, nil); err != nil || len(res.Errors) > 0 {
+			t.Fatalf("transaction %v: %v %+v\n%s", tx, err, res, dump.String())
+		}
+		if after := state(); after != before {
+			t.Errorf("transaction %v:\n%s\n%s", tx, before, after)
+		}
+	}
+	// A script that fails halfway leaves nothing, as one transaction.
+	if _, err := c.ImportSQL(ctx, strings.NewReader("INSERT INTO gt_tparent (id, name) VALUES (9, 'x');\nINSERT INTO gt_tparent (id, name) VALUES (9, 'y');"), ImportOptions{Transaction: true}, nil); err == nil {
+		t.Error("a duplicate key was imported")
+	}
+	if after := state(); after != before {
+		t.Errorf("a failed import left something:\n%s", after)
+	}
+	n, err := c.ImportCSV(ctx, strings.NewReader("id,name,f\n20,csv 1,1.25\n21,csv 2,\n"), TableRef{Schema: "main", Name: "gt_tparent"},
+		CSVImportOptions{Header: true, Columns: []string{"id", "name", "f"}, Mapping: []int{0, 1, 2}, EmptyAsNull: true}, nil)
+	if err != nil || n != 2 {
+		t.Error(n, err)
+	}
+	if n, err := c.CountRows(ctx, TableRef{Schema: "main", Name: "gt_tparent"}, Page{}, nil); err != nil || n != 4 {
+		t.Error(n, err)
+	}
 }

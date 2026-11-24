@@ -419,3 +419,74 @@ func TestElasticAndInfluxURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestD1URLs(t *testing.T) {
+	c, token, err := ParseURL("d1://663c:cf%2Ftok@cloudflare/shop")
+	if err != nil || c.Driver != DriverD1 || c.User != "663c" || token != "cf/tok" || c.DBName != "shop" || c.Host != "" {
+		t.Fatal(c, token, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Error(err)
+	}
+	for _, bad := range []string{"d1://", "d1://663c@cloudflare", "d1://cloudflare/shop"} {
+		if _, _, err := ParseURL(bad); err == nil {
+			t.Errorf("%s was read", bad)
+		}
+	}
+	c.UseSSHTunnel, c.SSHHost, c.SSHUser = true, "h", "u"
+	if c.Validate() == nil {
+		t.Error("an SSH tunnel to D1")
+	}
+}
+
+func TestSnowflakeURLs(t *testing.T) {
+	c, pw, err := ParseURL("snowflake://ann:p%40ss@MYORG-ACC1/SHOP/SALES?warehouse=WH&role=R")
+	if err != nil || c.Driver != DriverSnowflake || c.Host != "MYORG-ACC1" || c.User != "ann" || pw != "p@ss" || c.DBName != "SHOP" || c.SelectedSchema != "SALES" || c.Warehouse != "WH" || c.Role != "R" {
+		t.Fatal(c, pw, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Error(err)
+	}
+	if c, _, _ := ParseURL("snowflake://ann@acc/?privateKeyPath=/k.p8"); c.Auth != AuthKey || c.KeyPath != "/k.p8" || c.DBName != "" {
+		t.Error(c)
+	}
+	if c, _, _ := ParseURL("snowflake://ann@acc?authenticator=externalbrowser"); c.Auth != AuthBrowser {
+		t.Error(c)
+	}
+	if c, tok, _ := ParseURL("snowflake://ann@acc?authenticator=PROGRAMMATIC_ACCESS_TOKEN&token=t"); c.Auth != AuthToken || tok != "t" {
+		t.Error(c, tok)
+	}
+	if _, _, err := ParseURL("snowflake:///db"); err == nil {
+		t.Error("no account")
+	}
+	bad := func(f func(*Connection)) {
+		t.Helper()
+		x := *c
+		f(&x)
+		if x.Validate() == nil {
+			t.Error("accepted")
+		}
+	}
+	bad(func(x *Connection) { x.Host = "" })
+	bad(func(x *Connection) { x.User = "" })
+	bad(func(x *Connection) { x.Auth = AuthKey })
+	bad(func(x *Connection) { x.Auth = "x" })
+	bad(func(x *Connection) { x.UseSSHTunnel, x.SSHHost, x.SSHUser = true, "h", "u" })
+}
+
+func TestBigQueryURLs(t *testing.T) {
+	c, pw, err := ParseURL("bigquery://my-project/sales?credentials_path=/k.json&limit=5")
+	if err != nil || c.Driver != DriverBigQuery || c.DBName != "my-project" || c.SelectedSchema != "sales" || c.KeyPath != "/k.json" || c.Options != "limit=5" || pw != "" || c.Host != "" {
+		t.Fatal(c, pw, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Error(err)
+	}
+	if c, _, err := ParseURL("bigquery://"); err != nil || c.Validate() != nil { // the credentials' own project
+		t.Error(c, err)
+	}
+	c.UseSSHTunnel, c.SSHHost, c.SSHUser = true, "h", "u"
+	if c.Validate() == nil {
+		t.Error("an SSH tunnel to BigQuery")
+	}
+}

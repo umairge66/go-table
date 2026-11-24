@@ -54,7 +54,7 @@ func (c ColumnDef) check(d Dialect, inCreate bool) error {
 	if t == "" {
 		return errors.New("column type is required")
 	}
-	if !typePattern.MatchString(t) {
+	if !typePattern.MatchString(t) && !(d.family == model.DriverSnowflake && sfTypeOK(t)) {
 		return fmt.Errorf("%q doesn't look like a column type (e.g. text, varchar(255), numeric(10,2))", t)
 	}
 	switch c.DefaultKind {
@@ -116,6 +116,8 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 	if cl := strings.TrimSpace(c.Collation); cl != "" {
 		if d.family == model.DriverPostgres {
 			cl = d.QuoteIdent(cl)
+		} else if d.family == model.DriverSnowflake {
+			cl = d.QuoteLiteral(Text(cl))
 		}
 		b.WriteString(" COLLATE " + cl)
 	}
@@ -125,7 +127,11 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 	}
 	switch c.DefaultKind {
 	case DefaultValue:
-		b.WriteString(" DEFAULT " + d.QuoteLiteral(Text(c.Default)))
+		if d.family == model.DriverSnowflake {
+			b.WriteString(" DEFAULT " + sfDefault(d, typ, c.Default))
+		} else {
+			b.WriteString(" DEFAULT " + d.QuoteLiteral(Text(c.Default)))
+		}
 	case DefaultExpression:
 		e := strings.TrimSpace(c.Default)
 		if d.family == model.DriverSQLite && !sqliteLiteral.MatchString(e) && !strings.HasPrefix(e, "(") {
@@ -142,7 +148,7 @@ func columnSQL(d Dialect, c ColumnDef, notNull bool, extra string) string {
 	if oracle && notNull {
 		b.WriteString(" NOT NULL")
 	}
-	if cm := strings.TrimSpace(c.Comment); cm != "" && (d.mysqlLike() || d.family == model.DriverClickHouse) {
+	if cm := strings.TrimSpace(c.Comment); cm != "" && (d.mysqlLike() || d.family == model.DriverClickHouse || d.family == model.DriverSnowflake) {
 		b.WriteString(" COMMENT " + d.QuoteLiteral(Text(cm)))
 	}
 	return b.String()
@@ -163,6 +169,9 @@ func sqliteConstantDefault(e string) bool {
 func BuildAddColumn(d Dialect, t TableRef, c ColumnDef) ([]string, error) {
 	if d.family == model.DriverMongoDB {
 		return nil, errMongoNoColumns
+	}
+	if d.family == model.DriverBigQuery {
+		return bqAlter(d, t, TableState{}, AlterOp{Kind: AlterAddColumn, Def: &c})
 	}
 	if err := c.validate(d); err != nil {
 		return nil, err
@@ -240,7 +249,7 @@ func (c *Conn) runDDL(ctx context.Context, stmts []string) error {
 // runDDLLocked is runDDL for callers that hold c.mu.
 func (c *Conn) runDDLLocked(ctx context.Context, stmts []string) error {
 	if c.Config.Driver == model.DriverCockroachDB || c.Dialect.family == model.DriverClickHouse || c.Dialect.family == model.DriverDuckDB ||
-		c.Dialect.family == model.DriverOracle || noTransactions(c.Config.Driver) { // Oracle commits each DDL statement anyway
+		c.Dialect.family == model.DriverOracle || c.Dialect.family == model.DriverSnowflake || noTransactions(c.Config.Driver) { // Oracle and Snowflake commit each DDL statement anyway
 		// CockroachDB refuses some schema changes (ALTER COLUMN TYPE) inside
 		// a transaction, DuckDB still sees an index dropped earlier in the
 		// same transaction, and ClickHouse has none. So each statement
@@ -289,6 +298,12 @@ func BuildDrop(d Dialect, objs []Object, cascade bool) ([]string, error) {
 	}
 	if d.family == model.DriverInfluxDB {
 		return buildInfluxDrop(objs), nil
+	}
+	if d.family == model.DriverBigQuery {
+		return bqBuildDrop(d, objs), nil
+	}
+	if d.family == model.DriverSnowflake {
+		return sfBuildDrop(d, objs, nil, cascade), nil
 	}
 	var views, tables []string
 	for _, o := range objs {
@@ -395,6 +410,9 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 		return nil, err
 	}
 	defer c.mu.Unlock()
+	if c.Dialect.family == model.DriverSnowflake {
+		return sfDrop(ctx, c, objs, cascade)
+	}
 	if c.Config.Driver.Family() != model.DriverPostgres {
 		// PostgreSQL resolves dependencies within one DROP statement; the
 		// others drop in the order given, so children must come first.
@@ -403,6 +421,12 @@ func (c *Conn) Drop(ctx context.Context, objs []Object, cascade bool) ([]string,
 	stmts, err := BuildDrop(c.Dialect, objs, cascade)
 	if err != nil {
 		return nil, err
+	}
+	if err := d1MayDrop(ctx, c, objs); err != nil {
+		return nil, err
+	}
+	if c.Config.Driver == model.DriverD1 { // keys can't be switched off there
+		cascade = false
 	}
 	// PRAGMA foreign_keys only takes effect outside a transaction.
 	var pre, post []string
@@ -467,6 +491,16 @@ func (c *Conn) dropOrder(ctx context.Context, objs []Object) []Object {
 				WHERE constraint_type = 'FOREIGN KEY' AND schema_name = ? AND table_name = ?`, o.Schema, o.Name)
 		case model.DriverClickHouse:
 			// no foreign keys
+		case model.DriverSnowflake:
+			var fks []ForeignRef
+			if o.Kind != KindView {
+				fks, err = c.eng.foreignKeys(ctx, c, TableRef{Schema: o.Schema, Name: o.Name})
+			}
+			for _, fk := range fks {
+				if fk.Schema == o.Schema {
+					parents = append(parents, fk.Table)
+				}
+			}
 		case model.DriverOracle:
 			parents, err = c.queryStrings(ctx, `SELECT DISTINCT r.table_name FROM all_constraints k
 				JOIN all_constraints r ON r.owner = k.r_owner AND r.constraint_name = k.r_constraint_name

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpToLine, Eraser, Eye, EyeOff, KeyRound, Link2
 import { useEffect, useState, type ReactNode } from 'react'
 import { api, type AlterOp, type ColumnDef, type TableRef } from '../api'
 import { Button, Field, IconButton, Input, Select, Switch, useMenu } from '../components/ui'
-import { family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, fixedStructure, isCassandra, isMongo, mongoExtras } from '../types'
+import { isBigQuery, family, features, tableOptions, type Column, type ForeignRef, type Index, type SessionInfo, type TableInfo, fixedStructure, isCassandra, isMongo, mongoExtras } from '../types'
 import { ColumnDialog } from './ColumnDialog'
 import { SqlEditor } from '../components/SqlEditor'
 import { AlterDialog, CheckDialog, ForeignKeyDialog, IndexDialog, useAlter } from './StructureDialogs'
@@ -82,7 +82,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
         ...(pk && !pk.columns.includes(c.name) ? [{ label: 'Add to the primary key', onSelect: () => setPrimary([...pk.columns, c.name]) }] : []),
       ] : []),
       ...(f.uniqueIndexes ? [{ label: 'Unique', onSelect: () => addIndex([c.name], 'unique') }] : []),
-      { label: 'Index', icon: <ListOrdered />, onSelect: () => addIndex([c.name], 'index') },
+      { label: 'Index', disabled: isBigQuery(driver), icon: <ListOrdered />, onSelect: () => addIndex([c.name], 'index') },
       ...(mysql && isText ? [{ label: 'Fulltext', icon: <Search />, onSelect: () => addIndex([c.name], 'fulltext') }] : []),
       ...(f.foreignKeys ? [{ label: 'Foreign key…', icon: <Link2 />, onSelect: () => setDialog({ kind: 'foreignKey', column: c.name }) }] : []),
       ...(mysql ? [
@@ -111,7 +111,7 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
             <span className="mr-1 font-medium text-accent">{checked.length} selected:</span>
             {pkChangeable(!!pk) && <Button size="sm" variant="ghost" icon={<KeyRound className="size-3.5" />} onClick={() => setPrimary(inOrder(checked))}>Primary key</Button>}
             {f.uniqueIndexes && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'unique')}>Unique</Button>}
-            <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'index')}>Index</Button>
+            {!isBigQuery(driver) && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'index')}>Index</Button>}
             {mysql && <Button size="sm" variant="ghost" onClick={() => addIndex(inOrder(checked), 'fulltext')}>Fulltext</Button>}
             <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} className="text-err" disabled={fixed || checked.length === columns.length || (mongo && checked.includes('_id'))} onClick={() => dropColumns(inOrder(checked))}>Drop</Button>
             <div className="flex-1" />
@@ -167,8 +167,8 @@ export function StructureView({ session, table, readOnly, columns, indexes, fore
       </Section>
 
       {!readOnly && <>
-        <Section title="Indexes" count={indexes.length} actions={!fixed && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'index' })}>Add index</Button>}>
-          {indexes.length === 0 ? <Empty>No indexes. Add one to speed up searching and sorting on a column.</Empty> : (
+        <Section title="Indexes" count={indexes.length} actions={!fixed && !isBigQuery(driver) && <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ kind: 'index' })}>Add index</Button>}>
+          {indexes.length === 0 ? <Empty>{isBigQuery(driver) ? 'No primary key. BigQuery has no other indexes here.' : 'No indexes. Add one to speed up searching and sorting on a column.'}</Empty> : (
             <Rows heads={['Name', 'Kind', 'Columns']}>
               {indexes.map((x) => (
                 <tr key={x.name} data-testid={`index-${x.name}`} className="group border-b border-line-2 last:border-0 hover:bg-hover">
@@ -468,11 +468,11 @@ function TableOperations({ session, table, info, run, onRenamed }: {
             </div>
           </div>
         )}
-        <div className="flex items-center gap-3 border-t border-line-2 pt-4">
+        {!isBigQuery(driver) && <div className="flex items-center gap-3 border-t border-line-2 pt-4">
           <div className="flex-1 text-[12.5px] text-muted">{isMongo(driver) ? 'Delete every document but keep the collection and its indexes.' : 'Delete every row but keep the table and its structure.'}</div>
           <Button variant="ghost" className="text-err" icon={<Eraser className="size-3.5" />}
             onClick={() => run([{ kind: 'truncate' }], `Empty ${table.name}`, { danger: true, done: isMongo(driver) ? 'Collection emptied' : 'Table emptied' })}>{isMongo(driver) ? 'Empty collection…' : 'Empty table…'}</Button>
-        </div>
+        </div>}
       </div>
     </section>
   )

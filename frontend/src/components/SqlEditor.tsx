@@ -1,6 +1,6 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands'
-import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, sql, type SQLDialect } from '@codemirror/lang-sql'
+import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLDialect, SQLite, sql } from '@codemirror/lang-sql'
 import { javascript, javascriptLanguage } from '@codemirror/lang-javascript'
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
@@ -11,7 +11,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { mongoCompletions, mongoStatementAt, mongoStatementRange, pickStatement, trimRange } from '../lib/mongoShell'
 import { elasticCompletions, elasticLanguage, elasticStatementRange } from '../lib/elasticConsole'
 import { influxStatementRange } from '../lib/influx'
-import { forDriver, isElastic, isInflux, isMongo, isRedis, type Driver, type PerDriver } from '../types'
+import { forDriver, isBigQuery, isElastic, isInflux, isMongo, isRedis, isSnowflake, type Driver, type PerDriver } from '../types'
 import { redisCompletions, redisLanguage, redisStatementAt, redisStatementRange } from '../lib/redisShell'
 import { useSettings } from '../lib/settings'
 import { codemirrorKey, combosFor, label } from '../lib/shortcuts'
@@ -28,7 +28,12 @@ const highlight = HighlightStyle.define([
 ])
 
 // DuckDB writes SQL like PostgreSQL; ClickHouse quotes names with backticks like MySQL.
-const dialects: PerDriver<SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL, cassandra: PostgreSQL, dynamodb: PostgreSQL, elasticsearch: PostgreSQL, influxdb: PostgreSQL }
+const Snowflake = SQLDialect.define({ ...PostgreSQL.spec, keywords: PostgreSQL.spec.keywords + ' warehouse undrop qualify ilike rlike regexp pivot unpivot flatten lateral sample tablesample at before clone swap stage pipe stream task dynamic transient copy put list describe show use minus autoincrement cluster comment variant',
+  types: 'number decimal numeric int integer bigint smallint tinyint byteint float double real decfloat varchar char string text binary varbinary boolean date datetime time timestamp timestamp_ltz timestamp_ntz timestamp_tz variant object array map geography geometry vector',
+  slashComments: true, backslashEscapes: true, doubleDollarQuotedStrings: true, caseInsensitiveIdentifiers: true })
+const BigQuery = SQLDialect.define({ ...MySQL.spec, keywords: PostgreSQL.spec.keywords + ' struct unnest qualify except replace partition cluster options description declare exception safe_cast offset ordinal enforced pivot unpivot tablesample system ml export load data clone snapshot temp',
+  types: 'int64 float64 numeric bignumeric bool string bytes date datetime time timestamp json geography interval array struct range', hashComments: true, slashComments: false, backslashEscapes: true, doubleQuotedStrings: true, identifierQuotes: '`' })
+const dialects: PerDriver<SQLDialect> = { bigquery: BigQuery, snowflake: Snowflake, postgres: PostgreSQL, mysql: MySQL, mariadb: MySQL, sqlite: SQLite, sqlserver: MSSQL, oracle: PLSQL, duckdb: PostgreSQL, clickhouse: MySQL, mongodb: PostgreSQL, redis: PostgreSQL, cassandra: PostgreSQL, dynamodb: PostgreSQL, elasticsearch: PostgreSQL, influxdb: PostgreSQL }
 
 /** language: MongoDB's commands are written in the JavaScript of its shell; Redis's are command lines. */
 const language = (driver: Driver, tables?: Record<string, string[]>) => isMongo(driver)
@@ -44,7 +49,7 @@ const cleanSchema = (tables: Record<string, string[]>) =>
 
 /** rangeAt: the statement the cursor is at, the way the driver's commands are written. */
 const rangeAt = (driver: Driver, text: string, pos: number, withSemicolon = false) =>
-  isMongo(driver) ? mongoStatementRange(text, pos) : isRedis(driver) ? redisStatementRange(text, pos) : isElastic(driver) ? elasticStatementRange(text, pos) : isInflux(driver) ? influxStatementRange(text, pos, (t, p) => statementRange(t, p, withSemicolon)) : statementRange(text, pos, withSemicolon)
+  isMongo(driver) ? mongoStatementRange(text, pos) : isRedis(driver) ? redisStatementRange(text, pos) : isElastic(driver) ? elasticStatementRange(text, pos) : isInflux(driver) ? influxStatementRange(text, pos, (t, p) => statementRange(t, p, withSemicolon)) : statementRange(text, pos, withSemicolon, isSnowflake(driver) ? 'snowflake' : isBigQuery(driver) ? 'bigquery' : undefined)
 
 export interface SqlEditorHandle {
   /** current returns the selection, or the statement under the cursor. */
@@ -68,18 +73,21 @@ export function statementAt(text: string, pos: number): string {
  * and ends, without surrounding space; null when the cursor isn't at one
  * (see pickStatement).
  */
-export function statementRange(text: string, pos: number, withSemicolon = false): [number, number] | null {
+export function statementRange(text: string, pos: number, withSemicolon = false, style?: 'snowflake' | 'bigquery'): [number, number] | null {
+  const snowflake = style === 'snowflake', bigquery = style === 'bigquery'
   const bounds: [number, number][] = []
   let start = 0
   let q: string | null = null
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
     if (q) {
-      if (ch === q) q = null
+      if ((snowflake && q === "'" || bigquery && q !== '`') && ch === '\\') { i++; continue }
+      if (q.length === 3 ? text.startsWith(q, i) : ch === q) { i += q.length - 1; q = null }
       continue
     }
-    if (ch === "'" || ch === '"' || ch === '`') q = ch
-    else if (ch === '-' && text[i + 1] === '-') { const nl = text.indexOf('\n', i); i = nl < 0 ? text.length : nl }
+    if (bigquery && (text.startsWith("'''", i) || text.startsWith('"""', i))) { q = text.slice(i, i + 3); i += 2 }
+    else if (ch === "'" || ch === '"' || ch === '`') q = ch
+    else if (ch === '-' && text[i + 1] === '-' || snowflake && ch === '/' && text[i + 1] === '/' || bigquery && ch === '#') { const nl = text.indexOf('\n', i); i = nl < 0 ? text.length : nl }
     else if (ch === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i + 2); i = end < 0 ? text.length : end + 1 }
     else if (ch === '$' && /^\$[A-Za-z_]*\$/.test(text.slice(i))) {
       const tag = /^\$[A-Za-z_]*\$/.exec(text.slice(i))![0]

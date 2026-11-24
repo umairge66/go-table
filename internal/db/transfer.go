@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/stdlib"
@@ -92,6 +93,13 @@ func (c *Conn) StreamRows(ctx context.Context, t TableRef, p Page, columns []str
 		}
 		defer c.mu.Unlock()
 		return c.remote.streamRows(ctx, c, t, p, fn)
+	}
+	if c.Config.Driver == model.DriverD1 {
+		return c.d1Stream(ctx, t, p, columns, fn)
+	}
+	columns, err := c.searchable(ctx, t, p, columns)
+	if err != nil {
+		return err
 	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
@@ -226,8 +234,8 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 	switch c.Dialect.family {
 	case model.DriverMSSQL:
 		begin, rollback = "BEGIN TRANSACTION", "ROLLBACK TRANSACTION"
-	case model.DriverClickHouse, model.DriverOracle:
-		// ClickHouse has no transactions; Oracle commits every DDL
+	case model.DriverClickHouse, model.DriverOracle, model.DriverSnowflake:
+		// ClickHouse has no transactions; Oracle and Snowflake commit every DDL
 		// statement, so a script can't be undone as a whole.
 		o.Transaction = false
 	}
@@ -253,7 +261,7 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 		if err != nil {
 			return fail(err)
 		}
-		if o.Transaction && st.Copy == nil && txControl.MatchString(st.SQL) {
+		if (o.Transaction || c.Config.Driver == model.DriverD1) && st.Copy == nil && txControl.MatchString(st.SQL) {
 			res.Skipped++
 			continue
 		}
@@ -297,8 +305,12 @@ func (c *Conn) ImportSQL(ctx context.Context, r io.Reader, o ImportOptions, prog
 		}
 	}
 	if o.Transaction {
-		if _, err := c.Exec(ctx, "COMMIT"); err != nil {
+		n, err := c.Exec(ctx, "COMMIT")
+		if err != nil {
 			return fail(err)
+		}
+		if c.Config.Driver == model.DriverD1 { // known only now
+			res.Rows = n
 		}
 	}
 	return res, nil
@@ -355,7 +367,12 @@ type CSVImportOptions struct {
 func (d Dialect) maxParams() int {
 	switch d.family {
 	case model.DriverSQLite:
+		if d.kind == model.DriverD1 {
+			return d1Params
+		}
 		return 30000
+	case model.DriverSnowflake:
+		return 16000 // a statement takes 16,384 rows of VALUES
 	case model.DriverMSSQL:
 		return 2000 // SQL Server allows 2100 parameters per request
 	}
@@ -421,6 +438,16 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 		qcols[i] = c.Dialect.QuoteIdent(col)
 	}
 	prefix := "INSERT INTO " + c.Dialect.QualifiedName(t) + " (" + strings.Join(qcols, ", ") + ") VALUES "
+	var bulk *sfBulk
+	if c.Dialect.family == model.DriverSnowflake {
+		cols, err := c.eng.columns(ctx, c, t)
+		if err != nil {
+			return 0, err
+		}
+		if bulk, err = newSFBulk(c.Dialect, c.Dialect.QualifiedName(t), cols, o.Columns); err != nil {
+			return 0, err
+		}
+	}
 	var (
 		args     []any
 		groups   []string
@@ -431,6 +458,10 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 	flush := func() error {
 		if len(groups) == 0 {
 			return nil
+		}
+		if bulk != nil {
+			prefix = bulk.prefix()
+			bulk.reset()
 		}
 		if _, err := tx.ExecContext(ctx, prefix+strings.Join(groups, ", "), args...); err != nil {
 			return fmt.Errorf("rows ending at CSV line %d: %w", line, err)
@@ -458,6 +489,7 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 			}
 		}
 		ph := make([]string, len(o.Columns))
+		vals := make([]any, len(o.Columns))
 		for i, idx := range o.Mapping {
 			var v any
 			if idx >= 0 && idx < len(rec) {
@@ -469,6 +501,15 @@ func (c *Conn) ImportCSV(ctx context.Context, r io.Reader, t TableRef, o CSVImpo
 					v = f
 				}
 			}
+			vals[i] = v
+		}
+		if bulk != nil && !bulk.row(vals) {
+			if err := flush(); err != nil {
+				return total, err
+			}
+			bulk.row(vals)
+		}
+		for i, v := range vals {
 			args = append(args, v)
 			ph[i] = c.Dialect.Placeholder(len(args))
 		}
@@ -558,6 +599,14 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			}
 		}
 	}
+	if c.Config.Driver == model.DriverD1 && len(tables) > 1 { // parents first
+		if err := c.lock(ctx); err != nil {
+			return err
+		}
+		tables = c.dropOrder(ctx, tables)
+		c.mu.Unlock()
+		slices.Reverse(tables)
+	}
 	sw := &sqlWriter{w: w}
 	ver, _ := c.ServerVersion(ctx)
 	sw.printf("-- GoTable dump of %s (%s)\n-- Tables: %d, views: %d\n\n", c.Config.Name, ver, len(tables), len(views))
@@ -571,7 +620,11 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			sw.printf("SET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n\n")
 		}
 	case model.DriverSQLite:
-		sw.printf("PRAGMA foreign_keys = OFF;\nBEGIN TRANSACTION;\n\n")
+		if c.Config.Driver == model.DriverD1 {
+			sw.printf("PRAGMA defer_foreign_keys = on;\n\n")
+		} else {
+			sw.printf("PRAGMA foreign_keys = OFF;\nBEGIN TRANSACTION;\n\n")
+		}
 	case model.DriverMSSQL:
 		sw.printf("SET NOCOUNT ON;\n\n")
 	}
@@ -607,7 +660,7 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			sw.printf("\n")
 		}
 	}
-	for i, t := range tables {
+	dumpTable := func(i int, t Object, structure, data bool) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -616,7 +669,7 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			progress(p)
 		}
 		ref := TableRef{Schema: t.Schema, Name: t.Name}
-		if o.Structure {
+		if structure {
 			create, after, err := c.dumpDefinition(ctx, t)
 			if err != nil {
 				return fmt.Errorf("%s: %w", t.Name, err)
@@ -624,20 +677,31 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			sw.printf("-- Table %s\n%s\n\n", t.Name, strings.TrimRight(create, ";\n")+";")
 			post = append(post, after...)
 		}
-		if !o.Data {
-			continue
+		if !data {
+			return nil
 		}
 		var cols string
+		var bulk *sfBulk
 		var batch []string
+		size := 0 // of batch, in bytes
 		flush := func() {
 			if len(batch) > 0 {
 				if d.family == model.DriverOracle { // one VALUES row per INTO
 					sw.printf("INSERT ALL\n  INTO %s (%s) VALUES %s\nSELECT 1 FROM dual;\n", d.QuoteIdent(t.Name), cols,
 						strings.Join(batch, "\n  INTO "+d.QuoteIdent(t.Name)+" ("+cols+") VALUES "))
+				} else if bulk != nil {
+					sw.printf("%s\n  %s;\n", bulk.prefix(), strings.Join(batch, ",\n  "))
 				} else {
 					sw.printf("INSERT INTO %s (%s) VALUES\n  %s;\n", d.QuoteIdent(t.Name), cols, strings.Join(batch, ",\n  "))
 				}
-				batch = batch[:0]
+				batch, size = batch[:0], 0
+			}
+		}
+		var sfCols []Column
+		if d.family == model.DriverSnowflake {
+			var err error
+			if sfCols, err = c.Columns(ctx, ref); err != nil {
+				return fmt.Errorf("%s: %w", t.Name, err)
 			}
 		}
 		err := c.StreamRows(ctx, ref, Page{}, nil, func(names, _ []string, row []Value) error {
@@ -647,12 +711,41 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 					q[i] = d.QuoteIdent(n)
 				}
 				cols = strings.Join(q, ", ")
+				if d.family == model.DriverSnowflake {
+					var err error
+					if bulk, err = newSFBulk(d, d.QuoteIdent(t.Name), sfCols, names); err != nil {
+						return err
+					}
+				}
 			}
 			vals := make([]string, len(row))
 			for i, v := range row {
 				vals[i] = d.QuoteLiteral(v)
 			}
-			batch = append(batch, "("+strings.Join(vals, ", ")+")")
+			if bulk != nil {
+				texts := make([]any, len(row))
+				for i, v := range row {
+					if !v.Null {
+						texts[i] = v.Text
+					}
+				}
+				if !bulk.row(texts) {
+					flush()
+					bulk.reset()
+					bulk.row(texts)
+				}
+				for i, x := range texts {
+					if s, ok := x.(string); ok {
+						vals[i] = d.QuoteLiteral(Text(s))
+					}
+				}
+			}
+			line := "(" + strings.Join(vals, ", ") + ")"
+			if size += len(line) + 4; c.Config.Driver == model.DriverD1 && size > d1Statement || bulk != nil && size > sfStatement {
+				flush()
+				size = len(line)
+			}
+			batch = append(batch, line)
 			if len(batch) >= o.BatchSize {
 				flush()
 			}
@@ -667,6 +760,19 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 		}
 		flush()
 		sw.printf("\n")
+		return nil
+	}
+	if c.Config.Driver == model.DriverD1 { // every table before any row: keys are always checked
+		for i, t := range tables {
+			if err := dumpTable(i, t, o.Structure, false); err != nil {
+				return err
+			}
+		}
+	}
+	for i, t := range tables {
+		if err := dumpTable(i, t, o.Structure && c.Config.Driver != model.DriverD1, o.Data); err != nil {
+			return err
+		}
 	}
 	for _, s := range post {
 		sw.printf("%s\n", strings.TrimRight(s, ";")+";")
@@ -700,7 +806,9 @@ func (c *Conn) Dump(ctx context.Context, w io.Writer, o DumpOptions, progress fu
 			sw.printf("SET FOREIGN_KEY_CHECKS = 1;\n")
 		}
 	case model.DriverSQLite:
-		sw.printf("COMMIT;\nPRAGMA foreign_keys = ON;\n")
+		if c.Config.Driver != model.DriverD1 {
+			sw.printf("COMMIT;\nPRAGMA foreign_keys = ON;\n")
+		}
 	}
 	p.Table, p.TableIndex = "", len(o.Objects)
 	if progress != nil {
@@ -849,6 +957,8 @@ func (c *Conn) dumpDefinition(ctx context.Context, o Object) (string, []string, 
 		return ddl, nil, nil
 	case model.DriverMSSQL:
 		return mssqlEngine{}.createTable(ctx, c, TableRef{Schema: o.Schema, Name: o.Name}, false)
+	case model.DriverSnowflake:
+		return sfDumpTable(ctx, c, o)
 	case model.DriverDuckDB, model.DriverClickHouse, model.DriverOracle:
 		def, err := c.eng.definition(ctx, c, o)
 		if err != nil {
@@ -902,7 +1012,7 @@ func (c *Conn) dumpView(ctx context.Context, o Object) (string, error) {
 		def = regexp.MustCompile(`(?i)\s+DEFINER=\S+`).ReplaceAllString(def, "")
 		def = strings.ReplaceAll(def, c.Dialect.QuoteIdent(o.Schema)+".", "")
 		return def, nil
-	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse, model.DriverOracle:
+	case model.DriverMSSQL, model.DriverDuckDB, model.DriverClickHouse, model.DriverOracle, model.DriverSnowflake:
 		def, err := c.Definition(ctx, o)
 		return unqualify(c.Dialect, o.Schema, def), err
 	default:

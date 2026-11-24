@@ -2,7 +2,7 @@ import { AlertTriangle, Eye, Table2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
 import { Button, Input, Modal, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, family, features, type DbObject, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
+import { isBigQuery, isD1, isSnowflake, driverInfo, family, features, type DbObject, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
 
 /** DeleteTablesDialog drops tables/views after showing exactly what will run. */
 export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
@@ -62,12 +62,13 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
             </div>
           ))}
         </div>
-        {(features(driver).cascade || family(driver) === 'mysql' || family(driver) === 'sqlite') && (
+        {(features(driver).cascade || family(driver) === 'mysql' || family(driver) === 'sqlite' && !isD1(driver)) && (
           <div>
             <Switch checked={cascade} onChange={setCascade} label="Also drop objects that depend on them" />
             <div className="mt-1 pl-[42px] text-[12px] text-muted">
               {family(driver) === 'postgres' ? 'Views and foreign keys of other tables that reference these are dropped too (CASCADE).'
                 : family(driver) === 'oracle' ? 'Foreign keys of other tables that reference these are dropped too (CASCADE CONSTRAINTS).'
+                : isSnowflake(driver) ? 'Foreign keys of other tables that reference these are dropped too (CASCADE).'
                 : 'Foreign keys from other tables won’t block the delete.'}
             </div>
           </div>
@@ -76,7 +77,7 @@ export function DeleteTablesDialog({ session, objects, onClose, onDeleted }: {
           <div className="mb-1 text-[11.5px] font-medium text-muted">{usesCommands(driver) ? 'Commands that will run' : 'SQL that will run'}</div>
           <pre data-testid="drop-sql" className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-panel-2 px-3 py-2.5 font-mono text-[12px] text-fg-2">{sql.join('\n')}</pre>
           <div className="mt-1 text-[12px] text-muted">
-            {family(driver) === 'mysql' || family(driver) === 'oracle' || !features(driver).transactions ? `${driverInfo(driver).label} can’t undo a DROP: there is no way back without a backup.` : 'Runs in one transaction: either everything is deleted or nothing.'}
+            {isBigQuery(driver) ? 'A deleted table can be brought back for seven days (CREATE TABLE … CLONE … FOR SYSTEM_TIME AS OF); a view is gone.' : isSnowflake(driver) ? 'UNDROP TABLE brings a deleted table back for as long as Snowflake keeps it (a day, unless set otherwise); a view is gone.' : family(driver) === 'mysql' || family(driver) === 'oracle' || !features(driver).transactions ? `${driverInfo(driver).label} can’t undo a DROP: there is no way back without a backup.` : 'Runs in one transaction: either everything is deleted or nothing.'}
           </div>
         </div>
         {problem && (

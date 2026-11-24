@@ -42,9 +42,19 @@ const (
 	// DriverInfluxDB: InfluxDB 3, SQL over HTTP and writes as line protocol.
 	DriverInfluxDB Driver = "influxdb"
 
+	// DriverSnowflake: the account is the Host (an identifier such as
+	// MYORG-ACCOUNT1), and queries run on a Warehouse.
+	DriverSnowflake Driver = "snowflake"
+
+	// DriverBigQuery: a project (DBName) and a credentials file (KeyPath).
+	DriverBigQuery Driver = "bigquery"
+
 	// libSQL servers run SQLite's SQL over HTTP: sqld, and Turso's cloud.
 	DriverLibSQL Driver = "libsql"
 	DriverTurso  Driver = "turso"
+	// DriverD1: SQLite's SQL through Cloudflare's API. The account is the
+	// user, the API token the password; there is no host.
+	DriverD1 Driver = "d1"
 
 	// Servers that speak the PostgreSQL protocol and SQL dialect.
 	DriverCockroachDB Driver = "cockroachdb"
@@ -101,9 +111,12 @@ var specs = map[Driver]driverSpec{
 	DriverDynamoDB:      {"DynamoDB", DriverDynamoDB, 8000, false},
 	DriverLibSQL:        {"libSQL", DriverSQLite, 8080, false},
 	DriverTurso:         {"Turso", DriverSQLite, 443, true},
+	DriverD1:            {"Cloudflare D1", DriverSQLite, 443, true},
 	DriverElasticsearch: {"Elasticsearch", DriverElasticsearch, 9200, false},
 	DriverOpenSearch:    {"OpenSearch", DriverElasticsearch, 9200, false},
 	DriverInfluxDB:      {"InfluxDB", DriverInfluxDB, 8181, false},
+	DriverSnowflake:     {"Snowflake", DriverSnowflake, 443, true},
+	DriverBigQuery:      {"BigQuery", DriverBigQuery, 443, true},
 	DriverScyllaDB:      {"ScyllaDB", DriverCassandra, 9042, false},
 	DriverValkey:        {"Valkey", DriverRedis, 6379, false},
 	DriverCockroachDB:   {"CockroachDB", DriverPostgres, 26257, false},
@@ -129,11 +142,11 @@ var specs = map[Driver]driverSpec{
 
 // Drivers lists every driver in display order: the engines, then the
 // servers and services compatible with one of them.
-var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB, DriverElasticsearch, DriverInfluxDB,
+var Drivers = []Driver{DriverPostgres, DriverMySQL, DriverMariaDB, DriverSQLite, DriverMSSQL, DriverOracle, DriverDuckDB, DriverClickHouse, DriverMongoDB, DriverRedis, DriverCassandra, DriverDynamoDB, DriverElasticsearch, DriverInfluxDB, DriverSnowflake, DriverBigQuery,
 	DriverCockroachDB, DriverYugabyteDB, DriverTimescaleDB, DriverNeon, DriverSupabase, DriverGreenplum,
 	DriverTiDB, DriverPercona, DriverSingleStore, DriverPlanetScale, DriverStarRocks, DriverDoris,
 	DriverCrateDB, DriverQuestDB, DriverFerretDB, DriverDocumentDB,
-	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet, DriverScyllaDB, DriverOpenSearch, DriverLibSQL, DriverTurso}
+	DriverValkey, DriverDragonfly, DriverKeyDB, DriverGarnet, DriverScyllaDB, DriverOpenSearch, DriverLibSQL, DriverTurso, DriverD1}
 
 // Family returns the engine whose protocol and SQL dialect the driver uses:
 // DriverPostgres, DriverMySQL, DriverSQLite, DriverMSSQL, DriverOracle,
@@ -167,6 +180,12 @@ func (d Driver) IsFileBased() bool {
 // IsLibSQL reports a libSQL server: SQLite's SQL, but over the network.
 func (d Driver) IsLibSQL() bool { return d == DriverLibSQL || d == DriverTurso }
 
+// IsHostless reports a service found without a host name: DynamoDB (by
+// region), D1 and Snowflake (by account), BigQuery (by project).
+func (d Driver) IsHostless() bool {
+	return d.Family() == DriverDynamoDB || d == DriverD1 || d == DriverSnowflake || d == DriverBigQuery
+}
+
 // IsHosted reports a cloud service, which only accepts TLS connections.
 func (d Driver) IsHosted() bool { return specs[d].hosted }
 
@@ -175,7 +194,7 @@ func (d Driver) SSLModes() []string {
 	switch d {
 	case DriverLibSQL:
 		return []string{"disable", "require", "skip-verify"}
-	case DriverTurso:
+	case DriverTurso, DriverD1, DriverSnowflake, DriverBigQuery:
 		return []string{"require"}
 	}
 	var modes []string
@@ -243,6 +262,16 @@ type Connection struct {
 	SSLCertPath string `json:"ssl_cert_path,omitempty"`
 	SSLCAPath   string `json:"ssl_ca_path,omitempty"`
 
+	// Warehouse and Role: Snowflake; empty: the user's own defaults.
+	Warehouse string `json:"warehouse,omitempty"`
+	Role      string `json:"role,omitempty"`
+	// Auth is how to sign in to Snowflake: "" (password), AuthKey, AuthToken
+	// or AuthBrowser. The password secret is then the key's passphrase or
+	// the token.
+	Auth string `json:"auth,omitempty"`
+	// KeyPath: the private key (Snowflake) or the credentials file (BigQuery).
+	KeyPath string `json:"key_path,omitempty"`
+
 	// SRV looks the hosts up in DNS (mongodb+srv://, e.g. MongoDB Atlas).
 	SRV bool `json:"srv,omitempty"`
 	// Options is a query string of driver options (MongoDB), e.g.
@@ -264,6 +293,13 @@ type Connection struct {
 	Favorites      []string `json:"favorites,omitempty"`
 }
 
+// Ways to sign in to Snowflake, besides a password.
+const (
+	AuthKey     = "key"     // a private key file
+	AuthToken   = "token"   // a programmatic access token
+	AuthBrowser = "browser" // single sign-on, in the browser
+)
+
 // NewID returns a random identifier for connections and groups.
 func NewID() string {
 	b := make([]byte, 16)
@@ -275,7 +311,7 @@ func NewID() string {
 
 // NewConnection returns a connection with defaults for the given driver.
 func NewConnection(d Driver) *Connection {
-	if d.Family() == DriverDynamoDB { // no host: AWS's own endpoint for the region
+	if d.IsHostless() { // no host: AWS's own endpoint for the region
 		return &Connection{ID: NewID(), Driver: d, Port: d.DefaultPort(), SSLMode: firstOr(d.SSLModes(), ""), SSHPort: 22, RowsPerPage: 300}
 	}
 	return &Connection{
@@ -346,8 +382,39 @@ func (c *Connection) Validate() error {
 		}
 	default:
 		// MongoDB, Redis and Cassandra servers run without users unless told otherwise.
-		if c.User == "" && !c.Driver.IsLibSQL() && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra && c.Driver.Family() != DriverDynamoDB && c.Driver.Family() != DriverElasticsearch && c.Driver.Family() != DriverInfluxDB {
+		if c.User == "" && !c.Driver.IsLibSQL() && c.Driver.Family() != DriverMongoDB && c.Driver.Family() != DriverRedis && c.Driver.Family() != DriverCassandra && c.Driver.Family() != DriverDynamoDB && c.Driver.Family() != DriverElasticsearch && c.Driver.Family() != DriverInfluxDB && c.Driver != DriverBigQuery {
+			if c.Driver == DriverD1 {
+				return fmt.Errorf("the Cloudflare account ID is required")
+			}
 			return fmt.Errorf("user is required")
+		}
+		if c.Driver == DriverD1 {
+			if c.DBName == "" {
+				return fmt.Errorf("the D1 database is required: its name or its ID")
+			}
+			if c.UseSSHTunnel {
+				return fmt.Errorf("D1 is reached through Cloudflare's API, without an SSH tunnel")
+			}
+		}
+		if c.Driver == DriverBigQuery && c.UseSSHTunnel {
+			return fmt.Errorf("BigQuery is reached through Google's API, without an SSH tunnel")
+		}
+		if c.Driver == DriverSnowflake {
+			if c.Host == "" {
+				return fmt.Errorf("the Snowflake account is required, e.g. MYORG-ACCOUNT1")
+			}
+			if c.UseSSHTunnel {
+				return fmt.Errorf("Snowflake is reached directly, without an SSH tunnel")
+			}
+			switch c.Auth {
+			case "", AuthToken, AuthBrowser:
+			case AuthKey:
+				if c.KeyPath == "" {
+					return fmt.Errorf("choose the private key file")
+				}
+			default:
+				return fmt.Errorf("unknown way to sign in %q", c.Auth)
+			}
 		}
 		if c.Port < 0 || c.Port > 65535 {
 			return fmt.Errorf("port %d out of range", c.Port)

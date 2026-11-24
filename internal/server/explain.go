@@ -73,6 +73,22 @@ func Explain(err error) Friendly {
 		return Friendly{"Can't reach the server", "Nothing is listening on that host and port. Is the database running, and is the port right?"}
 	case has("no such host", "server misbehaving"):
 		return Friendly{"Unknown host name", "The host name could not be resolved. Check for typos, or try the IP address."}
+	case has("the project has no billing"):
+		return Friendly{"The project has no billing", "BigQuery's free tier reads and loads rows, and changes structure. Changing rows needs billing on the project."}
+	case has("over the connection's limit of"):
+		return Friendly{"The query would read too much", "Nothing ran. Read fewer columns or one partition, or raise the limit in the connection."}
+	case has("google refused the credentials"):
+		return Friendly{"Google refused the credentials", "The key may have been deleted, or the sign-in has expired."}
+	case has("snowflake doesn't know this key"):
+		return Friendly{"Snowflake doesn't know this key", "Set its public key on the user, and check the user name and account."}
+	case has("the private key is encrypted", "the private key couldn't be decrypted"):
+		return Friendly{"Private key is locked", "Enter the key's passphrase."}
+	case has("no snowflake account answers"):
+		return Friendly{"Unknown Snowflake account", "Use the account identifier ORGANIZATION-ACCOUNT, as in app.snowflake.com/ORGANIZATION/ACCOUNT."}
+	case has("needs a second factor"):
+		return Friendly{"This user needs a second factor", "Sign in with a key pair, an access token or the browser."}
+	case has("no warehouse is selected"):
+		return Friendly{"No warehouse is selected", "Choose one in the connection, or run USE WAREHOUSE name."}
 	case has("password authentication failed", "access denied", "authentication failed", "unable to authenticate"):
 		if has("ssh") {
 			return Friendly{"SSH login failed", "The SSH user, password or private key was not accepted."}

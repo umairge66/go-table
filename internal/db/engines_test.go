@@ -535,6 +535,34 @@ func testGreenplumDistribution(t *testing.T, c *Conn) {
 	}
 }
 
+// Turso's cloud: GOTABLE_TEST_TURSO_HOST=<database>-<organization>.turso.io
+// and GOTABLE_TEST_TURSO_PASSWORD=<token>. Use an empty database: the suite
+// makes and drops tables named gt_….
+func TestTurso(t *testing.T) {
+	cfg, pw := serverConfig(t, "TURSO", model.DriverTurso)
+	c := openTest(t, cfg, pw)
+	if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "Turso · SQLite 3.") {
+		t.Errorf("version %q", v)
+	}
+	runSuite(t, c)
+	t.Run("session", func(t *testing.T) { testLibSQLSession(t, c, 8000) })
+	t.Run("transfer", func(t *testing.T) { testLibSQLTransfer(t, c) })
+}
+
+// Cloudflare D1: GOTABLE_TEST_D1_HOST=cloudflare, _USER=<account ID>,
+// _PASSWORD=<API token> and _DB=<an empty database, by name or ID>.
+func TestD1(t *testing.T) {
+	cfg, pw := serverConfig(t, "D1", model.DriverD1)
+	cfg.Host, cfg.Port = "", 0
+	c := openTest(t, cfg, pw)
+	if v, _ := c.ServerVersion(context.Background()); !strings.HasPrefix(v, "Cloudflare D1 · ") {
+		t.Errorf("version %q", v)
+	}
+	runSuite(t, c)
+	t.Run("transfer", func(t *testing.T) { testLibSQLTransfer(t, c) })
+	t.Run("d1", func(t *testing.T) { testD1(t, c) })
+}
+
 func TestLibSQL(t *testing.T) {
 	cfg, pw := serverConfig(t, "LIBSQL", model.DriverLibSQL)
 	c := openTest(t, cfg, pw)
@@ -542,4 +570,5 @@ func TestLibSQL(t *testing.T) {
 		t.Errorf("version %q", v)
 	}
 	runSuite(t, c)
+	t.Run("transfer", func(t *testing.T) { testLibSQLTransfer(t, c) })
 }

@@ -18,6 +18,8 @@ const languages: PerDriver<SqlLanguage> = {
   dynamodb: 'sql', // never used: see formatSQL
   elasticsearch: 'sql', // never used: see formatSQL
   influxdb: 'postgresql',
+  snowflake: 'snowflake',
+  bigquery: 'bigquery',
   cassandra: 'sql', // CQL reads close enough to plain SQL
   duckdb: 'duckdb',
   clickhouse: 'clickhouse',

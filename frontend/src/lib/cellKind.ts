@@ -20,10 +20,13 @@ export function cellKind(type = '', values: string[] | undefined, driver: Driver
   // true/false; MySQL's BOOLEAN is TINYINT(1) and SQLite stores 1/0.
   const f = family(driver)
   const trueFalse = { kind: 'choice' as const, options: [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }] }
-  if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse' || f === 'mongodb') && (t === 'boolean' || t === 'bool')) return trueFalse
+  if ((f === 'postgres' || f === 'duckdb' || f === 'clickhouse' || f === 'mongodb' || f === 'snowflake') && (t === 'boolean' || t === 'bool')) return trueFalse
   if (f === 'sqlserver' && t === 'bit') return trueFalse
   // Elasticsearch dates come in formats of the mapping's choosing, with a time.
   if (f === 'elasticsearch') return t === 'boolean' ? trueFalse : { kind: 'text' }
+  // Snowflake's dates and times with their sizes, e.g. TIMESTAMP_NTZ(9); its offsets stand apart from the time.
+  if (f === 'snowflake') return t === 'date' ? { kind: 'date' } : /^time(\(|$)/.test(t) ? { kind: 'time' } : /^timestamp/.test(t) ? { kind: 'datetime' } : { kind: 'text' }
+  if (f === 'bigquery') return { kind: 'text' } // rows aren't edited in the grid
   // InfluxDB's times have nanoseconds.
   if (f === 'influxdb') return t === 'boolean' ? trueFalse : { kind: 'text' }
   if (/^(tinyint\(1\)|bool|boolean)(\s+unsigned)?$/.test(t)) return { kind: 'choice', options: [{ value: '1', label: '1 (true)' }, { value: '0', label: '0 (false)' }] }

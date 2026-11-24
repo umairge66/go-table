@@ -6,7 +6,7 @@ import { Button, IconButton, Select, Switch, errorParts, useToast } from '../com
 import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { TypeSelect } from '../components/TypeSelect'
 import { category, findType, groupOf, has, paramProblem, typeString, type TypeSpec } from '../lib/sqlTypes'
-import { family, features, forDriver, tableOptions, type PerDriver, type SessionInfo } from '../types'
+import { isBigQuery, isSnowflake, family, features, forDriver, tableOptions, type PerDriver, type SessionInfo } from '../types'
 import { EXPRESSIONS } from './ColumnDialog'
 
 type IndexKind = '' | 'primary' | 'unique' | 'index' | 'fulltext'
@@ -38,6 +38,8 @@ const ID: PerDriver<TypeSpec> = {
   dynamodb: { base: 'S', param: '', unsigned: false, array: false, custom: false },
   elasticsearch: { base: 'keyword', param: '', unsigned: false, array: false, custom: false },
   influxdb: { base: 'tag', param: '', unsigned: false, array: false, custom: false },
+  bigquery: { base: 'INT64', param: '', unsigned: false, array: false, custom: false },
+  snowflake: { base: 'NUMBER', param: '', unsigned: false, array: false, custom: false },
   cassandra: { base: 'uuid', param: '', unsigned: false, array: false, custom: false },
   duckdb: { base: 'BIGINT', param: '', unsigned: false, array: false, custom: false },
   clickhouse: { base: 'UInt64', param: '', unsigned: false, array: false, custom: false },
@@ -53,6 +55,8 @@ const TEXT: PerDriver<TypeSpec> = {
   redis: { base: 'string', param: '', unsigned: false, array: false, custom: false },
   dynamodb: { base: 'S', param: '', unsigned: false, array: false, custom: false },
   elasticsearch: { base: 'keyword', param: '', unsigned: false, array: false, custom: false },
+  bigquery: { base: 'STRING', param: '', unsigned: false, array: false, custom: false },
+  snowflake: { base: 'VARCHAR', param: '', unsigned: false, array: false, custom: false },
   influxdb: { base: 'tag', param: '', unsigned: false, array: false, custom: false },
   cassandra: { base: 'uuid', param: '', unsigned: false, array: false, custom: false },
   duckdb: { base: 'VARCHAR', param: '', unsigned: false, array: false, custom: false },
@@ -316,7 +320,7 @@ export function CreateTableView({ session, schema, label, existing, active, onCl
                           <option value="">—</option>
                           <option value="primary">PRIMARY</option>
                           {f.uniqueIndexes && <option value="unique">UNIQUE</option>}
-                          <option value="index">INDEX</option>
+                          {!isSnowflake(driver) && !isBigQuery(driver) && <option value="index">INDEX</option>}
                           {mysql && <option value="fulltext">FULLTEXT</option>}
                         </Select>
                         <div className="flex justify-end gap-0.5">

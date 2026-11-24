@@ -1,3 +1,4 @@
+import { fmtBytes } from '../components/Progress'
 import clsx from 'clsx'
 import { AArrowDown, AArrowUp, AlertCircle, Bookmark, CheckCircle2, Copy, Download, FolderOpen, Gauge, Lock, Pencil, Play, Save, Sparkles, Square, StepForward, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -14,7 +15,7 @@ import { formatSQL } from '../lib/format'
 import { cellAt, emptyEdits, pendingCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
 import { cellKind } from '../lib/cellKind'
 import { sourceTable } from '../lib/sourceTable'
-import { family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
+import { isBigQuery, rowEdits, family, type Cell, type Column, type QueryResult, type SessionInfo, isMongo, isRedis, usesCommands } from '../types'
 import { explainStatement, mongoSourceTable } from '../lib/mongoShell'
 import { FONT_SIZES, getSettings, useSettings } from '../lib/settings'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
@@ -62,10 +63,26 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  // BigQuery: what everything in the editor would read, asked as it changes (free).
+  const [reads, setReads] = useState<number | null>(null)
+  const estimating = useRef<{ t?: ReturnType<typeof setTimeout>; ac?: AbortController }>({})
+  const estimate = useCallback((v: string) => {
+    if (!isBigQuery(session.connection.driver)) return
+    clearTimeout(estimating.current.t)
+    estimating.current.ac?.abort()
+    setReads(null)
+    if (!v.trim()) return
+    const ac = estimating.current.ac = new AbortController()
+    estimating.current.t = setTimeout(() => {
+      api.estimate(session.id, v, schema, ac.signal).then((r) => { if (!ac.signal.aborted) setReads(r.bytes) }, () => {})
+    }, 600)
+  }, [session.id, session.connection.driver, schema])
+  useEffect(() => { estimate(initialSql); const e = estimating.current; return () => { clearTimeout(e.t); e.ac?.abort() } }, [estimate]) // eslint-disable-line react-hooks/exhaustive-deps
   const changed = useCallback((v: string) => {
+    estimate(v)
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => onChangeRef.current(v), 400)
-  }, [])
+  }, [estimate])
   useEffect(() => () => clearTimeout(saveTimer.current), [])
   useEffect(() => { if (active) editor.current?.focus() }, [active])
 
@@ -199,6 +216,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     const mongo = isMongo(session.connection.driver)
     const src = mongo ? mongoSourceTable(current.statement) : sourceTable(current.statement)
     if (isRedis(session.connection.driver)) { setEditable({ reason: 'Command results are read-only: edit keys from the sidebar.' }); return }
+    if (!rowEdits(session.connection.driver)) { setEditable({ reason: 'Results are read-only here: change rows with INSERT, UPDATE and DELETE.' }); return }
     if (!src) { setEditable({ reason: mongo ? 'Only the result of a plain find() of whole documents can be edited.' : 'Only the result of a plain SELECT from one table can be edited.' }); return }
     const table = { schema: src.schema || schema, name: src.name }
     const cols = current.columns
@@ -286,6 +304,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
         {mongo && <Button size="sm" variant="ghost" icon={<Gauge className="size-3.5" />} onClick={explain} disabled={!!running} title="Show how the server runs the command under the cursor: indexes, documents examined, time">Explain</Button>}
         <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={beautify} title={withKeys('Beautify the selection, or everything', formatKeys)}>Format</Button>
         {running && <Button size="sm" variant="danger" icon={<Square className="size-3 fill-current" />} onClick={stop}>Stop · {(elapsed / 1000).toFixed(1)}s</Button>}
+        {reads !== null && <span className="ml-1 text-[12px] text-muted" data-testid="reads" title="What everything in this editor would read. A query on a table is billed 10 MB at least.">Reads {fmtBytes(reads)}</span>}
         <div className="flex-1" />
         <div className="flex items-center rounded-lg border border-line" role="group" aria-label="Editor text size">
           <IconButton label={withKeys('Smaller text', zoomOutKeys)} disabled={fontSize <= FONT_SIZES.min} onClick={() => zoom(-1)}><AArrowDown className="size-3.5" /></IconButton>

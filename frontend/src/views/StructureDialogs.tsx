@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { api, ApiError, type AlterOp, type TableRef } from '../api'
 import { SqlEditor } from '../components/SqlEditor'
 import { Button, Field, IconButton, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, family, features, isMongo, mongoExtras, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
+import { isBigQuery, isSnowflake, driverInfo, family, features, isMongo, mongoExtras, type Column, type DbObject, type Driver, type SessionInfo } from '../types'
 
 // Structure changes all go through POST /alter: a dry run shows the exact
 // SQL, then the same request runs it.
@@ -12,7 +12,7 @@ import { driverInfo, family, features, isMongo, mongoExtras, type Column, type D
 const isMySQL = (d: Driver) => family(d) === 'mysql'
 
 /** ddlNotAtomic: schema changes commit statement by statement (see the server's runDDL). */
-const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb', 'oracle', 'mongodb'].includes(family(d)) || d === 'cockroachdb'
+const ddlNotAtomic = (d: Driver) => ['mysql', 'clickhouse', 'duckdb', 'oracle', 'mongodb', 'snowflake', 'bigquery'].includes(family(d)) || d === 'cockroachdb'
 
 /** useAlter reviews and runs one-click changes (drop, set primary key…). */
 export function useAlter(session: SessionInfo, table: TableRef, onDone: () => void) {
@@ -167,7 +167,7 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
   const driver = session.connection.driver
   const mongo = isMongo(driver)
   const [name, setName] = useState('')
-  const [kind, setKind] = useState<'index' | 'unique' | 'fulltext' | 'spatial'>(initial?.kind ?? 'index')
+  const [kind, setKind] = useState<'index' | 'unique' | 'fulltext' | 'spatial'>(isSnowflake(driver) ? 'unique' : initial?.kind ?? 'index')
   const [method, setMethod] = useState('')
   const [cols, setCols] = useState<string[]>(initial?.columns ?? [])
   // MongoDB: a key per field, and the index options.
@@ -192,7 +192,7 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
         <Field label="Name"><Input autoFocus value={name} placeholder="automatic" aria-label="Index name" onChange={(e) => setName(e.target.value)} /></Field>
         <Field label="Kind">
           <Select value={kind} aria-label="Index kind" onChange={(e) => setKind(e.target.value as typeof kind)}>
-            <option value="index">Index</option>
+            {!isSnowflake(driver) && <option value="index">Index</option>}
             {features(driver).uniqueIndexes && <option value="unique">Unique</option>}
             {isMySQL(driver) && <option value="fulltext">Fulltext</option>}
             {isMySQL(driver) && <option value="spatial">Spatial</option>}
@@ -301,7 +301,7 @@ export function ForeignKeyDialog({ session, table, columns, initialColumn, onClo
         </div>
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="On delete"><Select value={onDelete} aria-label="On delete" onChange={(e) => setOnDelete(e.target.value)}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</Select></Field>
+        <Field label="On delete"><Select value={onDelete} aria-label="On delete" onChange={(e) => setOnDelete(e.target.value)}>{(isSnowflake(session.connection.driver) || isBigQuery(session.connection.driver) ? ACTIONS.slice(0, 1) : ACTIONS).map((a) => <option key={a}>{a}</option>)}</Select></Field>
         {features(session.connection.driver).onUpdate && <Field label="On update"><Select value={onUpdate} aria-label="On update" onChange={(e) => setOnUpdate(e.target.value)}>{ACTIONS.map((a) => <option key={a}>{a}</option>)}</Select></Field>}
       </div>
     </AlterDialog>

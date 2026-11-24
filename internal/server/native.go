@@ -180,7 +180,7 @@ func (s *Server) dialogOpen(w http.ResponseWriter, r *http.Request) {
 	title, dir, filters := "Choose a file", "", filtersFor(in.Kinds)
 	if slices.Contains(in.Kinds, "sshkey") {
 		// Keys rarely have an extension: show every file, from ~/.ssh.
-		title, filters = "Choose an SSH private key", []FileFilter{{"All files", "*"}}
+		title, filters = "Choose a private key", []FileFilter{{"All files", "*"}}
 		if st, err := os.Stat(expandHome("~/.ssh")); err == nil && st.IsDir() {
 			dir = expandHome("~/.ssh")
 		}

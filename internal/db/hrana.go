@@ -163,8 +163,7 @@ func hranaHTTPError(res *http.Response, body []byte) error {
 			msg = s
 		}
 	}
-	switch res.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden || strings.Contains(msg, "JWT") {
 		return &hranaError{Code: "AUTH", Message: strings.TrimSpace("authentication failed: the server refused the token. " + msg)}
 	}
 	if msg == "" || strings.HasPrefix(msg, "<") { // a web server that isn't libSQL

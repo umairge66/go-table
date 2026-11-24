@@ -574,6 +574,12 @@ func runSuite(t *testing.T, c *Conn) {
 	})
 
 	t.Run("session state persists", func(t *testing.T) {
+		if c.Config.Driver == model.DriverD1 {
+			if res, err := c.Execute(ctx, "BEGIN", 0); err == nil && res[0].Err == nil {
+				t.Error("BEGIN seemed to work")
+			}
+			t.Skip("D1's requests have no session")
+		}
 		begin := "BEGIN"
 		if kind == model.DriverMSSQL {
 			begin = "BEGIN TRANSACTION"

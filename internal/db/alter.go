@@ -147,6 +147,9 @@ func (p AlterPlan) Preview(d Dialect) []string {
 	if !p.Rebuild {
 		return p.Statements
 	}
+	if d.kind == model.DriverD1 { // always checks them, at the end
+		return append([]string{"PRAGMA defer_foreign_keys = on;"}, p.Statements...)
+	}
 	out := []string{"PRAGMA foreign_keys = OFF;"}
 	out = append(out, p.Statements...)
 	return append(out, fmt.Sprintf("PRAGMA foreign_key_check(%s);", d.QuoteIdent(p.CheckTable)), "PRAGMA foreign_keys = ON;")
@@ -395,6 +398,8 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		switch d.family {
 		case model.DriverMSSQL:
 			return []string{mssqlRename(d, t, x.Name, n, "INDEX")}, nil
+		case model.DriverSnowflake:
+			return []string{alter + "RENAME CONSTRAINT " + d.QuoteIdent(x.Name) + " TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverPostgres, model.DriverOracle:
 			return []string{"ALTER INDEX " + d.QualifiedName(TableRef{Schema: t.Schema, Name: x.Name}) + " RENAME TO " + d.QuoteIdent(n) + ";"}, nil
 		case model.DriverSQLite:
@@ -438,9 +443,12 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 			}
 			return out, nil
 		}
-		if d.kind == model.DriverGreenplum { // 6 can't reuse the key's name in one statement
+		if d.kind == model.DriverGreenplum || d.family == model.DriverSnowflake { // 6 can't reuse the key's name in one statement
 			var out []string
-			if has {
+			switch {
+			case has && d.family == model.DriverSnowflake:
+				out = append(out, alter+"DROP PRIMARY KEY;")
+			case has:
 				out = append(out, alter+"DROP CONSTRAINT "+d.QuoteIdent(pk.Name)+";")
 			}
 			if len(op.Columns) > 0 {
@@ -472,6 +480,13 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if err := checkColumns(st, fk.Columns, "foreign key"); err != nil {
 			return nil, err
 		}
+		if d.family == model.DriverSnowflake {
+			def := *fk
+			if err := sfKeyActions(&def); err != nil {
+				return nil, err
+			}
+			fk = &def
+		}
 		clause, err := foreignKeyClause(d, t, *fk)
 		if err != nil {
 			return nil, err
@@ -499,7 +514,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		if strings.Contains(ck.Expression, ";") {
 			return nil, errors.New("the condition can't contain ';'")
 		}
-		if d.family == model.DriverSQLite || d.family == model.DriverDuckDB {
+		if d.family == model.DriverSQLite || d.family == model.DriverDuckDB || d.family == model.DriverSnowflake {
 			return nil, fmt.Errorf("%s can't add a CHECK constraint to an existing table", familyLabel(d))
 		}
 		if d.kind == model.DriverSingleStore {
@@ -531,7 +546,7 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 		}
 		target := d.QuoteIdent(n)
 		switch d.family {
-		case model.DriverMySQL:
+		case model.DriverMySQL, model.DriverSnowflake:
 			target = d.QualifiedName(TableRef{Schema: t.Schema, Name: n}) // stay in the same database
 		case model.DriverMSSQL:
 			return []string{mssqlRename(d, t, "", n, "")}, nil
@@ -561,6 +576,9 @@ func buildOp(d Dialect, t TableRef, st TableState, op AlterOp) ([]string, error)
 				v = d.QuoteLiteral(Text(op.Comment))
 			}
 			return []string{"COMMENT ON TABLE " + tbl + " IS " + v + ";"}, nil
+		}
+		if d.family == model.DriverSnowflake {
+			return []string{alter + "SET COMMENT = " + d.QuoteLiteral(Text(op.Comment)) + ";"}, nil
 		}
 		return []string{alter + "COMMENT = " + d.QuoteLiteral(Text(op.Comment)) + ";"}, nil
 
@@ -706,6 +724,12 @@ func buildAddIndex(d Dialect, t TableRef, st TableState, x *IndexDef) ([]string,
 		return nil, fmt.Errorf("an index named %q already exists", name)
 	}
 	cols := "(" + quoteList(d, x.Columns) + ")"
+	if d.family == model.DriverSnowflake {
+		if !x.Unique || method != "" {
+			return nil, errSFNoIndex
+		}
+		return []string{"ALTER TABLE " + d.QualifiedName(t) + " ADD CONSTRAINT " + d.QuoteIdent(name) + " UNIQUE " + cols + ";"}, nil
+	}
 	if d.family == model.DriverClickHouse {
 		// A data-skipping index over granules of rows.
 		typ := x.Method
@@ -776,6 +800,8 @@ func buildModifyColumn(d Dialect, t TableRef, st TableState, op AlterOp) ([]stri
 		return mssqlModifyColumn(d, t, old, def, alter)
 	case model.DriverClickHouse:
 		return chModifyColumn(d, old, def, alter)
+	case model.DriverSnowflake:
+		return sfModifyColumn(d, t, old, def, alter)
 	case model.DriverOracle:
 		return oracleModifyColumn(d, t, old, def, alter)
 	case model.DriverMySQL:

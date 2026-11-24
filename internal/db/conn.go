@@ -431,6 +431,10 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 		defer c.mu.Unlock()
 		return c.remote.fetchRows(ctx, c, t, p)
 	}
+	columns, err := c.searchable(ctx, t, p, columns)
+	if err != nil {
+		return nil, err
+	}
 	q, args, err := BuildSelect(c.Dialect, t, p, columns)
 	if err != nil {
 		return nil, err
@@ -439,6 +443,11 @@ func (c *Conn) FetchRows(ctx context.Context, t TableRef, p Page, columns []stri
 		return nil, err
 	}
 	defer c.mu.Unlock()
+	if c.Config.Driver == model.DriverD1 {
+		if q, err = d1Select(ctx, c, t, q); err != nil {
+			return nil, err
+		}
+	}
 	rows, err := c.conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -467,6 +476,10 @@ func (c *Conn) CountRows(ctx context.Context, t TableRef, p Page, columns []stri
 		}
 		defer c.mu.Unlock()
 		return c.remote.countRows(ctx, c, t, p)
+	}
+	columns, err := c.searchable(ctx, t, p, columns)
+	if err != nil {
+		return 0, err
 	}
 	q, args, err := BuildCount(c.Dialect, t, p, columns)
 	if err != nil {
@@ -506,13 +519,9 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	if err := questNoDelete(c, changes); err != nil {
 		return err
 	}
-	stmts := make([]Statement, 0, len(changes))
-	for _, ch := range changes {
-		s, err := BuildChange(c.Dialect, t, ch, hasPK)
-		if err != nil {
-			return err
-		}
-		stmts = append(stmts, s)
+	stmts, err := c.buildChanges(ctx, t, changes, hasPK)
+	if err != nil {
+		return err
 	}
 	if err := c.lock(ctx); err != nil {
 		return err
@@ -525,12 +534,17 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 	// ClickHouse mutations report no row count.
 	// Doris reports 0 rows for a DELETE. Neither can tell a row that changed.
 	counted := c.Dialect.family != model.DriverClickHouse && c.Config.Driver != model.DriverDoris
-	for _, s := range stmts {
+	for i, s := range stmts {
 		res, err := tx.ExecContext(ctx, s.SQL, s.Args...)
 		if err == nil && counted && s.Args != nil && !strings.HasPrefix(s.SQL, "INSERT") {
 			if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
 				err = fmt.Errorf("row no longer exists or was changed by someone else")
+			} else if rerr == nil && n > 1 && c.Dialect.family == model.DriverSnowflake {
+				err = sfManyRows(n, hasPK)
 			}
+		}
+		if err == nil && c.Config.Driver == model.DriverD1 && !strings.HasPrefix(s.SQL, "INSERT") {
+			_, err = tx.ExecContext(ctx, d1Guard(i))
 		}
 		if err != nil {
 			tx.Rollback()
@@ -538,6 +552,10 @@ func (c *Conn) ApplyChanges(ctx context.Context, t TableRef, changes []Change, h
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		var gone d1RowGone
+		if errors.As(err, &gone) && int(gone) < len(stmts) {
+			return fmt.Errorf("%s: %w", Preview(c.Dialect, stmts[gone]), err)
+		}
 		return err
 	}
 	c.crateRefresh(ctx, t)
@@ -568,12 +586,12 @@ func (c *Conn) PreviewChanges(ctx context.Context, t TableRef, changes []Change,
 	if err := questNoDelete(c, changes); err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(changes))
-	for _, ch := range changes {
-		s, err := BuildChange(c.Dialect, t, ch, hasPK)
-		if err != nil {
-			return nil, err
-		}
+	stmts, err := c.buildChanges(ctx, t, changes, hasPK)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(stmts))
+	for _, s := range stmts {
 		out = append(out, Preview(c.Dialect, s))
 	}
 	return out, nil
@@ -637,7 +655,11 @@ func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int)
 func (c *Conn) execOne(ctx context.Context, stmt string, rowCap int) Result {
 	start := time.Now()
 	r := Result{Statement: stmt}
-	if returnsRows(stmt) {
+	if c.Config.Driver == model.DriverD1 && d1NoTx.MatchString(strings.TrimSpace(stripLeadingComments(stmt))) {
+		r.Err = errors.New("D1 has no BEGIN, COMMIT or SAVEPOINT: each statement is saved as it runs")
+		return r
+	}
+	if returnsRows(stmt) || c.Dialect.family == model.DriverSnowflake && sfReturnsRows(stmt) {
 		rows, err := c.conn.QueryContext(ctx, stmt)
 		if err != nil {
 			r.Err = err
@@ -681,7 +703,7 @@ func stripLeadingComments(s string) string {
 	for {
 		s = strings.TrimSpace(s)
 		switch {
-		case strings.HasPrefix(s, "--") || strings.HasPrefix(s, "#"):
+		case strings.HasPrefix(s, "--") || strings.HasPrefix(s, "#") || strings.HasPrefix(s, "//"): // Snowflake has //
 			i := strings.IndexByte(s, '\n')
 			if i < 0 {
 				return ""
@@ -748,6 +770,8 @@ func toValue(v any, dbType string) Value {
 	switch x := v.(type) {
 	case nil:
 		return NullValue
+	case snowBinary:
+		return Value{Text: "0x" + strings.ToUpper(hex.EncodeToString(x)), Hex: true}
 	case []byte:
 		if utf8.Valid(x) {
 			return Text(string(x))
@@ -859,9 +883,23 @@ func (c *Conn) CurrentDatabase(ctx context.Context) string {
 			return name
 		}
 		return c.Config.DBName
+	case model.DriverBigQuery:
+		if x, ok := c.remote.(*bigquery); ok {
+			return x.project
+		}
+	case model.DriverSnowflake:
+		if err := c.lock(ctx); err != nil {
+			return c.Config.DBName
+		}
+		defer c.mu.Unlock()
+		name, _ := sfDatabase(ctx, c)
+		return name
 	case model.DriverSQLite, model.DriverDuckDB:
 		if c.Config.Driver.IsLibSQL() {
 			return c.Config.Host
+		}
+		if c.Config.Driver == model.DriverD1 {
+			return d1Of(c).name
 		}
 		return c.Config.Path[strings.LastIndexAny(c.Config.Path, `/\`)+1:]
 	}

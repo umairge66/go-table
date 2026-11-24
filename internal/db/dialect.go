@@ -26,7 +26,7 @@ func (d Dialect) QuoteIdent(name string) string {
 	switch d.family {
 	case model.DriverMySQL:
 		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
-	case model.DriverClickHouse:
+	case model.DriverClickHouse, model.DriverBigQuery:
 		return "`" + strings.NewReplacer(`\`, `\\`, "`", "\\`").Replace(name) + "`"
 	case model.DriverMSSQL:
 		return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
@@ -69,6 +69,8 @@ func (d Dialect) QuoteLiteral(v Value) string {
 			return "0x" + h
 		case model.DriverClickHouse:
 			return "unhex('" + h + "')"
+		case model.DriverBigQuery:
+			return "FROM_HEX('" + h + "')"
 		case model.DriverOracle:
 			return "HEXTORAW('" + h + "')"
 		case model.DriverDuckDB:
@@ -80,11 +82,14 @@ func (d Dialect) QuoteLiteral(v Value) string {
 		}
 		return "X'" + h + "'"
 	}
+	if d.family == model.DriverBigQuery { // a string ends with its line
+		return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`, "\x00", `\x00`).Replace(v.Text) + "'"
+	}
 	if d.family == model.DriverClickHouse { // backslash escapes, like MySQL's
 		return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v.Text) + "'"
 	}
 	s := strings.ReplaceAll(v.Text, "'", "''")
-	if d.mysqlLike() {
+	if d.mysqlLike() || d.family == model.DriverSnowflake {
 		s = strings.ReplaceAll(s, `\`, `\\`)
 	}
 	if d.family == model.DriverMSSQL {
@@ -109,6 +114,8 @@ func (d Dialect) TextExpr(col string) string {
 		return "toString(" + q + ")"
 	case model.DriverOracle:
 		return "TO_CHAR(" + q + ")"
+	case model.DriverSnowflake:
+		return "TO_VARCHAR(" + q + ")"
 	}
 	return q
 }
@@ -116,7 +123,7 @@ func (d Dialect) TextExpr(col string) string {
 // LikeOp returns the case-insensitive LIKE operator.
 func (d Dialect) LikeOp() string {
 	switch d.family {
-	case model.DriverPostgres, model.DriverDuckDB, model.DriverClickHouse:
+	case model.DriverPostgres, model.DriverDuckDB, model.DriverClickHouse, model.DriverSnowflake:
 		return "ILIKE"
 	}
 	return "LIKE" // MySQL, SQLite and SQL Server compare case-insensitively by default
@@ -128,6 +135,8 @@ func (d Dialect) likeEscape() string {
 	switch d.family {
 	case model.DriverSQLite, model.DriverMSSQL, model.DriverDuckDB, model.DriverOracle:
 		return ` ESCAPE '\'`
+	case model.DriverSnowflake: // a backslash would itself need escaping
+		return ` ESCAPE '^'`
 	}
 	return ""
 }
@@ -135,6 +144,9 @@ func (d Dialect) likeEscape() string {
 // escapeLike makes s match literally in a LIKE pattern (with likeEscape).
 // SQL Server also treats [ as the start of a character class.
 func (d Dialect) escapeLike(s string) string {
+	if d.family == model.DriverSnowflake {
+		return strings.NewReplacer("^", "^^", "%", "^%", "_", "^_").Replace(s)
+	}
 	s = escapeLike(s)
 	if d.family == model.DriverMSSQL {
 		s = strings.ReplaceAll(s, "[", `\[`)

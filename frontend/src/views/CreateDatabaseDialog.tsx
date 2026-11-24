@@ -6,7 +6,7 @@ import { Button, Field, Input, Modal, errorParts, useToast } from '../components
 import { nativeDialogs } from '../lib/native'
 import { examplePath } from '../lib/platform'
 import { chooseSaveLocation } from '../lib/saveFile'
-import { family, type Connection, type SessionInfo } from '../types'
+import { isSnowflake, family, type Connection, type SessionInfo } from '../types'
 
 /**
  * CreateDatabaseDialog creates a database (or PostgreSQL schema). SQLite has
@@ -24,7 +24,7 @@ export function CreateDatabaseDialog({ session, onClose, onCreated, onCreatedFil
   const driver = conn.driver
   // pg: a database or a schema in this one (PostgreSQL, SQL Server); DuckDB
   // files only hold schemas.
-  const pg = family(driver) === 'postgres' || family(driver) === 'sqlserver'
+  const pg = family(driver) === 'postgres' || family(driver) === 'sqlserver' || isSnowflake(driver)
   const schemaOnly = family(driver) === 'duckdb'
   const sqlite = family(driver) === 'sqlite'
   const [db, setDb] = useState<NewDatabase>({ name: '', kind: schemaOnly ? 'schema' : 'database', charset: family(driver) === 'mysql' ? 'utf8mb4' : '' })

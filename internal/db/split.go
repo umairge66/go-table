@@ -21,6 +21,7 @@ func SplitStatements(kind model.Driver, script string) []Span {
 	mysql := kind == model.DriverMySQL
 	// ClickHouse, like MySQL, escapes with backslashes and allows # comments.
 	backslash := mysql || kind == model.DriverClickHouse
+	snow := kind == model.DriverSnowflake // backslashes in strings only, // comments, $$ … $$
 	mssql := kind == model.DriverMSSQL
 	oracle := kind == model.DriverOracle
 	dollar := kind == model.DriverPostgres || kind == model.DriverDuckDB
@@ -76,12 +77,12 @@ func SplitStatements(kind model.Driver, script string) []Span {
 		}
 		switch {
 		case ch == '\'' || ch == '"' || ch == '`':
-			i = skipQuoted(script, i, ch, backslash)
+			i = skipQuoted(script, i, ch, backslash || snow && ch == '\'')
 			continue
 		case ch == '[' && mssql:
 			i = skipBracket(script, i)
 			continue
-		case ch == '-' && i+1 < n && script[i+1] == '-', backslash && ch == '#':
+		case ch == '-' && i+1 < n && script[i+1] == '-', backslash && ch == '#', snow && strings.HasPrefix(script[i:], "//"):
 			if eol := strings.IndexByte(script[i:], '\n'); eol >= 0 {
 				i += eol
 			} else {
@@ -90,6 +91,13 @@ func SplitStatements(kind model.Driver, script string) []Span {
 			continue
 		case ch == '/' && i+1 < n && script[i+1] == '*':
 			if end := strings.Index(script[i+2:], "*/"); end >= 0 {
+				i += end + 4
+			} else {
+				i = n
+			}
+			continue
+		case snow && strings.HasPrefix(script[i:], "$$"):
+			if end := strings.Index(script[i+2:], "$$"); end >= 0 {
 				i += end + 4
 			} else {
 				i = n
@@ -212,7 +220,7 @@ func onlyComments(s string) bool {
 	for len(s) > 0 {
 		s = strings.TrimSpace(s)
 		switch {
-		case strings.HasPrefix(s, "--") || strings.HasPrefix(s, "#"):
+		case strings.HasPrefix(s, "--") || strings.HasPrefix(s, "#") || strings.HasPrefix(s, "//"):
 			eol := strings.IndexByte(s, '\n')
 			if eol < 0 {
 				return true

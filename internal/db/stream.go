@@ -140,7 +140,7 @@ func (s *Scanner) Next() (Stmt, error) {
 			continue
 		case quote != 0:
 			s.buf = append(s.buf, c)
-			if c == '\\' && s.bs && quote != '`' && quote != '[' {
+			if c == '\\' && (s.bs && quote != '`' && quote != '[' || s.kind == model.DriverSnowflake && quote == '\'') {
 				if n, err := s.r.ReadByte(); err == nil {
 					if n == '\n' {
 						s.line++
@@ -224,7 +224,7 @@ func (s *Scanner) Next() (Stmt, error) {
 		}
 
 		switch {
-		case c == '-' && peekIs(s.r, '-'), c == '#' && s.bs:
+		case c == '-' && peekIs(s.r, '-'), c == '#' && s.bs, c == '/' && s.kind == model.DriverSnowflake && peekIs(s.r, '/'):
 			lineComment = true
 			s.buf = append(s.buf, c)
 			continue
@@ -241,6 +241,12 @@ func (s *Scanner) Next() (Stmt, error) {
 			quote = c
 			meaningful = true
 			s.buf = append(s.buf, c)
+			continue
+		case c == '$' && s.kind == model.DriverSnowflake && peekIs(s.r, '$'):
+			s.r.Discard(1)
+			s.buf = append(s.buf, "$$"...)
+			dollarTag = []byte("$$")
+			meaningful = true
 			continue
 		case c == '$' && (s.kind == model.DriverPostgres || s.kind == model.DriverDuckDB) && (len(s.buf) == 0 || !isIdent(s.buf[len(s.buf)-1])):
 			if tag := peekDollarTag(s.r); tag != nil {

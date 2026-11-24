@@ -3,6 +3,29 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## v0.13.0 — 2026-11-24
+
+### Added
+
+- **Snowflake**, tested on the service: exact values of every type, edits
+  that can't change several rows by mistake, and no billed counts unless
+  asked for. It makes GoTable about 15 MB larger.
+- **BigQuery**, tested on its free tier: free browsing, counts and exports, what
+  a query would read before it runs, and a limit that refuses larger ones.
+  Rows aren't edited in the grid yet.
+- **Cloudflare D1**, tested on the service: saves as one batch, exact large
+  numbers, and no change that would make D1 delete rows of other tables.
+
+### Changed
+
+- **Turso** is tested on its cloud, so it is no longer marked untested. A
+  wrong token is explained.
+
+### Fixed
+
+- *Open in SQL* quotes names that need it, and on Oracle names in lower case
+  are quoted everywhere.
+
 ## v0.12.0 — 2026-11-24
 
 ### Added

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"gotable/internal/model"
 )
 
 // SQLite can't change a column's type, NULL or default, its primary key or
@@ -361,6 +363,9 @@ func buildSQLiteRebuild(d Dialect, t TableRef, st TableState, ops []AlterOp) (Al
 // other tables keep pointing at the table while it is swapped), then
 // checks the keys before committing. Callers hold c.mu.
 func (c *Conn) runRebuild(ctx context.Context, t TableRef, plan AlterPlan) error {
+	if err := d1MayRebuild(ctx, c, t); err != nil {
+		return err
+	}
 	var on int
 	if err := c.conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&on); err != nil {
 		return err
@@ -380,6 +385,9 @@ func (c *Conn) runRebuild(ctx context.Context, t TableRef, plan AlterPlan) error
 			tx.Rollback()
 			return fmt.Errorf("%s %w", s, err)
 		}
+	}
+	if c.Config.Driver == model.DriverD1 { // nothing ran yet; D1 checks the keys at the end
+		return tx.Commit()
 	}
 	rows, err := tx.QueryContext(ctx, fmt.Sprintf("PRAGMA %s.foreign_key_check(%s)", c.Dialect.QuoteIdent(schemaOrMain(t.Schema)), c.Dialect.QuoteIdent(plan.CheckTable)))
 	if err != nil {

@@ -9,7 +9,8 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type Driver, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
+import { quote } from '../lib/quote'
+import { family, features, tagInfo, type Cell, type Connection, type DbObject, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
 import { isPattern, keyLabel as redisLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
@@ -1074,16 +1075,6 @@ function DbRail({ dbs, activeKey, pg, mainSid, onSelect, onClose, onMenu, onOpen
       </button>
     </nav>
   )
-}
-
-export function quote(name: string, driver: Driver) {
-  if (/^[a-z_][a-z0-9_]*$/.test(name)) return name
-  switch (family(driver)) {
-    case 'mysql': return '`' + name.replace(/`/g, '``') + '`'
-    case 'clickhouse': return '`' + name.replace(/[`\\]/g, '\\$&') + '`'
-    case 'sqlserver': return '[' + name.replace(/]/g, ']]') + ']'
-  }
-  return '"' + name.replace(/"/g, '""') + '"'
 }
 
 function Section({ title, labelOf, items, db, activeId, selected, onClick, onMenu }: {
