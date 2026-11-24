@@ -1,4 +1,40 @@
-# GoTable
+<p align="center"><img alt="" src="packaging/gotable.svg" width="112"></p>
+<h1 align="center">GoTable</h1>
+<p align="center">A fast, keyboard-friendly desktop client for SQL and NoSQL databases.<br>One native app for Linux, Windows and macOS, built with Go.</p>
+
+<!-- Fixed badges are files in docs/badges (made with shields.io): GitHub's image
+     proxy often times out on shields.io. Live ones come from GitHub and badgen.net. -->
+<p align="center">
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Latest release" src="https://badgen.net/github/release/umairge66/go-table?color=5b5bd6"></a>
+  <a href="https://github.com/umairge66/go-table/releases"><img alt="Downloads" src="https://badgen.net/github/assets-dl/umairge66/go-table?label=downloads&color=5b5bd6"></a>
+  <a href="https://github.com/umairge66/go-table/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/umairge66/go-table/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/umairge66/go-table/actions/workflows/build.yml"><img alt="Build" src="https://github.com/umairge66/go-table/actions/workflows/build.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="docs/badges/license-mit.svg"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download for Linux" src="docs/badges/download-for-linux.svg"></a>
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download for Windows" src="docs/badges/download-for-windows.svg"></a>
+  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download for macOS" src="docs/badges/download-for-macos.svg"></a>
+</p>
+<p align="center">
+  <a href="#install">Which file do I need?</a> · <a href="#databases">Databases</a> · <a href="#build-and-run">Build from source</a> · <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <img alt="PostgreSQL" src="docs/badges/postgresql.svg">
+  <img alt="MySQL" src="docs/badges/mysql.svg">
+  <img alt="MariaDB" src="docs/badges/mariadb.svg">
+  <img alt="SQLite" src="docs/badges/sqlite.svg">
+  <img alt="SQL Server" src="docs/badges/sql-server.svg">
+  <img alt="Oracle" src="docs/badges/oracle.svg">
+  <img alt="DuckDB" src="docs/badges/duckdb.svg">
+  <img alt="ClickHouse" src="docs/badges/clickhouse.svg">
+  <img alt="MongoDB" src="docs/badges/mongodb.svg">
+  <img alt="Redis" src="docs/badges/redis.svg">
+  <img alt="Cassandra" src="docs/badges/cassandra.svg">
+  <img alt="DynamoDB" src="docs/badges/dynamodb.svg">
+</p>
 
 A modern database client for PostgreSQL, MySQL, MariaDB, SQLite, SQL Server,
 Oracle, DuckDB, ClickHouse, MongoDB, Redis, Cassandra and DynamoDB, and the servers and cloud services compatible with
@@ -7,15 +43,6 @@ TiDB, Percona Server, SingleStore, PlanetScale, StarRocks, Apache Doris,
 FerretDB, Amazon DocumentDB, Valkey, Dragonfly, KeyDB, Garnet, ScyllaDB). A Go backend with a web UI, shipped as one binary that opens in a native window
 ([Wails](https://wails.io): WebKitGTK on Linux, WebView2 on Windows, WebKit
 on macOS).
-
-<p align="center">
-  <a href="https://github.com/umairge66/go-table/releases/latest"><img alt="Download GoTable" src="docs/download.svg" width="232" height="44"></a>
-</p>
-<p align="center">
-  <b>Linux:</b> <code>.deb</code> (Ubuntu/Debian) · <code>.rpm</code> (Fedora) · <code>.AppImage</code> (any distro)
-  &nbsp;|&nbsp; <b>Windows:</b> <code>-setup.exe</code> (installer) · <code>.exe</code> (portable)
-  &nbsp;—&nbsp; <a href="#install">which file do I need?</a>
-</p>
 
 ![Data view](docs/screenshots/light/06-edit-filter.png)
 
