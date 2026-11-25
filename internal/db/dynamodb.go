@@ -692,6 +692,11 @@ func dynRow(it dynItem, cols []string) []Value {
 // dynRead reads a page of a table (all: every row), and how many rows the
 // filters match, or -1 when none are set. Callers hold c.mu.
 func (c *Conn) dynRead(ctx context.Context, t TableRef, p Page, all bool) ([]string, []string, [][]Value, int64, error) {
+	return c.dynReadInto(ctx, t, p, all, nil)
+}
+
+// dynReadInto also notes each row's item, by its first cell.
+func (c *Conn) dynReadInto(ctx context.Context, t TableRef, p Page, all bool, byRow map[*Value]dynItem) ([]string, []string, [][]Value, int64, error) {
 	d, err := c.dynDescribe(ctx, t.Name)
 	if err != nil {
 		return nil, nil, nil, 0, err
@@ -723,6 +728,11 @@ func (c *Conn) dynRead(ctx context.Context, t TableRef, p Page, all bool) ([]str
 		return nil, nil, nil, 0, err
 	}
 	cols, types, rows := dynTabulate(items, first)
+	if byRow != nil {
+		for i, r := range rows {
+			byRow[&r[0]] = items[i]
+		}
+	}
 	if !local {
 		return cols, types, rows, -1, nil
 	}
@@ -874,6 +884,13 @@ func (c *Conn) dynPlan(ctx context.Context, t TableRef, changes []Change) ([]dyn
 	var out []dynOp
 	for _, ch := range changes {
 		var op dynOp
+		if ch.Doc != nil {
+			if op, err = c.dynPlanDoc(ctx, t, d, ch); err != nil {
+				return nil, err
+			}
+			out = append(out, op)
+			continue
+		}
 		switch ch.Kind {
 		case ChangeInsert:
 			item, err := keyOf(ch.Values)
@@ -1007,7 +1024,7 @@ func (c *Conn) dynApplyChanges(ctx context.Context, t TableRef, changes []Change
 				case code == "ConditionalCheckFailed" && batch[i].insert:
 					err = errors.New("an item with that key already exists")
 				case code == "ConditionalCheckFailed":
-					err = errors.New("the item no longer exists")
+					err = errors.New("the item no longer exists, or was changed by someone else")
 				default:
 					err = fmt.Errorf("%s: %s", code, aws.ToString(r.Message))
 				}

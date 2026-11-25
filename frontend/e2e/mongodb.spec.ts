@@ -12,6 +12,7 @@ const shot = async (page: Page, name: string) => { if (shots) await page.screens
 async function connect(page: Page) {
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('button', { name: 'Paste URL' }).click()
   await page.getByPlaceholder('postgres://user:password@localhost:5432/shop').fill(url)

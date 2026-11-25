@@ -25,6 +25,8 @@ type Change struct {
 	Key map[string]Value
 	// Values are the new column values for inserts and updates.
 	Values map[string]Value
+	// Doc edits a whole document instead (see documents.go).
+	Doc *DocEdit
 }
 
 // Statement is SQL plus bind arguments.

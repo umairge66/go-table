@@ -11,6 +11,7 @@ const shot = async (page: Page, name: string) => { if (shots) await page.screens
 async function connect(page: Page) {
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   // Both tiles can be picked.
   for (const name of ['Redis', 'Valkey']) {

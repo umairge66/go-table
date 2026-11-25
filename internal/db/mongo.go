@@ -760,6 +760,21 @@ type mongoOp struct {
 	kind ChangeKind
 	id   any
 	doc  bson.D // the inserted document, or the $set of an update
+	// Of an edited document: what to $unset, the values it must still have,
+	// and the whole document when its field names don't fit an update.
+	unset, guard, replace bson.D
+}
+
+// update is the update document: what is set and unset.
+func (o mongoOp) update() bson.D {
+	var u bson.D
+	if len(o.doc) > 0 {
+		u = append(u, bson.E{Key: "$set", Value: o.doc})
+	}
+	if len(o.unset) > 0 {
+		u = append(u, bson.E{Key: "$unset", Value: o.unset})
+	}
+	return u
 }
 
 func (o mongoOp) preview(coll string) string {
@@ -769,7 +784,10 @@ func (o mongoOp) preview(coll string) string {
 	case ChangeInsert:
 		return q + ".insertOne(" + mongoJSON(o.doc, false) + ");"
 	case ChangeUpdate:
-		return q + ".updateOne(" + id + ", " + mongoJSON(bson.D{{Key: "$set", Value: o.doc}}, false) + ");"
+		if o.replace != nil {
+			return q + ".replaceOne(" + id + ", " + mongoJSON(o.replace, false) + ");"
+		}
+		return q + ".updateOne(" + id + ", " + mongoJSON(o.update(), false) + ");"
 	}
 	return q + ".deleteOne(" + id + ");"
 }
@@ -794,6 +812,14 @@ func (c *Conn) mongoPlan(ctx context.Context, t TableRef, changes []Change) ([]m
 	}
 	ops := make([]mongoOp, 0, len(changes))
 	for _, ch := range changes {
+		if ch.Doc != nil {
+			op, err := c.mongoPlanDoc(ctx, coll, ch)
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, op)
+			continue
+		}
 		switch ch.Kind {
 		case ChangeInsert:
 			var doc bson.D
@@ -918,7 +944,13 @@ func (c *Conn) mongoApplyChanges(ctx context.Context, t TableRef, changes []Chan
 				_, err = coll.InsertOne(ctx, o.doc)
 			case ChangeUpdate:
 				var r *mongo.UpdateResult
-				if r, err = coll.UpdateOne(ctx, bson.D{{Key: "_id", Value: o.id}}, bson.D{{Key: "$set", Value: o.doc}}); err == nil {
+				filter := append(bson.D{{Key: "_id", Value: bson.D{{Key: "$eq", Value: o.id}}}}, o.guard...)
+				if o.replace != nil {
+					r, err = coll.ReplaceOne(ctx, filter, o.replace)
+				} else {
+					r, err = coll.UpdateOne(ctx, filter, o.update())
+				}
+				if err == nil {
 					matched = r.MatchedCount
 				}
 			case ChangeDelete:

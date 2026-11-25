@@ -243,14 +243,17 @@ export function IndexDialog({ session, table, columns, initial, onClose, onDone 
 
 const ACTIONS = ['NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT']
 
-export function ForeignKeyDialog({ session, table, columns, initialColumn, onClose, onDone }: {
-  session: SessionInfo; table: TableRef; columns: Column[]; initialColumn?: string; onClose: () => void; onDone: () => void
+export function ForeignKeyDialog({ session, table, columns, initialColumn, initialRef, onClose, onDone }: {
+  session: SessionInfo; table: TableRef; columns: Column[]; initialColumn?: string
+  /** initialRef: the column it points at (drawn in the ER diagram). */
+  initialRef?: { table: string; column: string }
+  onClose: () => void; onDone: () => void
 }) {
   const [name, setName] = useState('')
   const [tables, setTables] = useState<DbObject[]>([])
-  const [refTable, setRefTable] = useState('')
+  const [refTable, setRefTable] = useState(initialRef?.table ?? '')
   const [refColumns, setRefColumns] = useState<Column[]>([])
-  const [pairs, setPairs] = useState<{ from: string; to: string }[]>([{ from: initialColumn ?? '', to: '' }])
+  const [pairs, setPairs] = useState<{ from: string; to: string }[]>([{ from: initialColumn ?? '', to: initialRef?.column ?? '' }])
   const [onDelete, setOnDelete] = useState('NO ACTION')
   const [onUpdate, setOnUpdate] = useState('NO ACTION')
   useEffect(() => { api.objects(session.id, table.schema).then((o) => setTables(o.filter((x) => x.kind === 'table'))).catch(() => {}) }, [session.id, table.schema])

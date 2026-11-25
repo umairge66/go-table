@@ -37,6 +37,14 @@ export const isBigQuery = (d: Driver) => d === 'bigquery'
 export const rowEdits = (d: Driver) => !isBigQuery(d)
 /** hostless: a service found without a host name (its own endpoint, unless one is given). */
 export const hostless = (d: Driver) => isDynamo(d) || isD1(d) || isSnowflake(d) || isBigQuery(d)
+/** hasDocuments: tables hold JSON documents, shown and edited whole (as JSON or a tree). */
+export const hasDocuments = (d: Driver) => isMongo(d) || isElastic(d) || isDynamo(d) || isRedis(d)
+/** hasDiagram: tables, columns and foreign keys to draw. */
+export const hasDiagram = (d: Driver) => !hasDocuments(d) && !isCassandra(d) && !isInflux(d) && !isBigQuery(d)
+/** hasProcesses / hasUsers: what internal/db/processes.go and users.go know. */
+export const hasProcesses = (d: Driver) => (['postgres', 'mysql', 'sqlserver', 'clickhouse', 'mongodb', 'redis'] as string[]).includes(family(d)) && !(['cratedb', 'questdb', 'planetscale', 'ferretdb', 'documentdb'] as string[]).includes(d)
+export const hasUsers = (d: Driver) => (['postgres', 'mysql', 'sqlserver', 'clickhouse', 'mongodb'] as string[]).includes(family(d)) &&
+  !(['cockroachdb', 'cratedb', 'questdb', 'singlestore', 'planetscale', 'starrocks', 'doris', 'ferretdb', 'documentdb'] as string[]).includes(d)
 /** usesCommands: the query editor takes the server's own commands, not SQL. */
 export const usesCommands = (d: Driver) => isMongo(d) || isRedis(d) || isElastic(d)
 
@@ -262,6 +270,10 @@ export interface QueryResult {
   rowsAffected: number
   ms: number
   truncated: boolean
+  /** stopped: the user stopped it; the rows read until then are there. */
+  stopped?: boolean
+  /** loading: its rows are still arriving (the array grows in place). */
+  loading?: boolean
   error?: ApiErrorBody
   /** plan: a MongoDB explain, summarized (see internal/db/mongo_explain.go). */
   plan?: QueryPlan
@@ -418,6 +430,24 @@ export interface Job {
 }
 
 export interface FileSource { uploadId?: string; path?: string }
+
+/** Doc is a whole document (internal/db/documents.go). */
+export interface Doc { id: string; label: string; meta?: string; json: string; readOnly?: string }
+
+export interface DiagramTable { name: string; columns: { name: string; type: string; nullable: boolean; primaryKey: boolean }[]; foreignKeys: (ForeignRef & { name: string })[] }
+
+export interface Process {
+  id: string; user: string; client: string; app: string; database: string; state: string; wait: string; query: string
+  active: boolean; seconds: number; blockedBy: string[]
+}
+
+export interface GrantLevel { key: string; label: string; privileges: string[]; needs: ('database' | 'schema' | 'object')[]; future: boolean; presets: { label: string; privileges: string[] }[] }
+export interface UserAdmin {
+  me: string; hostLabel: string; hostDefault: string; attributes: { key: string; label: string; hint: string }[]; levels: GrantLevel[]
+  roles: string[]; databases: string[]; grantOption: boolean; canLock: boolean; canReassign: boolean; privilegeWord: string; current: string
+}
+export interface Account { name: string; host: string; attributes: Record<string, boolean>; roles: string[]; locked: boolean; role: boolean; system: boolean; note: string }
+export interface Grant { level: string; database: string; schema: string; object: string; privileges: string[]; grantOption: boolean; readOnly: string }
 
 export interface SavedQuery {
   id: string

@@ -75,6 +75,20 @@ test('welcome screen and creating a SQLite connection', async () => {
     await expect(port).toHaveValue(p)
     await expect(form().getByRole('textbox', { name: 'User' })).toHaveAttribute('placeholder', user)
   }
+  // The list is searched by name and by engine; Enter picks the first match
+  // (it doesn't submit the form) and the arrow keys move on.
+  const types = form().getByRole('radiogroup', { name: 'Database type' })
+  const search = form().getByRole('searchbox')
+  await search.fill('postgres')
+  await expect(types.getByRole('radio', { name: 'Neon' })).toBeVisible()
+  await expect(types.getByRole('radio', { name: 'MySQL' })).toHaveCount(0)
+  await search.fill('neon')
+  await search.press('Enter')
+  await expect(types.getByRole('radio', { name: 'Neon' })).toBeFocused()
+  await search.press('Escape')
+  await expect(search).toHaveValue('')
+  await types.getByRole('radio', { name: 'Neon' }).press('ArrowDown')
+  await expect(types.getByRole('radio', { name: 'Supabase' })).toHaveAttribute('aria-checked', 'true')
   await form().getByRole('radio', { name: 'SQLite' }).click()
   await expect(form().getByText('Database file')).toBeVisible()
   // Validation is explained inline.
@@ -104,6 +118,47 @@ SELECT COUNT(*) AS n FROM customers;`)
   await expect(page.getByTestId('messages')).toContainText('450 row(s) affected')
   await expect(sidebar().getByRole('button', { name: 'customers', exact: true })).toBeVisible()
   await expect(sidebar().getByRole('button', { name: 'berliners' })).toBeVisible()
+})
+
+test('results stream in, and stopping keeps the rows that arrived', async () => {
+  await page.keyboard.press('Control+t')
+  const editor = page.getByTestId('sql-editor').last().locator('.cm-content')
+  await editor.click()
+  // Endless and slow: rows can only show if they don't wait for its end.
+  await editor.fill('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT i, length(hex(randomblob(60000))) AS size FROM n')
+  const limit = page.getByLabel('Row limit').last()
+  await limit.selectOption({ label: 'No limit' })
+  await page.keyboard.press('Control+Shift+Enter')
+  const loading = page.getByTestId('result-loading').last()
+  await expect(loading).toContainText('rows so far')
+  const count = async () => Number((await loading.textContent())!.replace(/\D/g, ''))
+  const before = await count()
+  expect(before).toBeGreaterThan(0)
+  await expect.poll(count).toBeGreaterThan(before)
+  await expect(grid().last().getByRole('gridcell').first()).toHaveText('1')
+  // It can be scrolled while it loads; nothing else can be run.
+  await expect(page.getByRole('button', { name: 'Run all' }).last()).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Export' }).last()).toBeDisabled()
+  await page.getByRole('button', { name: /^Stop/ }).click()
+  await expect(page.getByText('stopped', { exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /Result 1/ }).last()).toHaveAttribute('aria-selected', 'true')
+  await expect(grid().last().getByRole('gridcell').first()).toHaveText('1')
+  await expect(page.getByRole('button', { name: 'Export' }).last()).toBeEnabled()
+  await page.getByRole('tab', { name: 'Messages' }).last().click()
+  await expect(page.getByTestId('messages').last()).toContainText(/Stopped after [\d,]+ row/)
+  await limit.selectOption({ label: '1,000 rows' })
+
+  // Run all: the first result shows while the second still runs, and a
+  // result the user picked stays in view.
+  await editor.fill('SELECT 7 AS first_one; WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40) SELECT i, length(hex(randomblob(1500000))) FROM n')
+  await page.keyboard.press('Control+Shift+Enter')
+  await expect(page.getByRole('tab', { name: /Result 2/ })).toBeVisible()
+  await expect(loading).toBeVisible()
+  await page.getByRole('tab', { name: /Result 1/ }).last().click()
+  await expect(grid().last().getByRole('gridcell').first()).toHaveText('7')
+  await expect(page.getByRole('button', { name: /^Stop/ })).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.getByRole('tab', { name: /Result 1/ }).last()).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: /Result 2/ }).last()).toContainText('40')
 })
 
 test('errors are explained in plain language', async () => {

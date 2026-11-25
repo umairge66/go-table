@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { ChevronDown, Database, Loader2, RefreshCw, X } from 'lucide-react'
 import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
-import { DRIVER_LOGOS } from '../lib/driverLogos'
+import { DRIVER_INITIALS, DRIVER_LOGOS } from '../lib/driverLogos'
 import { keys } from '../lib/platform'
 import { driverInfo, tagInfo, type Driver, type Tag } from '../types'
 
@@ -41,7 +41,7 @@ export function IconButton({ label, className, active, ...rest }: ButtonHTMLAttr
       type="button" // never submits a surrounding form
       aria-label={keys(label)}
       title={keys(label)}
-      className={clsx('inline-flex size-7 items-center justify-center rounded-md text-muted transition-colors enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-40',
+      className={clsx('inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-40',
         active && 'bg-active text-accent', className)}
       {...rest}
     />
@@ -134,7 +134,7 @@ export function Switch({ checked, onChange, label, id }: { checked: boolean; onC
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={clsx('relative h-[18px] w-8 rounded-full transition-colors', checked ? 'bg-accent' : 'bg-line')}
+        className={clsx('relative h-[18px] w-8 shrink-0 rounded-full transition-colors', checked ? 'bg-accent' : 'bg-line')}
       >
         <span className={clsx('absolute top-[2px] size-[14px] rounded-full bg-white shadow transition-[left]', checked ? 'left-[16px]' : 'left-[2px]')} />
       </button>
@@ -151,7 +151,7 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={clsx('size-4 animate-spin text-muted', className)} />
 }
 
-/** DriverBadge is the engine's logo (white on its brand colour), or a generic database icon. */
+/** DriverBadge is the engine's logo (white on its brand colour), or its initials. */
 export function DriverBadge({ driver, size = 32, className, decorative }: {
   driver: Driver; size?: number; className?: string
   /** decorative hides the badge from screen readers when the engine name is written next to it. */
@@ -171,7 +171,9 @@ export function DriverBadge({ driver, size = 32, className, decorative }: {
     >
       {logo
         ? <svg viewBox="0 0 24 24" width={icon} height={icon} fill="currentColor" aria-hidden="true"><path d={logo.path} /></svg>
-        : <Database style={{ width: icon, height: icon }} aria-hidden="true" />}
+        : DRIVER_INITIALS[driver]
+          ? <span aria-hidden="true" className="font-semibold leading-none tracking-tight" style={{ fontSize: size * 0.42 }}>{DRIVER_INITIALS[driver]}</span>
+          : <Database style={{ width: icon, height: icon }} aria-hidden="true" />}
     </span>
   )
 }
@@ -309,18 +311,35 @@ interface ToastT { id: number; kind: ToastKind; title: string; body?: string }
 
 const ToastCtx = createContext<(kind: ToastKind, title: string, body?: string) => void>(() => {})
 
+/**
+ * toastBottom: how far up notifications go to clear what is at the bottom
+ * right of the window now (paging, Save & connect…), marked data-bottom-bar.
+ */
+function toastBottom() {
+  let up = 0
+  for (const el of document.querySelectorAll<HTMLElement>('[data-bottom-bar]')) {
+    const r = el.getBoundingClientRect()
+    // Tabs that aren't shown are there too, invisible.
+    if (!r.width || getComputedStyle(el).visibility === 'hidden' || r.right < window.innerWidth - 376) continue
+    if (r.bottom > window.innerHeight - 24) up = Math.max(up, window.innerHeight - r.top)
+  }
+  return up + (up ? 12 : 16)
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastT[]>([])
+  const [bottom, setBottom] = useState(16)
   const push = useCallback((kind: ToastKind, title: string, body?: string) => {
     const id = Date.now() + Math.random()
+    setBottom(toastBottom())
+    requestAnimationFrame(() => setBottom(toastBottom())) // what the action itself changed
     setToasts((t) => [...t.slice(-3), { id, kind, title, body }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 6000 : 3500)
   }, [])
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      {/* Above the bottom toolbars and status bar, so toasts never cover paging or commit buttons. */}
-      <div className="pointer-events-none fixed bottom-[84px] right-4 z-[70] flex w-[360px] flex-col gap-2">
+      <div data-testid="toasts" className="pointer-events-none fixed right-4 z-[70] flex w-[360px] flex-col gap-2" style={{ bottom }}>
         {toasts.map((t) => (
           <div key={t.id} role="status" className="pointer-events-auto flex gap-3 rounded-xl border border-line bg-panel p-3 shadow-pop animate-slide">
             <span className={clsx('mt-1 size-2 shrink-0 rounded-full', t.kind === 'ok' ? 'bg-ok' : t.kind === 'error' ? 'bg-err' : 'bg-accent')} />

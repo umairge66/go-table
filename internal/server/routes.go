@@ -59,6 +59,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{sid}/definition", s.definition)
 	mux.HandleFunc("GET /api/sessions/{sid}/schema-analysis", s.schemaAnalysis)
 	mux.HandleFunc("POST /api/sessions/{sid}/rows", s.rows)
+	mux.HandleFunc("POST /api/sessions/{sid}/documents", s.documents)
 	mux.HandleFunc("POST /api/sessions/{sid}/estimate", s.estimate)
 	mux.HandleFunc("POST /api/sessions/{sid}/changes", s.changes)
 	mux.HandleFunc("POST /api/sessions/{sid}/columns", s.addColumn)
@@ -71,6 +72,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{sid}/drop", s.drop)
 	mux.HandleFunc("POST /api/sessions/{sid}/execute", s.execute)
 	mux.HandleFunc("POST /api/sessions/{sid}/cancel", s.cancel)
+	mux.HandleFunc("GET /api/sessions/{sid}/diagram", s.diagram)
+	mux.HandleFunc("GET /api/sessions/{sid}/processes", s.processes)
+	mux.HandleFunc("POST /api/sessions/{sid}/processes/stop", s.stopProcess)
+	mux.HandleFunc("GET /api/sessions/{sid}/users", s.users)
+	mux.HandleFunc("GET /api/sessions/{sid}/users/grants", s.userGrants)
+	mux.HandleFunc("POST /api/sessions/{sid}/users", s.changeUsers)
 	mux.HandleFunc("GET /api/sessions/{sid}/completions", s.completions)
 	mux.HandleFunc("POST /api/sessions/{sid}/jobs", s.createJob)
 	mux.HandleFunc("POST /api/uploads", s.handleUpload)
@@ -474,6 +481,7 @@ func (s *Server) closeSession(w http.ResponseWriter, r *http.Request) {
 	delete(s.sessions, r.PathValue("sid"))
 	s.mu.Unlock()
 	if ok {
+		se.closeAdmin()
 		se.c().Close()
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -802,6 +810,58 @@ func (s *Server) rows(w http.ResponseWriter, r *http.Request) {
 		"total": total, "more": more, "ms": time.Since(start).Milliseconds()})
 }
 
+// documents is rows for documents: a page of them, each whole, as JSON.
+func (s *Server) documents(w http.ResponseWriter, r *http.Request) {
+	se, err := s.session(r)
+	if err != nil {
+		writeErr(w, 410, err)
+		return
+	}
+	var in struct {
+		Table   tableIn  `json:"table"`
+		Page    pageIn   `json:"page"`
+		Columns []string `json:"columns"`
+		Count   bool     `json:"count"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	ref := db.TableRef{Schema: in.Table.Schema, Name: in.Table.Name}
+	page := in.Page.page()
+	start := time.Now()
+	docs, err := se.c().FetchDocuments(r.Context(), ref, page, in.Columns)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	type docDTO struct {
+		ID       string `json:"id"`
+		Label    string `json:"label"`
+		Meta     string `json:"meta,omitempty"`
+		JSON     string `json:"json"`
+		ReadOnly string `json:"readOnly,omitempty"`
+	}
+	out := make([]docDTO, len(docs))
+	for i, d := range docs {
+		out[i] = docDTO(d)
+	}
+	var total int64
+	more := false
+	switch {
+	case !in.Count && se.c().CountIsCostly(r.Context(), ref, page):
+		total, more = int64(page.Offset+len(docs)), page.Limit > 0 && len(docs) >= page.Limit
+	case se.c().Config.Driver.Family() == model.DriverRedis && db.IsRedisKey(ref.Name):
+		total = int64(len(docs)) // one key, however many items it has
+	default:
+		if total, err = se.c().CountRows(r.Context(), ref, page, in.Columns); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"documents": out, "total": total, "more": more, "ms": time.Since(start).Milliseconds()})
+}
+
 // estimate says how much a query would read, where that is billed.
 func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	se, err := s.session(r)
@@ -841,6 +901,12 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 			Kind   string             `json:"kind"`
 			Key    map[string]*string `json:"key"`
 			Values map[string]*string `json:"values"`
+			// Doc edits a whole document (see db.DocEdit).
+			Doc *struct {
+				ID       string `json:"id"`
+				JSON     string `json:"json"`
+				Original string `json:"original"`
+			} `json:"doc"`
 		} `json:"changes"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -851,6 +917,13 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 	var changes []db.Change
 	for _, c := range in.Changes {
 		ch := db.Change{Key: valuesIn(c.Key), Values: valuesIn(c.Values)}
+		if c.Doc != nil {
+			if !se.c().HasDocuments() {
+				writeErr(w, 400, errors.New("this database has no documents"))
+				return
+			}
+			ch.Doc = &db.DocEdit{ID: c.Doc.ID, JSON: c.Doc.JSON, Original: c.Doc.Original}
+		}
 		switch c.Kind {
 		case "update":
 			ch.Kind = db.ChangeUpdate
@@ -963,7 +1036,9 @@ type resultDTO struct {
 	RowsAffected int64       `json:"rowsAffected"`
 	Ms           float64     `json:"ms"`
 	Truncated    bool        `json:"truncated"`
-	Error        *apiError   `json:"error,omitempty"`
+	// Stopped: the user stopped it; the rows read until then are there.
+	Stopped bool      `json:"stopped,omitempty"`
+	Error   *apiError `json:"error,omitempty"`
 	// Plan: a MongoDB explain, summarized for the plan view.
 	Plan *db.QueryPlan `json:"plan,omitempty"`
 }
@@ -981,6 +1056,8 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 		// Schema is the database the query tab belongs to; the session
 		// switches to it first when several are open.
 		Schema string `json:"schema"`
+		// Stream sends the rows as they are read (see stream.go).
+		Stream bool `json:"stream"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err)
@@ -998,6 +1075,10 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 			se.mu.Unlock()
 		}()
 	}
+	if in.Stream {
+		s.executeStream(ctx, cancel, w, se, in.Schema, in.SQL, in.RowCap)
+		return
+	}
 	results, err := se.c().ExecuteIn(ctx, in.Schema, in.SQL, in.RowCap)
 	if err != nil {
 		writeErr(w, 400, err)
@@ -1006,19 +1087,25 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request) {
 	s.recordResults(se, results)
 	out := make([]resultDTO, len(results))
 	for i, res := range results {
-		d := resultDTO{Statement: res.Statement, RowsAffected: res.RowsAffected,
-			Ms: float64(res.Duration.Microseconds()) / 1000, Truncated: res.Truncated, Plan: res.Plan}
+		d := resultOut(res)
 		if res.Set != nil {
 			d.HasRows = true
 			d.Columns, d.Types, d.Rows = nonNil(res.Set.Columns), nonNil(res.Set.Types), rowsOut(res.Set.Rows)
 		}
-		if res.Err != nil {
-			f := Explain(res.Err)
-			d.Error = &apiError{Title: f.Title, Hint: f.Hint, Detail: res.Err.Error()}
-		}
 		out[i] = d
 	}
 	writeJSON(w, 200, map[string]any{"results": out, "schema": se.c().Schema()})
+}
+
+// resultOut is a result without its rows.
+func resultOut(res db.Result) resultDTO {
+	d := resultDTO{Statement: res.Statement, RowsAffected: res.RowsAffected,
+		Ms: float64(res.Duration.Microseconds()) / 1000, Truncated: res.Truncated, Plan: res.Plan}
+	if res.Err != nil {
+		f := Explain(res.Err)
+		d.Error = &apiError{Title: f.Title, Hint: f.Hint, Detail: res.Err.Error()}
+	}
+	return d
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
@@ -1089,6 +1176,8 @@ func (s *Server) recordResults(se *session, results []db.Result) {
 			At: time.Now().UTC(), Ms: float64(r.Duration.Microseconds()) / 1000, Rows: r.RowsAffected}
 		if r.Set != nil {
 			e.Rows = int64(len(r.Set.Rows))
+		} else if r.RowCount > 0 {
+			e.Rows = int64(r.RowCount)
 		}
 		if r.Err != nil {
 			e.Error = r.Err.Error()

@@ -43,6 +43,7 @@ test('compatible servers: connect, browse, edit and commit (needs GOTABLE_E2E_CO
       page.on('pageerror', (e) => errors.push(e.message))
       await page.goto(process.env.GOTABLE_URL!)
       const form = page.getByLabel('Connection form')
+      await page.getByLabel('Search connections').waitFor()
       await page.keyboard.press('Control+n')
       await form.getByRole('button', { name: 'Paste URL' }).click()
       await page.getByPlaceholder('postgres://user:password@localhost:5432/shop').fill(url)

@@ -135,4 +135,24 @@ async function scenes(page: Page, url: string, shot: (name: string) => Promise<v
   await designer.getByLabel('Default value').last().fill('now()')
   await designer.getByLabel('Table name').click()
   await shot('09-new-table')
+
+  // The ER diagram, and the users.
+  await page.getByRole('button', { name: 'ER diagram', exact: true }).click()
+  await expect(page.getByTestId('er-orders')).toBeVisible()
+  await page.getByTestId('er-orders').getByText('orders', { exact: true }).click()
+  await shot('10-diagram')
+  await page.keyboard.press('Control+t')
+  await page.getByTestId('sql-editor').last().locator('.cm-content').fill("DROP ROLE IF EXISTS reporting; DROP ROLE IF EXISTS shop_app; CREATE ROLE reporting; CREATE ROLE shop_app LOGIN; GRANT reporting TO shop_app; GRANT SELECT, INSERT, UPDATE ON customers, orders TO shop_app; GRANT USAGE ON SCHEMA public TO shop_app;")
+  await page.keyboard.press('Control+Shift+Enter')
+  await expect(page.getByTestId('messages').last()).toContainText('OK')
+  await page.getByRole('button', { name: 'Users & privileges', exact: true }).click()
+  const users = page.getByTestId('users')
+  await users.getByRole('listbox').getByRole('option', { name: /shop_app/ }).click()
+  await expect(users.getByTestId('grant').first()).toBeVisible()
+  await shot('11-users')
+  // As it was, for the other theme.
+  await page.keyboard.press('Control+t')
+  await page.getByTestId('sql-editor').last().locator('.cm-content').fill('DROP OWNED BY shop_app; DROP ROLE shop_app; DROP ROLE reporting;')
+  await page.keyboard.press('Control+Shift+Enter')
+  await expect(page.getByTestId('messages').last()).toContainText('OK')
 }

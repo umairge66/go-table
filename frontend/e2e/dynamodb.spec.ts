@@ -23,6 +23,7 @@ test('DynamoDB: connect, PartiQL, browse, edit (needs GOTABLE_E2E_DYNAMODB)', as
 
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('radio', { name: 'DynamoDB', exact: true }).click()
   await expect(form.getByLabel('Endpoint host (DynamoDB Local)')).toHaveValue('')

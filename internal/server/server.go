@@ -63,6 +63,12 @@ type session struct {
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc // query ID -> cancel
+
+	// admin is a second connection, for the process list and the users: cur
+	// is busy while a query runs. It closes when it isn't used for a while.
+	adminMu    sync.Mutex
+	admin      *db.Conn
+	adminTimer *time.Timer
 }
 
 // c returns the session's current connection.
@@ -120,6 +126,7 @@ func (s *Server) Close() {
 		j.cancel()
 	}
 	for id, se := range s.sessions {
+		se.closeAdmin()
 		se.c().Close()
 		delete(s.sessions, id)
 	}

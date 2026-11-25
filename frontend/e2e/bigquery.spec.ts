@@ -16,6 +16,7 @@ test('BigQuery: connect, browse, estimate, filter, structure, design (needs GOTA
 
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('radio', { name: 'BigQuery', exact: true }).click()
   await expect(form.getByLabel('Port')).toHaveCount(0)

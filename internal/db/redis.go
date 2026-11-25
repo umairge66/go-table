@@ -792,6 +792,9 @@ func valueOf(m map[string]Value, k string) (Value, bool) { v, ok := m[k]; return
 
 // redisPlanChanges turns grid edits into commands.
 func (c *Conn) redisPlanChanges(ctx context.Context, cl *redis.Client, t TableRef, changes []Change) (*redisPlan, error) {
+	if hasDocEdits(changes) {
+		return c.redisPlanDocs(ctx, cl, changes)
+	}
 	key, typ, err := c.redisKind(ctx, cl, t)
 	if err != nil {
 		return nil, err

@@ -70,6 +70,12 @@ type Conn struct {
 	// remote replaces db and conn on an engine of its own (remote.go).
 	remote       remote
 	remoteClosed bool
+
+	// noCap: rows can't be limited by the server here (see rowcap.go).
+	noCap bool
+	// mysqlCap is how the server limits a SELECT: "statement", "hint" or
+	// "none" (empty: not asked yet).
+	mysqlCap string
 }
 
 // ErrClosed is returned by operations on a closed Conn.
@@ -608,39 +614,111 @@ func (c *Conn) Execute(ctx context.Context, script string, rowCap int) ([]Result
 // script happen under one lock, so concurrent queries for different schemas
 // of the same session can't interleave.
 func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int) ([]Result, error) {
-	if c.mongo != nil {
-		return c.mongoExecuteIn(ctx, schema, script, rowCap)
+	if rs, ok, err := c.executeOther(ctx, schema, script, rowCap); ok {
+		return rs, err
 	}
-	if c.redis != nil {
-		return c.redisExecuteIn(ctx, schema, script, rowCap)
+	var results []Result
+	var set *ResultSet
+	err := c.executeSQL(ctx, schema, script, rowCap, Sink{
+		Begin: func(_ int, _ string, cols, types []string) error {
+			set = &ResultSet{Columns: cols, Types: types, Rows: [][]Value{}}
+			return nil
+		},
+		Row: func(_ int, row []Value) error { set.Rows = append(set.Rows, row); return nil },
+		End: func(_ int, r Result) {
+			r.Set, set = set, nil
+			results = append(results, r)
+		},
+	})
+	return results, err
+}
+
+// Sink receives the results of a script as they are read. Begin and Row may
+// return an error to stop it.
+type Sink struct {
+	// Begin: statement i returns rows, with these columns.
+	Begin func(i int, stmt string, cols, types []string) error
+	Row   func(i int, row []Value) error
+	// End: statement i is done. Its rows went to Row; RowCount counts them.
+	End func(i int, r Result)
+}
+
+// ExecuteStream is ExecuteIn, with the rows handed over as the server sends
+// them. Engines without SQL hand them over when the statement is done.
+func (c *Conn) ExecuteStream(ctx context.Context, schema, script string, rowCap int, sink Sink) error {
+	results, ok, err := c.executeOther(ctx, schema, script, rowCap)
+	if !ok {
+		return c.executeSQL(ctx, schema, script, rowCap, sink)
 	}
-	if c.cass != nil {
-		return c.cassExecuteIn(ctx, schema, script, rowCap)
+	if err != nil {
+		return err
 	}
-	if c.dyn != nil {
-		return c.dynExecuteIn(ctx, script, rowCap)
+	for i, r := range results {
+		if r.Set != nil {
+			if err := sink.Begin(i, r.Statement, r.Set.Columns, r.Set.Types); err != nil {
+				return err
+			}
+			for _, row := range r.Set.Rows {
+				if err := sink.Row(i, row); err != nil {
+					return err
+				}
+			}
+			r.RowCount = len(r.Set.Rows)
+		}
+		sink.End(i, r)
 	}
-	if c.remote != nil {
-		return c.remoteExecuteIn(ctx, schema, script, rowCap)
+	return nil
+}
+
+// executeOther runs a script on the engines that have no SQL connection.
+func (c *Conn) executeOther(ctx context.Context, schema, script string, rowCap int) (rs []Result, ok bool, err error) {
+	switch {
+	case c.mongo != nil:
+		rs, err = c.mongoExecuteIn(ctx, schema, script, rowCap)
+	case c.redis != nil:
+		rs, err = c.redisExecuteIn(ctx, schema, script, rowCap)
+	case c.cass != nil:
+		rs, err = c.cassExecuteIn(ctx, schema, script, rowCap)
+	case c.dyn != nil:
+		rs, err = c.dynExecuteIn(ctx, script, rowCap)
+	case c.remote != nil:
+		rs, err = c.remoteExecuteIn(ctx, schema, script, rowCap)
+	default:
+		return nil, false, nil
 	}
+	return rs, true, err
+}
+
+func (c *Conn) executeSQL(ctx context.Context, schema, script string, rowCap int, sink Sink) error {
 	spans := SplitStatements(c.Config.Driver, script)
 	if len(spans) == 0 {
-		return nil, fmt.Errorf("nothing to execute")
+		return fmt.Errorf("nothing to execute")
 	}
 	if err := c.lock(ctx); err != nil {
-		return nil, err
+		return err
 	}
 	defer c.mu.Unlock()
 	if schema != "" && schema != c.schema {
 		if err := c.eng.useSchema(ctx, c, schema); err != nil {
-			return nil, err
+			return err
 		}
 		c.schema = schema
 	}
-	var results []Result
-	for _, sp := range spans {
-		r := c.execOne(ctx, sp.SQL, rowCap)
-		results = append(results, r)
+	if c.Dialect.mysqlLike() {
+		up := strings.ToUpper(script)
+		if strings.Contains(up, "SQL_SELECT_LIMIT") {
+			c.mysqlCap = "none" // the user sets the limit from now on
+		}
+		if mysqlLooksBack.MatchString(up) {
+			c.noCap = true
+			defer func() { c.noCap = false }()
+		}
+	}
+	for i, sp := range spans {
+		r := c.execOne(ctx, sp.SQL, rowCap,
+			func(cols, types []string) error { return sink.Begin(i, sp.SQL, cols, types) },
+			func(row []Value) error { return sink.Row(i, row) })
+		sink.End(i, r)
 		if r.Err != nil {
 			break
 		}
@@ -649,10 +727,10 @@ func (c *Conn) ExecuteIn(ctx context.Context, schema, script string, rowCap int)
 	if s, err := c.eng.currentSchema(ctx, c); err == nil {
 		c.schema = s
 	}
-	return results, nil
+	return nil
 }
 
-func (c *Conn) execOne(ctx context.Context, stmt string, rowCap int) Result {
+func (c *Conn) execOne(ctx context.Context, stmt string, rowCap int, begin func(cols, types []string) error, row func([]Value) error) Result {
 	start := time.Now()
 	r := Result{Statement: stmt}
 	if c.Config.Driver == model.DriverD1 && d1NoTx.MatchString(strings.TrimSpace(stripLeadingComments(stmt))) {
@@ -660,12 +738,10 @@ func (c *Conn) execOne(ctx context.Context, stmt string, rowCap int) Result {
 		return r
 	}
 	if returnsRows(stmt) || c.Dialect.family == model.DriverSnowflake && sfReturnsRows(stmt) {
-		rows, err := c.conn.QueryContext(ctx, stmt)
-		if err != nil {
-			r.Err = err
-		} else {
-			r.Set, r.Truncated, r.Err = scanRows(rows, rowCap)
-		}
+		r.Truncated, r.Err = c.readStmt(ctx, stmt, rowCap, begin, func(vals []Value) error {
+			r.RowCount++
+			return row(vals)
+		})
 	} else {
 		res, err := c.conn.ExecContext(ctx, stmt)
 		if err != nil {
@@ -723,38 +799,11 @@ func stripLeadingComments(s string) string {
 
 // scanRows reads all rows (up to rowCap when > 0) as display values.
 func scanRows(rows *sql.Rows, rowCap int) (*ResultSet, bool, error) {
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, false, err
-	}
-	rs := &ResultSet{Columns: cols, Types: make([]string, len(cols)), Rows: [][]Value{}}
-	if cts, err := rows.ColumnTypes(); err == nil {
-		for i, ct := range cts {
-			rs.Types[i] = ct.DatabaseTypeName()
-		}
-	}
-	raw := make([]any, len(cols))
-	ptrs := make([]any, len(cols))
-	for i := range raw {
-		ptrs[i] = &raw[i]
-	}
-	truncated := false
-	for rows.Next() {
-		if rowCap > 0 && len(rs.Rows) >= rowCap {
-			truncated = true
-			break
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, false, err
-		}
-		row := make([]Value, len(cols))
-		for i, v := range raw {
-			row[i] = toValue(v, rs.Types[i])
-		}
-		rs.Rows = append(rs.Rows, row)
-	}
-	return rs, truncated, rows.Err()
+	rs := &ResultSet{Rows: [][]Value{}}
+	truncated, err := readRows(rows, rowCap,
+		func(cols, types []string) error { rs.Columns, rs.Types = cols, types; return nil },
+		func(row []Value) error { rs.Rows = append(rs.Rows, row); return nil })
+	return rs, truncated, err
 }
 
 // toValue converts a driver value to its display/edit text.

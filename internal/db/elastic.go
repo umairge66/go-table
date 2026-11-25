@@ -681,22 +681,31 @@ func (e *elastic) search(ctx context.Context, name, params string, body map[stri
 }
 
 func (e *elastic) fetchRows(ctx context.Context, _ *Conn, t TableRef, p Page) (*ResultSet, error) {
-	fields, err := e.fields(ctx, t.Name)
+	hits, fields, err := e.fetchHits(ctx, t, p)
 	if err != nil {
 		return nil, err
 	}
+	return esTable(hits, fields)
+}
+
+// fetchHits reads a page of documents, and the index's fields.
+func (e *elastic) fetchHits(ctx context.Context, t TableRef, p Page) ([]esHit, map[string]esField, error) {
+	fields, err := e.fields(ctx, t.Name)
+	if err != nil {
+		return nil, nil, err
+	}
 	body, err := e.body(p, fields)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if p.Limit > 0 && p.Offset+p.Limit <= esWindow {
 		body["from"], body["size"] = p.Offset, p.Limit
 		body["track_total_hits"] = false
 		res, err := e.search(ctx, t.Name, "", body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return esTable(res.Hits.Hits, fields)
+		return res.Hits.Hits, fields, nil
 	}
 	// Further than a search reaches: read on from the start.
 	var hits []esHit
@@ -709,10 +718,7 @@ func (e *elastic) fetchRows(ctx context.Context, _ *Conn, t TableRef, p Page) (*
 		hits = append(hits, h)
 		return p.Limit <= 0 || len(hits) < p.Limit, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return esTable(hits, fields)
+	return hits, fields, err
 }
 
 // scroll calls fn for every document a search finds, until it returns false.
@@ -1141,6 +1147,10 @@ func (e *elastic) plan(ctx context.Context, t TableRef, changes []Change) ([]esO
 		if ch.Kind == ChangeInsert {
 			continue
 		}
+		if ch.Doc != nil {
+			ids = append(ids, ch.Doc.ID)
+			continue
+		}
 		id, ok := ch.Key["_id"]
 		if !ok || id.Null {
 			return nil, errors.New("the document's _id is missing")
@@ -1171,6 +1181,14 @@ func (e *elastic) plan(ctx context.Context, t TableRef, changes []Change) ([]esO
 	at := "/" + t.Name + "/_doc/"
 	var out []esOp
 	for _, ch := range changes {
+		if ch.Doc != nil {
+			op, err := e.esPlanDoc(t, ch, docs[ch.Doc.ID])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, op)
+			continue
+		}
 		if ch.Kind == ChangeInsert {
 			doc := map[string]json.RawMessage{}
 			action := map[string]any{}

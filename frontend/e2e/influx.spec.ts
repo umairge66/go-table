@@ -15,6 +15,7 @@ test('InfluxDB: connect, write, browse, edit (needs GOTABLE_E2E_INFLUX)', async 
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('radio', { name: 'InfluxDB 3', exact: true }).click()
   await expect(form.getByLabel('Port')).toHaveValue('8181')

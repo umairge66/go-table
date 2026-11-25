@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 async function open(page: Page, file: string, table: string) {
   await page.goto(process.env.GOTABLE_URL!)
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   const form = page.getByLabel('Connection form')
   await form.getByRole('radio', { name: 'SQLite' }).click()

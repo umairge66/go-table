@@ -35,6 +35,8 @@ export interface GridProps {
   onFollow?: (r: number, c: number) => void
   /** onLookup replaces the text editor of foreign key cells (double-click, Enter). */
   onLookup?: (r: number, c: number, rect: DOMRect) => void
+  /** loading: rows are still arriving; the first ones set the columns' widths. */
+  loading?: boolean
   /** Bumps when data changes so selection resets. */
   dataKey?: unknown
   /** When set (with a new key), selects the cell, scrolls to it and optionally edits it (text: as plain text). */
@@ -84,6 +86,13 @@ export const Grid = memo(function Grid(p: GridProps) {
     setUserSized(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colKey])
+
+  // The sample the widths come from may still be growing.
+  const sampled = p.loading ? Math.min(rowCount, 60) : -1
+  useEffect(() => {
+    if (sampled > 0 && !userSized) setBase(measure(columns, rowCount, cell))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sampled])
 
   // The viewport: horizontal scroll position and width (for the visible
   // columns and for stretching narrow tables).

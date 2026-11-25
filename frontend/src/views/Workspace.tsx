@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import {
-  ArrowDownUp, ChevronDown, Code2, Columns2, History, PanelLeft, Copy, Database, Download, Eye, FileCode2, Home as HomeIcon, LogOut, Moon, PanelRight, Plus,
-  RefreshCw, Search, Server, Settings, Sun, Table2, Trash2, Upload, X,
+  Activity, ArrowDownUp, ChevronDown, Code2, Columns2, History, PanelLeft, Copy, Database, Download, Eye, FileCode2, Home as HomeIcon, LogOut, Moon, PanelRight, Plus,
+  RefreshCw, Search, Server, Settings, Sun, Table2, Trash2, Upload, UsersRound, Workflow, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
@@ -10,7 +10,7 @@ import { useConfirm } from '../components/Confirm'
 import { JobsIndicator } from '../components/JobsIndicator'
 import { Button, DragHandle, DriverBadge, IconButton, RefreshButton, Input, Kbd, TagPill, errorParts, useMenu, useResizable, useToast } from '../components/ui'
 import { quote } from '../lib/quote'
-import { family, features, tagInfo, type Cell, type Connection, type DbObject, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
+import { family, features, hasDiagram, hasProcesses, hasUsers, tagInfo, type Cell, type Connection, type DbObject, type ForeignRef, type HistoryEntry, type SavedQuery, type SessionInfo, isCassandra, isDynamo, isElastic, isInflux, isMongo, isRedis } from '../types'
 import { isPattern, keyLabel as redisLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { getSettings, panelOpen, rememberPanel, useSettings } from '../lib/settings'
@@ -19,11 +19,14 @@ import { keys } from '../lib/platform'
 import { CreateCollectionDialog } from './CreateCollectionDialog'
 import { DataView } from './DataView'
 import { DeleteTablesDialog } from './DeleteTablesDialog'
-import { subtitle } from './Home'
+import { subtitle } from '../lib/connections'
 import { CreateDatabaseDialog } from './CreateDatabaseDialog'
 import { DropDatabaseDialog, dropKind, type DropTarget } from './DropDatabaseDialog'
 import { CreateTableView } from './CreateTableView'
+import { DiagramView } from './DiagramView'
+import { ProcessesView } from './ProcessesView'
 import { QueryView } from './QueryView'
+import { UsersView } from './UsersView'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
 import { HistoryPanel, NameDialog, QUERIES_EVENT, QueriesPanel, notify } from './SidebarPanels'
 import { TransferDialog } from './TransferDialog'
@@ -44,7 +47,7 @@ interface OpenDb {
 
 export interface Tab {
   id: string
-  kind: 'table' | 'query' | 'create-table'
+  kind: 'table' | 'query' | 'create-table' | 'diagram' | 'processes' | 'users'
   title: string
   dbKey: string
   object?: DbObject
@@ -194,11 +197,11 @@ export function Workspace({ session, sessions, active, onHome, onSwitch, onDisco
     }
   }, [])
 
-  const openTable = useCallback((db: OpenDb, o: DbObject, focusFilter?: Tab['focusFilter']) => {
+  const openTable = useCallback((db: OpenDb, o: DbObject, focusFilter?: Tab['focusFilter'], structure?: boolean) => {
     // Tables of another schema than the database's get their own id.
     const id = `t:${db.key}:${o.schema && o.schema !== db.schema ? `${o.schema}.` : ''}${o.name}`
-    const tab: Tab = { id, kind: 'table', title: redis ? redisLabel(o.name) : o.name, object: o, dbKey: db.key, focusFilter }
-    setTabs((ts) => (ts.some((t) => t.id === id) ? (focusFilter ? ts.map((t) => (t.id === id ? { ...t, focusFilter } : t)) : ts) : [...ts, tab]))
+    const tab: Tab = { id, kind: 'table', title: redis ? redisLabel(o.name) : o.name, object: o, dbKey: db.key, focusFilter, structure }
+    setTabs((ts) => (ts.some((t) => t.id === id) ? (focusFilter || structure ? ts.map((t) => (t.id === id ? { ...t, ...(focusFilter ? { focusFilter } : {}), ...(structure ? { structure } : {}) } : t)) : ts) : [...ts, tab]))
     selectTab(tab)
   }, [selectTab, redis])
 
@@ -269,6 +272,20 @@ CREATE TABLE ${quote('events', conn.driver)} (
     setTabs((ts) => [...ts, tab])
     selectTab(tab)
   }, [activeKey, selectTab])
+
+  // openTool shows the diagram of a database, or the server's processes or users.
+  const openTool = useCallback((kind: 'diagram' | 'processes' | 'users', db: OpenDb) => {
+    // The server's are the same for all its schemas.
+    const id = kind === 'diagram' ? `er:${db.key}` : `${kind}:${db.info.id}`
+    const tab: Tab = { id, kind, title: kind === 'diagram' ? 'Diagram' : kind === 'processes' ? 'Processes' : 'Users', dbKey: db.key }
+    setTabs((ts) => (ts.some((t) => t.id === id) ? ts : [...ts, tab]))
+    selectTab(tab)
+  }, [selectTab])
+  const tools = (db: OpenDb) => [
+    ...(hasDiagram(conn.driver) ? [{ id: 'diagram', label: 'ER diagram', icon: <Workflow />, run: () => openTool('diagram', db) }] : []),
+    ...(hasProcesses(conn.driver) ? [{ id: 'processes', label: 'Processes', icon: <Activity />, run: () => openTool('processes', db) }] : []),
+    ...(hasUsers(conn.driver) ? [{ id: 'users', label: 'Users & privileges', icon: <UsersRound />, run: () => openTool('users', db) }] : []),
+  ]
 
   const closeTabs = useCallback((ids: string[]) => {
     setTabs((ts) => {
@@ -682,6 +699,7 @@ CREATE TABLE ${quote('events', conn.driver)} (
     { label: 'New query here', icon: <FileCode2 />, onSelect: () => newQuery('', db.key) },
     { label: `New ${tableWord}…`, icon: <Plus />, onSelect: () => newTable(db) },
     { label: 'Refresh', icon: <RefreshCw />, onSelect: () => loadObjects(db.key) },
+    ...tools(db).filter((t) => t.id === 'diagram').map((t) => ({ label: t.label, icon: t.icon, onSelect: t.run })),
     { label: 'Export database…', icon: <Download />, onSelect: () => setTransfer({ tab: 'export', db }) },
     { label: mongo || redis ? 'Import script…' : 'Import SQL file…', icon: <Upload />, onSelect: () => setTransfer({ tab: 'import', db }) },
     'sep',
@@ -715,6 +733,7 @@ CREATE TABLE ${quote('events', conn.driver)} (
     { id: 'new-query', label: 'New query', hint: keyHint('ws.newQuery'), icon: <Code2 />, run: () => newQuery() },
     { id: 'new-table', label: `New ${tableWord}…`, icon: <Plus />, run: () => newTable(activeDb) },
     ...(!features(conn.driver).createDatabase ? [] : [{ id: 'new-database', label: pg ? 'New database or schema…' : family(conn.driver) === 'sqlite' ? 'New database file…' : fileDb ? 'New schema…' : 'New database…', icon: <Database />, run: () => setCreatingDb(true) }]),
+    ...tools(activeDb),
     { id: 'saved-queries', label: 'Saved queries', icon: <FileCode2 />, run: () => { setSidebarHidden(false); setSideTab('queries') } },
     { id: 'history', label: 'Query history', icon: <History />, run: () => { setSidebarHidden(false); setSideTab('history') } },
     { id: 'toggle-sidebar', label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', hint: keyHint('ws.sidebar'), icon: <PanelLeft />, run: toggleSidebar },
@@ -771,16 +790,16 @@ CREATE TABLE ${quote('events', conn.driver)} (
         <IconButton label={withKeys(railHidden ? 'Show databases' : 'Hide databases', 'ws.rail')} active={!railHidden} onClick={toggleRail}><Columns2 className="size-4" /></IconButton>
         <IconButton label={withKeys(sidebarHidden ? 'Show sidebar' : 'Hide sidebar', 'ws.sidebar')} active={!sidebarHidden} onClick={toggleSidebar}><PanelLeft className="size-4" /></IconButton>
         <button
-          className="flex h-8 items-center gap-2 rounded-lg px-2 hover:bg-hover"
+          className="flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 hover:bg-hover"
           onClick={(e) => menu.open({ clientX: e.currentTarget.getBoundingClientRect().left, clientY: e.currentTarget.getBoundingClientRect().bottom + 4 }, [
             ...sessions.map((s) => ({ label: s.connection.name, icon: <Database />, onSelect: () => onSwitch(s.id) })),
             'sep', { label: 'All connections…', icon: <HomeIcon />, onSelect: onHome },
           ])}
         >
           <DriverBadge driver={conn.driver} size={24} />
-          <span className="text-[13px] font-semibold">{conn.name}</span>
-          <TagPill tag={conn.tag} />
-          <ChevronDown className="size-3.5 text-muted" />
+          <span className="min-w-12 truncate text-[13px] font-semibold" title={conn.name}>{conn.name}</span>
+          <TagPill tag={conn.tag} className="shrink-0" />
+          <ChevronDown className="size-3.5 shrink-0 text-muted" />
         </button>
         {/* The server version; its address and the database show on hover. */}
         <span data-testid="server-info" className="hidden min-w-0 max-w-[38%] items-center gap-1.5 text-[12px] text-muted lg:flex"
@@ -790,11 +809,13 @@ CREATE TABLE ${quote('events', conn.driver)} (
         </span>
         <div className="flex-1" />
         <button onClick={() => setPicker('all')}
-          className="flex h-8 w-[min(380px,30vw)] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-panel-2 px-2.5 text-[12.5px] text-faint hover:border-faint">
-          <Search className="size-3.5 shrink-0" /> <span className="truncate">Jump to table or command…</span> <span className="ml-auto shrink-0"><Kbd>{keyHint('ws.palette')}</Kbd></span>
+          className="flex h-8 w-[min(380px,30vw)] min-w-10 shrink-[40] items-center overflow-hidden gap-2 whitespace-nowrap rounded-lg border border-line bg-panel-2 px-2.5 text-[12.5px] text-faint hover:border-faint">
+          <Search className="size-3.5 shrink-0" /> <span className="truncate">Jump to table or command…</span> <span className="ml-auto hidden shrink-0 min-[1000px]:inline"><Kbd>{keyHint('ws.palette')}</Kbd></span>
         </button>
         <div className="flex-1" />
         <JobsIndicator />
+        {tools(activeDb).map((t) => <IconButton key={t.id} label={t.label} active={activeTabObj?.kind === t.id} onClick={t.run}><span className="flex [&>svg]:size-4">{t.icon}</span></IconButton>)}
+        {tools(activeDb).length > 0 && <span className="h-5 w-px shrink-0 bg-line" aria-hidden="true" />}
         <IconButton label="Import / Export database" onClick={() => setTransfer({ tab: 'export', db: activeDb })}><ArrowDownUp className="size-4" /></IconButton>
         <IconButton label={withKeys('New query', 'ws.newQuery')} onClick={() => newQuery()}><FileCode2 className="size-4" /></IconButton>
         <IconButton label={withKeys('Row inspector', 'ws.inspector')} active={inspector} onClick={toggleInspector}><PanelRight className="size-4" /></IconButton>
@@ -895,7 +916,7 @@ CREATE TABLE ${quote('events', conn.driver)} (
                   className={clsx('group flex h-8 max-w-[260px] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 text-[12.5px]',
                     t.id === activeTab ? 'border-line bg-panel font-medium text-fg' : 'border-transparent text-muted hover:bg-hover hover:text-fg')}
                 >
-                  {t.kind === 'create-table' ? <Plus className="size-3.5 shrink-0 text-accent" /> : t.kind === 'query' ? <FileCode2 className="size-3.5 shrink-0 text-accent" /> : t.object?.kind === 'view' ? <Eye className="size-3.5 shrink-0" /> : <Table2 className="size-3.5 shrink-0" />}
+                  {t.kind === 'diagram' ? <Workflow className="size-3.5 shrink-0 text-accent" /> : t.kind === 'processes' ? <Activity className="size-3.5 shrink-0 text-accent" /> : t.kind === 'users' ? <UsersRound className="size-3.5 shrink-0 text-accent" /> : t.kind === 'create-table' ? <Plus className="size-3.5 shrink-0 text-accent" /> : t.kind === 'query' ? <FileCode2 className="size-3.5 shrink-0 text-accent" /> : t.object?.kind === 'view' ? <Eye className="size-3.5 shrink-0" /> : <Table2 className="size-3.5 shrink-0" />}
                   <span className="truncate">{t.title}</span>
                   {dbs.length > 1 && tdb && <span className="truncate rounded bg-hover px-1 text-[10.5px] font-normal text-muted">{pg ? tdb.info.database === session.database ? tdb.schema : `${tdb.info.database}·${tdb.schema}` : tdb.schema}</span>}
                   {t.dirty && <span className="size-1.5 shrink-0 rounded-full bg-warn" title="Uncommitted changes" />}
@@ -945,6 +966,14 @@ CREATE TABLE ${quote('events', conn.driver)} (
                           setTabs((ts) => ts.map((x) => (x.id === t.id ? { id, kind: 'table', title: name, object: o, dbKey: tdb.key } : x)))
                           setActiveTab(id)
                         }} />
+                    : t.kind === 'diagram'
+                    ? <DiagramView session={tdb.info} schema={tdb.schema} objects={tdb.objects} active={active && t.id === activeTab}
+                        onOpenTable={(o, structure) => openTable(tdb, o, undefined, structure)} onNewTable={() => newTable(tdb)} onDeleteTables={(objects) => setDeleting({ db: tdb, objects })}
+                        onChanged={() => loadObjects(tdb.key)} />
+                    : t.kind === 'processes'
+                    ? <ProcessesView session={tdb.info} active={active && t.id === activeTab} openQuery={(sql) => newQuery(sql, tdb.key)} />
+                    : t.kind === 'users'
+                    ? <UsersView session={tdb.info} schema={tdb.schema} schemas={pg ? schemaList : []} objects={tdb.objects} active={active && t.id === activeTab} />
                     : t.kind === 'table' && t.object
                     ? <DataView session={tdb.info} object={t.object} active={active && t.id === activeTab} tabId={t.id} inspector={inspector}
                         onDirty={(d) => updateTab(t.id, { dirty: d })} openQuery={(sql) => newQuery(sql, tdb.key)}

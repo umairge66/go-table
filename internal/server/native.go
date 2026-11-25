@@ -103,6 +103,7 @@ var fileKinds = map[string]FileFilter{
 	"csv":    {"CSV file", "*.csv;*.tsv;*.txt"},
 	"json":   {"JSON file", "*.json"},
 	"zip":    {"ZIP archive", "*.zip"},
+	"svg":    {"SVG image", "*.svg"},
 	"gz":     {"Compressed SQL", "*.sql.gz;*.gz"},
 	"sqlite": {"SQLite database", "*.sqlite;*.sqlite3;*.db"},
 	"duckdb": {"DuckDB database", "*.duckdb;*.ddb;*.db"},

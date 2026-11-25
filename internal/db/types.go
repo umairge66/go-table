@@ -147,6 +147,7 @@ type Result struct {
 	RowsAffected int64
 	Duration     time.Duration
 	Truncated    bool // row cap reached
+	RowCount     int  // rows read, when they were streamed (see Sink)
 	// Plan: a MongoDB explain, read for the plan view.
 	Plan *QueryPlan
 	Err  error

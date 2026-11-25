@@ -7,7 +7,7 @@ import { useConfirm } from '../components/Confirm'
 import { Grid } from '../components/Grid'
 import { PlanView } from '../components/PlanView'
 import { SqlEditor, type SqlEditorHandle } from '../components/SqlEditor'
-import { Button, DragHandle, IconButton, Modal, Select, errorParts, useMenu, useResizable, useToast } from '../components/ui'
+import { Button, DragHandle, IconButton, Modal, Select, Spinner, errorParts, useMenu, useResizable, useToast } from '../components/ui'
 import { HISTORY_EVENT, notify } from './SidebarPanels'
 import { toCSV, toInserts, toJSON } from '../lib/exportClient'
 import { saveTextAs } from '../lib/saveFile'
@@ -53,6 +53,9 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   const [tab, setTab] = useState(0) // 0 = messages, n = n-th result set
   const [running, setRunning] = useState<string | null>(null)
   const [elapsed, setElapsed] = useState(0)
+  // live: the results shown are those of the query that is running.
+  const [live, setLive] = useState(false)
+  const picked = useRef(false) // the user chose a result tab while it runs
   // The row limit is picked in the toolbar and remembered for every query tab.
   const [limit, setLimit] = useState(() => savedLimit() ?? (session.connection.limit_query_rows || 1000))
   const [editorH, dragEditor] = useResizable(260, 90, 900, 'y', false, 'gotable:editorH')
@@ -99,22 +102,33 @@ export function QueryView({ session, schema, active, initialSql, completions, on
     const id = crypto.randomUUID()
     setRunning(id)
     setElapsed(0)
+    picked.current = false
+    let shown = 0 // result sets
+    let first = true
+    const show = (rs: QueryResult[]) => {
+      const sets = rs.filter((x) => x.hasRows).length
+      if (first) { setRunKey((k) => k + 1); setLive(true) } // the results before stay until now
+      setResults(rs)
+      // Follow the newest result, until the user picks one.
+      if ((first || sets > shown) && !picked.current) setTab(sets)
+      first = false
+      shown = sets
+    }
     try {
-      const r = await api.execute(session.id, text, limit, id, schema)
-      setResults(r.results)
-      setRunKey((k) => k + 1)
-      const sets = r.results.filter((x) => x.hasRows)
-      const failed = r.results.some((x) => x.error)
-      setTab(failed || !sets.length ? 0 : sets.length)
+      const r = await api.executeStream(session.id, text, limit, id, schema, show)
+      // A failure is explained under Messages; a stopped query keeps its rows in view.
+      if (r.results.some((x) => x.error && !(x.stopped && x.rows?.length)) && !picked.current) setTab(0)
       if (/\b(create|drop|alter|rename|use|set\s+search_path)\b/i.test(text)) onSchemaChanged(r.schema)
       notify(HISTORY_EVENT)
     } catch (e) {
       const [title, body] = errorParts(e)
-      setResults([{ statement: text, hasRows: false, rowsAffected: 0, ms: 0, truncated: false, error: { title, detail: body } }])
+      // Results that did arrive stay.
+      setResults((rs) => [...(first ? [] : rs ?? []), { statement: text, hasRows: false, rowsAffected: 0, ms: 0, truncated: false, error: { title, detail: body } }])
       setTab(0)
       notify(HISTORY_EVENT)
     } finally {
       setRunning(null)
+      setLive(false)
     }
   }, [limit, onSchemaChanged, running, session.id, schema])
 
@@ -196,9 +210,9 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   const current = tab > 0 ? sets[tab - 1]?.r : undefined
   // A plan is drawn; Documents shows explain's own output instead.
   const [raw, setRaw] = useState(false)
-  useEffect(() => setRaw(false), [current])
+  useEffect(() => setRaw(false), [current?.columns])
   const plan = current?.plan && !raw ? current.plan : undefined
-  const failed = results?.find((r) => r.error)
+  const failed = results?.find((r) => r.error && !(r.stopped && r.rows?.length))
 
   // A result of a plain SELECT from one table (with its primary key) can be
   // edited in place; changes are committed like in a table tab.
@@ -212,7 +226,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   useEffect(() => {
     setEdits(emptyEdits())
     setEditable(null)
-    if (!current?.columns) return
+    if (!current?.columns || current.loading) return
     const mongo = isMongo(session.connection.driver)
     const src = mongo ? mongoSourceTable(current.statement) : sourceTable(current.statement)
     if (isRedis(session.connection.driver)) { setEditable({ reason: 'Command results are read-only: edit keys from the sidebar.' }); return }
@@ -233,7 +247,9 @@ export function QueryView({ session, schema, active, initialSql, completions, on
       else setEditable({ table, names, pk: keys.map((k) => names.indexOf(k.name)), cols: names.map((n) => columns.find((c) => c.name === n)!) })
     }, () => { if (!stale) setEditable({ reason: 'The table behind this result couldn’t be read.' }) })
     return () => { stale = true }
-  }, [current, schema, session.id, session.connection.driver])
+    // The columns stay the same array while rows arrive, and are new with each run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.columns, current?.loading, schema, session.id, session.connection.driver])
 
   const onDirtyRef = useRef(onDirty)
   onDirtyRef.current = onDirty
@@ -251,7 +267,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
   }
   const guardRef = useRef(guard)
   guardRef.current = guard
-  const showTab = async (n: number) => { if (n !== tab && await guard()) setTab(n) }
+  const showTab = async (n: number) => { if (n !== tab && await guard()) { picked.current = true; setTab(n) } }
 
   const cell = useCallback((r: number, c: number) => cellAt(rows, edits, r, c), [rows, edits])
   const edit = (r: number, c: number, v: Cell) => setEdits((e) => setCell(rows, e, r, c, v))
@@ -338,7 +354,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line bg-panel-2 px-2" role="tablist">
           <ResultTab active={tab === 0} onClick={() => showTab(0)}>
-            {failed ? <AlertCircle className="size-3.5 text-err" /> : results ? <CheckCircle2 className="size-3.5 text-ok" /> : null}
+            {failed ? <AlertCircle className="size-3.5 text-err" /> : results && !running ? <CheckCircle2 className="size-3.5 text-ok" /> : null}
             Messages
           </ResultTab>
           {sets.map((s, n) => (
@@ -360,9 +376,12 @@ export function QueryView({ session, schema, active, initialSql, completions, on
               {editable && (target
                 ? <span className="flex items-center gap-1 text-[12px] text-muted" data-testid="result-editable"><Pencil className="size-3" /> Editable · {target.table.name}</span>
                 : <span className="flex items-center gap-1 text-[12px] text-faint" title={'reason' in editable ? editable.reason : undefined} data-testid="result-readonly"><Lock className="size-3" /> Read-only</span>)}
-              <span className="text-[12px] text-muted">{fmt(current.rows?.length ?? 0)} rows · {current.ms.toFixed(1)} ms</span>
+              {current.loading
+                ? <span className="flex items-center gap-1.5 text-[12px] tabular-nums text-muted" data-testid="result-loading"><Spinner className="!size-3 text-accent" />{fmt(current.rows?.length ?? 0)} rows so far</span>
+                : <span className="text-[12px] text-muted">{fmt(current.rows?.length ?? 0)} rows · {current.ms.toFixed(1)} ms</span>}
+              {current.stopped && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[11px] font-medium text-warn" title="You stopped the query: these are the rows that had arrived">stopped</span>}
               {current.truncated && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[11px] font-medium text-warn">limited to {fmt(limit)}</span>}
-              <Button size="sm" variant="ghost" icon={<Download className="size-3.5" />} onClick={exportResult}>Export</Button>
+              <Button size="sm" variant="ghost" icon={<Download className="size-3.5" />} onClick={exportResult} disabled={current.loading}>Export</Button>
             </>
           )}
         </div>
@@ -381,7 +400,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
               const col = target?.cols[i]
               return { name: c, type: col?.type ?? current.types?.[i], pk: target?.pk.includes(i), edit: col && cellKind(col.type, col.values, session.connection.driver), nullable: col?.nullable }
             })}
-              rowCount={rows.length} cell={cell} readOnly={!target} onEdit={edit} onDeleteRows={deleteRows}
+              rowCount={rows.length} cell={cell} readOnly={!target} loading={current.loading} onEdit={edit} onDeleteRows={deleteRows}
               onContextMenu={(e, r, c, rs) => menu.open(e, [
                 { label: 'Copy value', icon: <Copy />, onSelect: () => navigator.clipboard?.writeText(cell(r, c).value ?? 'NULL') },
                 ...(target ? [
@@ -392,7 +411,7 @@ export function QueryView({ session, schema, active, initialSql, completions, on
                 ] : []),
               ])} />
           ) : (
-            <Messages results={results} running={!!running} />
+            <Messages results={running && !live ? null : results} running={!!running} />
           )}
         </div>
       </div>
@@ -424,14 +443,16 @@ function ResultTab({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 function Messages({ results, running }: { results: QueryResult[] | null; running: boolean }) {
-  if (running) return <div className="p-4 text-[12.5px] text-muted">Running…</div>
+  if (running && !results) return <div className="p-4 text-[12.5px] text-muted">Running…</div>
   if (!results) return <div className="p-4 text-[12.5px] text-muted">Results appear here. Press <b>Ctrl ↵</b> to run the statement under the cursor.</div>
   return (
     <div className="h-full space-y-2 overflow-auto p-3" data-testid="messages">
       {results.map((r, i) => (
         <div key={i} className={clsx('rounded-lg border p-2.5', r.error ? 'border-err/30 bg-err/5' : 'border-line bg-panel')}>
           <div className="truncate font-mono text-[12px] text-fg-2">{r.statement.replace(/\s+/g, ' ')}</div>
-          {r.error ? (
+          {r.stopped && r.rows?.length ? (
+            <div className="mt-1 text-[12px] text-muted">Stopped after {fmt(r.rows.length)} row(s) · {r.ms.toFixed(1)} ms</div>
+          ) : r.error ? (
             <div className="mt-1.5 text-[12.5px]">
               <div className="font-semibold text-err">{r.error.title}</div>
               {r.error.hint && <div className="text-fg-2">{r.error.hint}</div>}
@@ -439,12 +460,13 @@ function Messages({ results, running }: { results: QueryResult[] | null; running
             </div>
           ) : (
             <div className="mt-1 text-[12px] text-muted">
-              {r.hasRows ? `${fmt(r.rows?.length ?? 0)} row(s) returned` : `OK — ${fmt(r.rowsAffected)} row(s) affected`} · {r.ms.toFixed(1)} ms
-              {r.truncated && ' · limited'}
+              {r.loading ? `${fmt(r.rows?.length ?? 0)} row(s) so far…` : <>{r.hasRows ? `${fmt(r.rows?.length ?? 0)} row(s) returned` : `OK — ${fmt(r.rowsAffected)} row(s) affected`} · {r.ms.toFixed(1)} ms
+              {r.truncated && ' · limited'}</>}
             </div>
           )}
         </div>
       ))}
+      {running && !results.some((r) => r.loading) && <div className="px-1 text-[12.5px] text-muted">Running…</div>}
     </div>
   )
 }

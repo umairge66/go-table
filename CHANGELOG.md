@@ -3,6 +3,44 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
+## Unreleased
+
+### Added
+
+- **JSON and tree views** of MongoDB, Elasticsearch, DynamoDB and Redis
+  documents, to read and edit them whole: add, remove, rename and nest fields
+  and change types. Only what changed is written, types and large numbers
+  are kept, and a document changed by someone else meanwhile isn't overwritten.
+- **ER diagram**: tables and foreign keys drawn and arranged; draw a key from
+  column to column, and change columns, keys, indexes and tables from it.
+  Export as SVG or Mermaid.
+- **Processes**: what the server runs, live, with what blocks what; stop a
+  query or close its connection.
+- **Users & privileges**: make users, set passwords, lock them, and give and
+  take roles and privileges without writing GRANT, one by one or several at once.
+- **Streaming results**: rows show as the server sends them, *Run all* shows
+  each result as its statement finishes, and *Stop* keeps the rows that had
+  arrived. SQL databases only: on the others (MongoDB, Redis, Cassandra,
+  DynamoDB, Elasticsearch, InfluxDB, BigQuery) rows come when the command is done.
+
+### Changed
+
+- **The row limit stops the query on the server** (PostgreSQL and compatible
+  servers, MySQL 8, MariaDB, Percona Server, ClickHouse). Before, every remaining row was
+  still downloaded: 1,000 of 20 million rows took 20 to 60 seconds and now take
+  milliseconds. The session and an open transaction stay as they are. A
+  `SELECT` that calls a function with side effects runs it only for the rows
+  it returns; a query's own larger `LIMIT` wins on MySQL and MariaDB.
+
+- **The connection page is redesigned.** Databases are in a searchable list
+  beside the form (by name, or by the engine they are compatible with), so the
+  form starts at the top. Test results and the buttons are always in view, and
+  a saved connection can be duplicated or deleted from its header.
+- The first screen starts a connection directly from a database.
+- Notifications stand in the corner, just above what is at the bottom of the
+  window, instead of floating at a fixed height.
+- Databases without a logo show their initials instead of all the same icon.
+
 ## v0.13.0 — 2026-11-24
 
 ### Added

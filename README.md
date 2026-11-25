@@ -46,11 +46,13 @@ on macOS).
 
 ![Data view](docs/screenshots/light/06-edit-filter.png)
 
-| Connections | Query editor | New table | Dark mode |
-|---|---|---|---|
-| ![Connection form](docs/screenshots/light/03-form-tested.png) | ![Query editor](docs/screenshots/light/08-query.png) | ![Table designer](docs/screenshots/light/09-new-table.png) | ![Dark mode](docs/screenshots/dark/05-table.png) |
+| Connections | Query editor | New table |
+|---|---|---|
+| ![Connection form](docs/screenshots/light/03-form-tested.png) | ![Query editor](docs/screenshots/light/08-query.png) | ![Table designer](docs/screenshots/light/09-new-table.png) |
+| **ER diagram** | **Users & privileges** | **Dark mode** |
+| ![ER diagram](docs/screenshots/light/10-diagram.png) | ![Users and privileges](docs/screenshots/light/11-users.png) | ![Dark mode](docs/screenshots/dark/05-table.png) |
 
-The layout: a connection list beside the connection form, a rail of open
+The layout: a connection list, the databases to choose from beside the connection form, a rail of open
 databases, a table sidebar, tabs, a filter row above the grid, a row
 inspector and a Data / Structure / Definition switch.
 
@@ -393,6 +395,23 @@ URLs paste in.
 - **Structure**: columns and indexes, *Add column* with type suggestions per
   database, default (value, expression or NULL), NULL toggle, comment, MySQL
   position, and a live preview of the exact `ALTER TABLE` before it runs.
+- **ER diagram** (its button in the top bar, or Ctrl+K): a schema's tables,
+  columns and foreign keys, laid out automatically or dragged to where they
+  suit. Draw a foreign key from one column to another; add, edit and drop
+  columns, keys, indexes and tables from the menus, each showing its SQL
+  first. Search, key-only view, export as SVG or Mermaid.
+- **Documents** (MongoDB, Elasticsearch, DynamoDB, Redis) as a table, as JSON
+  or as a tree: add, remove, rename and nest fields and change their types. A
+  commit writes only what changed (`$set`/`$unset`, `HSET`/`HDEL`, …), keeps
+  every type and every digit, and is refused if someone else changed the
+  document meanwhile.
+- **Processes** (PostgreSQL, MySQL and MariaDB families, SQL Server,
+  ClickHouse, MongoDB, Redis, CockroachDB): what the server runs, for how
+  long and who blocks whom, live; stop a query or close a connection.
+- **Users & privileges** (PostgreSQL, MySQL, MariaDB, TiDB, SQL Server,
+  ClickHouse, MongoDB): make users, set passwords, lock, give and take roles
+  and privileges without writing GRANT. The statements are shown first;
+  passwords never are, nor kept in the history.
 - **Import & export** with live progress (percent, MB or rows, speed, time
   left; cancel anytime; jobs keep running in the background and are listed in
   the status bar):
@@ -691,8 +710,7 @@ goes into `key.go`, and copies with the old key take no more updates).
 
 ## Not implemented yet
 
-Other engines (IBM Db2, …), ER
-diagrams, Excel import and user management. PostgreSQL custom-format (`pg_dump -Fc`) archives need
+Other engines (IBM Db2, …) and Excel import. PostgreSQL custom-format (`pg_dump -Fc`) archives need
 `pg_restore`; plain SQL dumps are supported.
 
 ## License

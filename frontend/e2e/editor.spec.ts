@@ -12,6 +12,7 @@ test('the editor highlights the statement under the cursor', async ({ browser })
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto(process.env.GOTABLE_URL!)
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   const form = page.getByLabel('Connection form')
   await form.getByRole('radio', { name: 'SQLite' }).click()

@@ -24,6 +24,7 @@ test('Cassandra: connect, CQL, browse, edit (needs GOTABLE_E2E_CASSANDRA)', asyn
 
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('radio', { name: 'Cassandra', exact: true }).click()
   await expect(form.getByLabel('Port')).toHaveValue('9042')

@@ -1,11 +1,14 @@
 import clsx from 'clsx'
-import { CheckCircle2, ChevronDown, ClipboardPaste, FolderOpen, KeyRound, Lock, PlugZap, Shield, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { CheckCircle2, ChevronDown, ClipboardPaste, Copy, FolderOpen, KeyRound, Lock, PlugZap, Route, Shield, Trash2, XCircle } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api'
-import { Button, DriverBadge, Field, Input, Modal, Select, Switch, errorParts, useToast } from '../components/ui'
-import { driverInfo, DRIVERS, ENGINES, family, features, forDriver, hostless, isBigQuery, isD1, isSnowflake, isDynamo, isElastic, isInflux, isLibSQL, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
+import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
+import { Button, DriverBadge, Field, IconButton, Input, Modal, Select, Switch, TagPill, errorParts, useToast } from '../components/ui'
+import { driverInfo, family, features, forDriver, hostless, isBigQuery, isD1, isSnowflake, isDynamo, isElastic, isInflux, isLibSQL, isMongo, SSL_MODES, TAGS, type Connection, type Driver, type Group, type Secrets } from '../types'
 import { nativeDialogs, openFileDialog } from '../lib/native'
 import { examplePath } from '../lib/platform'
+import { subtitle } from '../lib/connections'
+import { DriverPicker } from './DriverPicker'
 
 export const newConnection = (driver: Driver = 'postgres'): Connection => ({
   id: crypto.randomUUID().replace(/-/g, '').toUpperCase(),
@@ -23,7 +26,20 @@ export const newConnection = (driver: Driver = 'postgres'): Connection => ({
 
 type TestState = { kind: 'idle' } | { kind: 'running' } | { kind: 'ok'; text: string } | { kind: 'err'; title: string; hint?: string; detail: string }
 
-export function ConnectionForm({ initial, initialPassword, groups, isNew, onSaved, onConnect, onCancel, connecting }: {
+/** Section is a part of the form: what it is about beside (or, in a narrow window, above) its fields. */
+function Section({ title, hint, children }: { title: string; hint: ReactNode; children: ReactNode }) {
+  return (
+    <section className="grid gap-x-8 gap-y-3 py-6 @2xl:grid-cols-[160px_minmax(0,1fr)]">
+      <div>
+        <h2 className="text-[13px] font-semibold">{title}</h2>
+        <p className="mt-0.5 text-[12px] leading-relaxed text-muted">{hint}</p>
+      </div>
+      <div className="min-w-0 space-y-3.5">{children}</div>
+    </section>
+  )
+}
+
+export function ConnectionForm({ initial, initialPassword, groups, isNew, onSaved, onConnect, onCancel, onDuplicate, onDelete, connecting }: {
   initial: Connection
   initialPassword?: string
   groups: Group[]
@@ -31,10 +47,17 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
   onSaved: (c: Connection) => void
   onConnect: (c: Connection) => void
   onCancel?: () => void
+  /** A saved connection's own actions. */
+  onDuplicate?: () => void
+  onDelete?: () => void
   /** connecting: this connection is being opened (SSH can take a while). */
   connecting?: boolean
 }) {
   const toast = useToast()
+  const ownTitleBar = useOwnTitleBar()
+  // A saved connection rarely becomes another database: its list opens on demand.
+  const [picking, setPicking] = useState(isNew)
+  useEffect(() => setPicking(isNew), [isNew])
   const [c, setC] = useState<Connection>(initial)
   const [secrets, setSecrets] = useState<Secrets>({})
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
@@ -52,12 +75,10 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
 
   const set = <K extends keyof Connection>(k: K, v: Connection[K]) => setC((x) => ({ ...x, [k]: v }))
   const file = features(c.driver).file
-  const [supported, setSupported] = useState<string[] | null>(null)
-  useEffect(() => { api.drivers().then((r) => setSupported(r.supported)).catch(() => setSupported(null)) }, [])
-  const unsupported = (d: Driver) => !!supported && !supported.includes(d)
+  const network = !file && !isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver)
   const dirty = useMemo(() => JSON.stringify(c) !== JSON.stringify(initial) || Object.keys(secrets).length > 0, [c, initial, secrets])
 
-  const setDriver = (d: Driver) => setC((x) => {
+  const setDriver = (d: Driver) => { setTest({ kind: 'idle' }); setC((x) => {
     const prevDefault = driverInfo(x.driver).port
     return {
       ...x, driver: d,
@@ -69,7 +90,7 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
       port: !x.port || x.port === prevDefault ? driverInfo(d).port : x.port,
       ssl_mode: forDriver(SSL_MODES, d).includes(x.ssl_mode ?? '') ? x.ssl_mode : forDriver(SSL_MODES, d)[0],
     }
-  })
+  }) }
 
   // The key file is checked as it's picked or typed, before connecting.
   const keyPath = c.use_ssh_tunnel ? (c.ssh_key_path ?? '').trim() : ''
@@ -127,243 +148,235 @@ export function ConnectionForm({ initial, initialPassword, groups, isNew, onSave
 
   return (
     <form
-      className="mx-auto w-full max-w-[600px] animate-fade"
+      className="flex h-full min-h-0 animate-fade"
       onSubmit={(e) => { e.preventDefault(); save(true) }}
       aria-label="Connection form"
     >
-      <div className="mb-5 flex items-center gap-3">
-        <DriverBadge driver={c.driver} size={42} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[18px] font-semibold">{c.name || (isNew ? 'New connection' : 'Untitled')}</div>
-          <div className="text-[12.5px] text-muted">{isNew ? 'Choose a database, then tell GoTable where to find it.' : 'Edit the connection, test it, then save.'}</div>
-        </div>
-        <Button type="button" variant="ghost" size="sm" icon={<ClipboardPaste className="size-3.5" />} onClick={() => setUrlOpen(true)}>Paste URL</Button>
-      </div>
+      {picking && <DriverPicker value={c.driver} onChange={setDriver} className="w-[248px] max-[1080px]:w-[196px]" />}
 
-      <div className="mb-4" role="radiogroup" aria-label="Database type">
-        <div className="grid grid-cols-4 gap-2">
-          {DRIVERS.filter((d) => ENGINES.includes(d.id)).map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              role="radio"
-              aria-checked={c.driver === d.id}
-              disabled={unsupported(d.id)}
-              title={unsupported(d.id) ? `${d.label} isn't available in this build of GoTable` : undefined}
-              onClick={() => setDriver(d.id)}
-              className={clsx('flex flex-col items-center gap-1.5 rounded-xl border bg-panel py-3 text-[12.5px] font-medium transition-all disabled:opacity-40',
-                c.driver === d.id ? 'border-accent ring-3 ring-accent/15' : 'border-line enabled:hover:border-faint')}
-            >
-              <DriverBadge driver={d.id} size={28} decorative />
-              {d.label}
-            </button>
-          ))}
-        </div>
-        <div className="mb-1.5 mt-3 text-[11.5px] font-medium text-muted">Compatible servers and cloud services</div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {DRIVERS.filter((d) => !ENGINES.includes(d.id)).map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              role="radio"
-              aria-checked={c.driver === d.id}
-              title={`${d.label}: works like ${driverInfo(ENGINES.find((e) => family(e) === d.family)!).label}${d.hosted ? ', over TLS' : ''}`}
-              onClick={() => setDriver(d.id)}
-              className={clsx('flex h-9 items-center gap-2 rounded-lg border bg-panel px-2 text-left text-[12px] font-medium transition-all',
-                c.driver === d.id ? 'border-accent ring-3 ring-accent/15' : 'border-line hover:border-faint')}
-            >
-              <DriverBadge driver={d.id} size={20} decorative />
-              <span className="truncate">{d.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <section className="space-y-3 rounded-xl border border-line bg-panel p-4">
-        <div className="grid grid-cols-[1fr_auto] gap-3">
-          <Field label="Name"><Input autoFocus value={c.name} placeholder={file ? 'Taken from the file name if empty' : 'e.g. Shop production'} onChange={(e) => set('name', e.target.value)} /></Field>
-          <Field label="Group">
-            <Select value={c.group_id ?? ''} onChange={(e) => set('group_id', e.target.value)} className="w-40">
-              <option value="">No group</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </Select>
-          </Field>
-        </div>
-        <Field label="Environment" hint={c.tag === 'production' ? 'Production gets a red title bar and asks before committing changes.' : undefined}>
-          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Environment">
-            {TAGS.map((t) => (
-              <button key={t.id} type="button" role="radio" aria-checked={(c.tag ?? '') === t.id} onClick={() => set('tag', t.id)}
-                className={clsx('flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] transition-colors',
-                  (c.tag ?? '') === t.id ? 'border-transparent font-medium text-white' : 'border-line hover:bg-hover')}
-                style={(c.tag ?? '') === t.id ? { background: t.color } : undefined}
-              >
-                <span className="size-2 rounded-full" style={{ background: (c.tag ?? '') === t.id ? 'white' : t.color }} />
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </Field>
-      </section>
-
-      <section className="mt-3 space-y-3 rounded-xl border border-line bg-panel p-4">
-        {driverInfo(c.driver).note && (
-          <div className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-fg-2" role="note">{driverInfo(c.driver).note}</div>
-        )}
-        {file ? (
-          <Field label="Database file" hint="Absolute path. A new file is created if it doesn't exist.">
-            <Input mono value={c.path ?? ''} placeholder={examplePath(family(c.driver) === 'duckdb' ? 'data/warehouse.duckdb' : 'data/app.sqlite')} onChange={(e) => set('path', e.target.value)} />
-          </Field>
-        ) : (
-          <>
-            {!isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && <div className="grid grid-cols-[1fr_110px] gap-3">
-              <Field label={isDynamo(c.driver) ? 'Endpoint host (DynamoDB Local)' : 'Host'}><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
-              <Field label="Port"><Input inputMode="numeric" value={c.srv ? '' : c.port || ''} disabled={c.srv} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
-            </div>}
-            {isD1(c.driver) ? <>
-              <Field label="Account ID" hint="The code in your Cloudflare dashboard's address: dash.cloudflare.com/<account ID>/…"><Input mono value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value.trim())} /></Field>
-              <Field label="API token" hint="Made under My Profile → API Tokens, with the permission Account → D1 → Edit.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
-              <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
-            </> : isBigQuery(c.driver) ? <>
-              <Field label="Credentials file" hint="A service account's JSON key. Empty: the sign-in of “gcloud auth application-default login”.">
-                <div className="flex gap-2">
-                  <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/keys/project-key.json" onChange={(e) => set('key_path', e.target.value)} />
-                  {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
-                    onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+      <div className="flex min-w-0 flex-1 flex-col bg-panel">
+        <div className="flex shrink-0 items-center gap-3 border-b border-line px-6 py-3.5 max-[1080px]:px-4" onMouseDown={ownTitleBar ? dragWindow : undefined}>
+          <DriverBadge driver={c.driver} size={40} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-[16px] font-semibold tracking-tight">{c.name || (isNew ? 'New connection' : 'Untitled')}</span>
+              {!isNew && <TagPill tag={c.tag} />}
+            </div>
+            {isNew
+              ? <div className="truncate text-[12.5px] text-muted">Choose a database, then tell GoTable where to find it.</div>
+              : (
+                <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
+                  <button type="button" aria-expanded={picking} aria-label={`${driverInfo(c.driver).label}: change the type`} title="Change the type" onClick={() => setPicking((x) => !x)}
+                    className="-ml-1 inline-flex shrink-0 items-center gap-0.5 rounded px-1 font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg">
+                    {driverInfo(c.driver).label}<ChevronDown className={clsx('size-3.5 text-muted transition-transform', picking && 'rotate-180')} aria-hidden="true" />
+                  </button>
+                  <span className="truncate">{subtitle(c)}</span>
                 </div>
-              </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Project"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value.trim())} /></Field>
-                <Field label="Limit of a query (GB)" hint="One that would read more is refused, unbilled. 0: no limit.">
-                  <Input inputMode="decimal" value={new URLSearchParams(c.options ?? '').get('limit') ?? ''} placeholder="10" onChange={(e) => { const v = e.target.value.replace(/[^\d.]/g, ''); set('options', v ? `limit=${v}` : '') }} /></Field>
-              </div>
-              <p className="text-[12px] text-muted">Queries are billed by what they read, 10 MB at least. Browsing a table without filters or sorting, its structure and exports are free.</p>
-            </> : isSnowflake(c.driver) ? <>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Account" hint="Organization and account, joined with a dash."><Input mono value={c.host ?? ''} placeholder={driverInfo(c.driver).host} onChange={(e) => set('host', e.target.value.trim())} /></Field>
-                <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Sign in with" hint={c.auth === 'browser' ? 'Your browser opens to sign in, each time GoTable connects.' : !c.auth ? 'Works only where the user needs no second factor code.' : undefined}>
-                  <Select value={c.auth ?? ''} aria-label="Sign in with" onChange={(e) => set('auth', e.target.value as Connection['auth'])}>
-                    <option value="">Password</option>
-                    <option value="key">Key pair</option>
-                    <option value="token">Access token</option>
-                    <option value="browser">Browser (SSO)</option>
+              )}
+          </div>
+          <Button type="button" variant="ghost" size="sm" icon={<ClipboardPaste className="size-3.5" />} onClick={() => setUrlOpen(true)} title="Fill in the form from a connection URL">Paste URL</Button>
+          {onDuplicate && <IconButton label="Duplicate" onClick={onDuplicate}><Copy className="size-4" /></IconButton>}
+          {onDelete && <IconButton label="Delete connection" className="enabled:hover:!text-err" onClick={onDelete}><Trash2 className="size-4" /></IconButton>}
+          {ownTitleBar && <><div className="h-5 w-px bg-line" /><WindowControls className="-mr-3" /></>}
+        </div>
+
+        <div className="@container min-h-0 flex-1 overflow-y-auto">
+          <div className="max-w-[860px] divide-y divide-line-2 px-6 max-[1080px]:px-4">
+            <Section title="General" hint="How it appears in your list.">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
+                <Field label="Name"><Input autoFocus={isNew} value={c.name} placeholder={file ? 'Taken from the file name if empty' : 'e.g. Shop production'} onChange={(e) => set('name', e.target.value)} /></Field>
+                <Field label="Group">
+                  <Select value={c.group_id ?? ''} onChange={(e) => set('group_id', e.target.value)} className="w-40">
+                    <option value="">No group</option>
+                    {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                   </Select>
                 </Field>
-                {c.auth !== 'browser' && <Field label={c.auth === 'key' ? 'Key passphrase' : c.auth === 'token' ? 'Access token' : 'Password'}>
-                  {secretInput('password', c.saved?.password, c.auth === 'key' ? 'if the key is encrypted' : 'stored in your system keyring')}</Field>}
               </div>
-              {c.auth === 'key' && <Field label="Private key" hint="The .p8 (PEM) file whose public key is set on the user.">
-                <div className="flex gap-2">
-                  <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/.ssh/snowflake_key.p8" onChange={(e) => set('key_path', e.target.value)} />
-                  {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
-                    onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+              <Field label="Environment" hint={c.tag === 'production' ? 'Production gets a red title bar and asks before committing changes.' : undefined}>
+                <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Environment">
+                  {TAGS.map((t) => (
+                    <button key={t.id} type="button" role="radio" aria-checked={(c.tag ?? '') === t.id} onClick={() => set('tag', t.id)}
+                      className={clsx('flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] transition-colors',
+                        (c.tag ?? '') === t.id ? 'font-medium text-fg' : 'border-line text-fg-2 hover:bg-hover')}
+                      style={(c.tag ?? '') === t.id ? { borderColor: t.color, background: `color-mix(in srgb, ${t.color} 13%, transparent)` } : undefined}
+                    >
+                      <span className="size-2 rounded-full" style={t.id ? { background: t.color } : { boxShadow: `inset 0 0 0 1.5px ${t.color}` }} />
+                      {t.label}
+                    </button>
+                  ))}
                 </div>
-              </Field>}
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
-                <Field label="Warehouse"><Input value={c.warehouse ?? ''} placeholder="your default" onChange={(e) => set('warehouse', e.target.value)} /></Field>
-                <Field label="Role"><Input value={c.role ?? ''} placeholder="your default" onChange={(e) => set('role', e.target.value)} /></Field>
-              </div>
-              <p className="text-[12px] text-muted">Reading rows runs the warehouse, which Snowflake bills. Lists of tables, columns and keys don’t.</p>
-            </> : isInflux(c.driver) ? <>
-              <Field label="Token" hint="An admin or database token. Leave empty for a server started without authentication.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
-              <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
-            </> : isLibSQL(c.driver) ? (
-              <Field label="Authentication token" hint={c.driver === 'libsql' ? 'Leave empty for a server that asks for none.' : 'Made with “turso db tokens create <database>”, or in the Turso dashboard.'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
-            ) : <>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={isDynamo(c.driver) ? 'Access key ID' : 'User'}><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
-              <Field label={isDynamo(c.driver) ? 'Secret access key' : 'Password'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
-            </div>
-            {!isElastic(c.driver) && <Field label={isDynamo(c.driver) ? 'Region' : 'Database'}><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>}
-            </>}
-            {isElastic(c.driver) && <p className="text-[12px] text-muted">For an API key, leave User empty and enter the encoded key as the password.</p>}
-            {isDynamo(c.driver) && (
-              <Field label="Options" hint="Without an access key, GoTable signs in as the AWS CLI does (environment, ~/.aws, SSO); profile=name picks a profile. Reading tables on AWS is billed to the account.">
-                <Input mono value={c.options ?? ''} placeholder="profile=default" onChange={(e) => set('options', e.target.value)} />
               </Field>
-            )}
-            {isMongo(c.driver) && (
-              <>
-                <Switch checked={!!c.srv} onChange={(v) => setC((x) => ({ ...x, srv: v, ssl_mode: v && x.ssl_mode === 'disable' ? 'require' : x.ssl_mode }))} label="DNS seed list (mongodb+srv://, as on MongoDB Atlas)" />
-                <Field label="Options" hint="The user is looked up in admin unless authSource says otherwise. A replica set can be listed in Host as a:27017,b:27017.">
-                  <Input mono value={c.options ?? ''} placeholder="authSource=admin&replicaSet=rs0" onChange={(e) => set('options', e.target.value)} />
+            </Section>
+
+            <Section title={file ? 'Location' : 'Server'} hint={file ? 'The file GoTable opens.' : 'Where it is and how to sign in. Passwords stay in your system keyring.'}>
+              {driverInfo(c.driver).note && (
+                <div className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-fg-2" role="note">{driverInfo(c.driver).note}</div>
+              )}
+              {file ? (
+                <Field label="Database file" hint="Absolute path. A new file is created if it doesn't exist.">
+                  <Input mono value={c.path ?? ''} placeholder={examplePath(family(c.driver) === 'duckdb' ? 'data/warehouse.duckdb' : 'data/app.sqlite')} onChange={(e) => set('path', e.target.value)} />
                 </Field>
-              </>
-            )}
-          </>
-        )}
-      </section>
-
-      {!file && !isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && (
-        <details className="group mt-3 rounded-xl border border-line bg-panel">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium">
-            <Shield className="size-4 text-muted" /> Security (SSL)
-            <span className="ml-auto text-[12px] font-normal text-muted">{c.ssl_mode}</span>
-            <ChevronDown className="size-4 shrink-0 text-muted transition-transform duration-150 group-open:rotate-180" aria-hidden="true" />
-          </summary>
-          <div className="space-y-3 px-4 pb-4">
-            <Field label="SSL mode">
-              <Select value={c.ssl_mode} onChange={(e) => set('ssl_mode', e.target.value)}>
-                {forDriver(SSL_MODES, c.driver).map((m) => <option key={m}>{m}</option>)}
-              </Select>
-            </Field>
-            <div className="grid grid-cols-3 gap-3">
-              <Field label="CA certificate"><Input mono value={c.ssl_ca_path ?? ''} placeholder="path" onChange={(e) => set('ssl_ca_path', e.target.value)} /></Field>
-              <Field label="Client certificate"><Input mono value={c.ssl_cert_path ?? ''} placeholder="path" onChange={(e) => set('ssl_cert_path', e.target.value)} /></Field>
-              <Field label="Client key"><Input mono value={c.ssl_key_path ?? ''} placeholder="path" onChange={(e) => set('ssl_key_path', e.target.value)} /></Field>
-            </div>
-          </div>
-        </details>
-      )}
-
-      {!file && !isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && (
-        <section className="mt-3 rounded-xl border border-line bg-panel p-4">
-          <Switch checked={!!c.use_ssh_tunnel} onChange={(v) => set('use_ssh_tunnel', v)} label={<span className="font-medium">Connect through an SSH tunnel</span>} />
-          {c.use_ssh_tunnel && (
-            <div className="mt-3 space-y-3 animate-fade">
-              <div className="grid grid-cols-[1fr_110px] gap-3">
-                <Field label="SSH host"><Input value={c.ssh_host ?? ''} placeholder="bastion.example.com" onChange={(e) => set('ssh_host', e.target.value)} /></Field>
-                <Field label="SSH port"><Input inputMode="numeric" value={c.ssh_port || ''} onChange={(e) => set('ssh_port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="SSH user"><Input value={c.ssh_user ?? ''} placeholder="ubuntu" onChange={(e) => set('ssh_user', e.target.value)} /></Field>
-                <Field label="SSH password">{secretInput('sshPassword', c.saved?.sshPassword, 'or use a private key')}</Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Private key" hint={keyHint}>
-                  <div className="flex gap-2">
-                    <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.ssh_key_path ?? ''} placeholder="~/.ssh/id_ed25519" aria-invalid={keyCheck?.path === keyPath && !!keyCheck.problem}
-                      onChange={(e) => set('ssh_key_path', e.target.value)} />
-                    {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} onClick={pickKey}
-                      aria-label="Choose the key file" title="Choose the key file" />}
+              ) : (
+                <>
+                  {!isD1(c.driver) && !isSnowflake(c.driver) && !isBigQuery(c.driver) && <div className="grid grid-cols-[1fr_110px] gap-3">
+                    <Field label={isDynamo(c.driver) ? 'Endpoint host (DynamoDB Local)' : 'Host'}><Input value={c.host ?? ''} placeholder={driverInfo(c.driver).host ?? '127.0.0.1'} onChange={(e) => set('host', e.target.value)} /></Field>
+                    <Field label="Port"><Input inputMode="numeric" value={c.srv ? '' : c.port || ''} disabled={c.srv} onChange={(e) => set('port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
+                  </div>}
+                  {isD1(c.driver) ? <>
+                    <Field label="Account ID" hint="The code in your Cloudflare dashboard's address: dash.cloudflare.com/<account ID>/…"><Input mono value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value.trim())} /></Field>
+                    <Field label="API token" hint="Made under My Profile → API Tokens, with the permission Account → D1 → Edit.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+                    <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+                  </> : isBigQuery(c.driver) ? <>
+                    <Field label="Credentials file" hint="A service account's JSON key. Empty: the sign-in of “gcloud auth application-default login”.">
+                      <div className="flex gap-2">
+                        <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/keys/project-key.json" onChange={(e) => set('key_path', e.target.value)} />
+                        {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
+                          onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+                      </div>
+                    </Field>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Project"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value.trim())} /></Field>
+                      <Field label="Limit of a query (GB)" hint="One that would read more is refused, unbilled. 0: no limit.">
+                        <Input inputMode="decimal" value={new URLSearchParams(c.options ?? '').get('limit') ?? ''} placeholder="10" onChange={(e) => { const v = e.target.value.replace(/[^\d.]/g, ''); set('options', v ? `limit=${v}` : '') }} /></Field>
+                    </div>
+                    <p className="text-[12px] text-muted">Queries are billed by what they read, 10 MB at least. Browsing a table without filters or sorting, its structure and exports are free.</p>
+                  </> : isSnowflake(c.driver) ? <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Account" hint="Organization and account, joined with a dash."><Input mono value={c.host ?? ''} placeholder={driverInfo(c.driver).host} onChange={(e) => set('host', e.target.value.trim())} /></Field>
+                      <Field label="User"><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Sign in with" hint={c.auth === 'browser' ? 'Your browser opens to sign in, each time GoTable connects.' : !c.auth ? 'Works only where the user needs no second factor code.' : undefined}>
+                        <Select value={c.auth ?? ''} aria-label="Sign in with" onChange={(e) => set('auth', e.target.value as Connection['auth'])}>
+                          <option value="">Password</option>
+                          <option value="key">Key pair</option>
+                          <option value="token">Access token</option>
+                          <option value="browser">Browser (SSO)</option>
+                        </Select>
+                      </Field>
+                      {c.auth !== 'browser' && <Field label={c.auth === 'key' ? 'Key passphrase' : c.auth === 'token' ? 'Access token' : 'Password'}>
+                        {secretInput('password', c.saved?.password, c.auth === 'key' ? 'if the key is encrypted' : 'stored in your system keyring')}</Field>}
+                    </div>
+                    {c.auth === 'key' && <Field label="Private key" hint="The .p8 (PEM) file whose public key is set on the user.">
+                      <div className="flex gap-2">
+                        <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.key_path ?? ''} placeholder="~/.ssh/snowflake_key.p8" onChange={(e) => set('key_path', e.target.value)} />
+                        {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} aria-label="Choose the key file" title="Choose the key file"
+                          onClick={() => openFileDialog(['sshkey']).then((f) => { if (f) set('key_path', f.path) }, (e) => toast('error', 'Could not open the file dialog', String(e.message ?? e)))} />}
+                      </div>
+                    </Field>}
+                    <div className="grid grid-cols-3 gap-3">
+                      <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+                      <Field label="Warehouse"><Input value={c.warehouse ?? ''} placeholder="your default" onChange={(e) => set('warehouse', e.target.value)} /></Field>
+                      <Field label="Role"><Input value={c.role ?? ''} placeholder="your default" onChange={(e) => set('role', e.target.value)} /></Field>
+                    </div>
+                    <p className="text-[12px] text-muted">Reading rows runs the warehouse, which Snowflake bills. Lists of tables, columns and keys don’t.</p>
+                  </> : isInflux(c.driver) ? <>
+                    <Field label="Token" hint="An admin or database token. Leave empty for a server started without authentication.">{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+                    <Field label="Database"><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database} onChange={(e) => set('database', e.target.value)} /></Field>
+                  </> : isLibSQL(c.driver) ? (
+                    <Field label="Authentication token" hint={c.driver === 'libsql' ? 'Leave empty for a server that asks for none.' : 'Made with “turso db tokens create <database>”, or in the Turso dashboard.'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
+                  ) : <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label={isDynamo(c.driver) ? 'Access key ID' : 'User'}><Input value={c.user ?? ''} placeholder={driverInfo(c.driver).user} onChange={(e) => set('user', e.target.value)} /></Field>
+                    <Field label={isDynamo(c.driver) ? 'Secret access key' : 'Password'}>{secretInput('password', c.saved?.password, 'stored in your system keyring')}</Field>
                   </div>
-                </Field>
-                <Field label="Key passphrase">{secretInput('sshPassphrase', c.saved?.sshPassphrase, 'if the key is encrypted')}</Field>
-              </div>
+                  {!isElastic(c.driver) && <Field label={isDynamo(c.driver) ? 'Region' : 'Database'}><Input value={c.database ?? ''} placeholder={driverInfo(c.driver).database ?? 'optional'} onChange={(e) => set('database', e.target.value)} /></Field>}
+                  </>}
+                  {isElastic(c.driver) && <p className="text-[12px] text-muted">For an API key, leave User empty and enter the encoded key as the password.</p>}
+                  {isDynamo(c.driver) && (
+                    <Field label="Options" hint="Without an access key, GoTable signs in as the AWS CLI does (environment, ~/.aws, SSO); profile=name picks a profile. Reading tables on AWS is billed to the account.">
+                      <Input mono value={c.options ?? ''} placeholder="profile=default" onChange={(e) => set('options', e.target.value)} />
+                    </Field>
+                  )}
+                  {isMongo(c.driver) && (
+                    <>
+                      <Switch checked={!!c.srv} onChange={(v) => setC((x) => ({ ...x, srv: v, ssl_mode: v && x.ssl_mode === 'disable' ? 'require' : x.ssl_mode }))} label="DNS seed list (mongodb+srv://, as on MongoDB Atlas)" />
+                      <Field label="Options" hint="The user is looked up in admin unless authSource says otherwise. A replica set can be listed in Host as a:27017,b:27017.">
+                        <Input mono value={c.options ?? ''} placeholder="authSource=admin&replicaSet=rs0" onChange={(e) => set('options', e.target.value)} />
+                      </Field>
+                    </>
+                  )}
+                </>
+              )}
+            </Section>
+
+            {network && (
+              <Section title="Network" hint="Encryption, and a way in through another machine.">
+                <div className="divide-y divide-line-2 rounded-xl border border-line">
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3.5 py-3 text-[13px] font-medium">
+                      <Shield className="size-4 text-muted" aria-hidden="true" /> Security (SSL)
+                      <span className="ml-auto text-[12px] font-normal text-muted">{c.ssl_mode}</span>
+                      <ChevronDown className="size-4 shrink-0 text-muted transition-transform duration-150 group-open:rotate-180" aria-hidden="true" />
+                    </summary>
+                    <div className="space-y-3 px-3.5 pb-4">
+                      <Field label="SSL mode">
+                        <Select value={c.ssl_mode} onChange={(e) => set('ssl_mode', e.target.value)}>
+                          {forDriver(SSL_MODES, c.driver).map((m) => <option key={m}>{m}</option>)}
+                        </Select>
+                      </Field>
+                      <div className="grid grid-cols-3 gap-3">
+                        <Field label="CA certificate"><Input mono value={c.ssl_ca_path ?? ''} placeholder="path" onChange={(e) => set('ssl_ca_path', e.target.value)} /></Field>
+                        <Field label="Client certificate"><Input mono value={c.ssl_cert_path ?? ''} placeholder="path" onChange={(e) => set('ssl_cert_path', e.target.value)} /></Field>
+                        <Field label="Client key"><Input mono value={c.ssl_key_path ?? ''} placeholder="path" onChange={(e) => set('ssl_key_path', e.target.value)} /></Field>
+                      </div>
+                    </div>
+                  </details>
+                  <div className="px-3.5 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <Route className="size-4 shrink-0 text-muted" aria-hidden="true" />
+                      <label htmlFor="ssh-switch" className="flex-1 cursor-pointer text-[13px] font-medium">Connect through an SSH tunnel</label>
+                      <Switch id="ssh-switch" checked={!!c.use_ssh_tunnel} onChange={(v) => set('use_ssh_tunnel', v)} />
+                    </div>
+                {c.use_ssh_tunnel && (
+                  <div className="mt-3.5 space-y-3 animate-fade">
+                    <div className="grid grid-cols-[1fr_110px] gap-3">
+                      <Field label="SSH host"><Input value={c.ssh_host ?? ''} placeholder="bastion.example.com" onChange={(e) => set('ssh_host', e.target.value)} /></Field>
+                      <Field label="SSH port"><Input inputMode="numeric" value={c.ssh_port || ''} onChange={(e) => set('ssh_port', Number(e.target.value.replace(/\D/g, '')) || 0)} /></Field>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="SSH user"><Input value={c.ssh_user ?? ''} placeholder="ubuntu" onChange={(e) => set('ssh_user', e.target.value)} /></Field>
+                      <Field label="SSH password">{secretInput('sshPassword', c.saved?.sshPassword, 'or use a private key')}</Field>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Private key" hint={keyHint}>
+                        <div className="flex gap-2">
+                          <Input mono icon={<KeyRound />} className="min-w-0 flex-1" value={c.ssh_key_path ?? ''} placeholder="~/.ssh/id_ed25519" aria-invalid={keyCheck?.path === keyPath && !!keyCheck.problem}
+                            onChange={(e) => set('ssh_key_path', e.target.value)} />
+                          {native && <Button type="button" className="w-8 shrink-0 !px-0" icon={<FolderOpen className="size-[18px]" />} onClick={pickKey}
+                            aria-label="Choose the key file" title="Choose the key file" />}
+                        </div>
+                      </Field>
+                      <Field label="Key passphrase">{secretInput('sshPassphrase', c.saved?.sshPassphrase, 'if the key is encrypted')}</Field>
+                    </div>
+                  </div>
+                )}
+                  </div>
+                </div>
+              </Section>
+            )}
+          </div>
+        </div>
+
+        {/* Always in view: the result of a test is next to the button that ran it. */}
+        <div data-bottom-bar className="shrink-0 border-t border-line bg-panel-2">
+          {test.kind !== 'idle' && (
+            <div role="status" className={clsx('flex max-h-40 gap-2.5 overflow-y-auto border-b px-6 py-2.5 text-[12.5px] animate-fade max-[1080px]:px-4',
+              test.kind === 'ok' && 'border-ok/25 bg-ok/8', test.kind === 'err' && 'border-err/25 bg-err/8', test.kind === 'running' && 'border-line')}>
+              {test.kind === 'running' && <><PlugZap className="size-4 animate-pulse text-accent" /> Connecting…</>}
+              {test.kind === 'ok' && <><CheckCircle2 className="mt-px size-4 shrink-0 text-ok" /><div className="flex flex-wrap gap-x-2"><span className="font-medium">Connected successfully</span><span className="text-muted">{test.text}</span></div></>}
+              {test.kind === 'err' && <><XCircle className="mt-px size-4 shrink-0 text-err" /><div className="min-w-0"><div className="font-medium">{test.title}</div>
+                {test.hint && <div className="text-fg-2">{test.hint}</div>}<div className="mt-1 select-text break-words font-mono text-[11.5px] text-muted">{test.detail}</div></div></>}
             </div>
           )}
-        </section>
-      )}
-
-      {test.kind !== 'idle' && (
-        <div role="status" className={clsx('mt-3 flex gap-2.5 rounded-xl border p-3 text-[12.5px] animate-fade',
-          test.kind === 'ok' && 'border-ok/30 bg-ok/8', test.kind === 'err' && 'border-err/30 bg-err/8', test.kind === 'running' && 'border-line bg-panel')}>
-          {test.kind === 'running' && <><PlugZap className="size-4 animate-pulse text-accent" /> Connecting…</>}
-          {test.kind === 'ok' && <><CheckCircle2 className="size-4 shrink-0 text-ok" /><div><div className="font-medium">Connected successfully</div><div className="text-muted">{test.text}</div></div></>}
-          {test.kind === 'err' && <><XCircle className="size-4 shrink-0 text-err" /><div className="min-w-0"><div className="font-medium">{test.title}</div>
-            {test.hint && <div className="text-fg-2">{test.hint}</div>}<div className="mt-1 break-words font-mono text-[11.5px] text-muted">{test.detail}</div></div></>}
+          <div className="flex items-center gap-2 px-6 py-3 max-[1080px]:px-4">
+            <Button type="button" onClick={doTest} loading={test.kind === 'running'} icon={<PlugZap className="size-3.5" />}>Test</Button>
+            <div className="min-w-0 flex-1 truncate pl-1 text-[12px] text-muted">{!isNew && dirty && 'Not saved yet'}</div>
+            {onCancel && <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>}
+            <Button type="button" onClick={() => save(false)} disabled={saving || (!dirty && !isNew)}>Save</Button>
+            <Button type="submit" variant="primary" loading={saving || connecting}>{connecting ? 'Connecting…' : dirty || isNew ? 'Save & connect' : 'Connect'}</Button>
+          </div>
         </div>
-      )}
-
-      <div className="sticky bottom-0 mt-4 flex items-center gap-2 bg-gradient-to-t from-bg via-bg pb-4 pt-3">
-        <Button type="button" onClick={doTest} loading={test.kind === 'running'} icon={<PlugZap className="size-3.5" />}>Test</Button>
-        <div className="flex-1" />
-        {onCancel && <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>}
-        <Button type="button" onClick={() => save(false)} disabled={saving || (!dirty && !isNew)}>Save</Button>
-        <Button type="submit" variant="primary" loading={saving || connecting}>{connecting ? 'Connecting…' : dirty || isNew ? 'Save & connect' : 'Connect'}</Button>
       </div>
 
       {urlOpen && <UrlDialog onClose={() => setUrlOpen(false)} onParsed={(conn, pw) => {

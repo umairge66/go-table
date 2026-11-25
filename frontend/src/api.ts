@@ -1,5 +1,5 @@
 import type {
-  ApiErrorBody, Column, Connection, DbObject, FileSource, Filter, ForeignRef, Group, HistoryEntry, Index, Job, QueryResult, RowsResult, SavedQuery, Secrets, SessionInfo, Sort, TableInfo,
+  Account, ApiErrorBody, Cell, Column, Connection, DbObject, DiagramTable, Doc, FileSource, Filter, ForeignRef, Grant, Group, HistoryEntry, Index, Job, Process, QueryResult, RowsResult, SavedQuery, Secrets, SessionInfo, Sort, TableInfo, UserAdmin,
 } from './types'
 
 /** ApiError carries the server's plain-language explanation. */
@@ -29,19 +29,67 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
     })
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
-    throw new ApiError({ title: 'GoTable is not responding', hint: 'The app may have been closed. Restart it.', detail: String(e) }, 0)
+    throw gone(e)
   }
   if (!res.ok) {
-    let err: ApiErrorBody = { title: 'Something went wrong', detail: res.statusText }
-    try {
-      const j = await res.json()
-      if (j?.error) err = j.error
-    } catch {
-      err.detail = await res.text().catch(() => res.statusText)
-    }
-    throw new ApiError(err, res.status)
+    throw await failure(res)
   }
   return res.json() as Promise<T>
+}
+
+async function failure(res: Response) {
+  let err: ApiErrorBody = { title: 'Something went wrong', detail: res.statusText }
+  try {
+    const j = await res.json()
+    if (j?.error) err = j.error
+  } catch {
+    err.detail = await res.text().catch(() => res.statusText)
+  }
+  return new ApiError(err, res.status)
+}
+
+const gone = (e: unknown) => new ApiError({ title: 'GoTable is not responding', hint: 'The app may have been closed. Restart it.', detail: String(e) }, 0)
+
+/**
+ * stream posts a request whose answer is one JSON object per line, and hands
+ * the objects over as they arrive. Several often come at once.
+ */
+async function stream(path: string, body: unknown, onEvents: (events: StreamEvent[]) => void): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' })
+  } catch (e) { throw gone(e) }
+  if (!res.ok) throw await failure(res)
+  const reader = res.body!.getReader()
+  const dec = new TextDecoder()
+  let rest: string[] = [] // the pieces of a line not yet complete
+  for (;;) {
+    let chunk: ReadableStreamReadResult<Uint8Array>
+    try { chunk = await reader.read() } catch (e) { throw gone(e) }
+    const text = chunk.done ? dec.decode() : dec.decode(chunk.value, { stream: true })
+    const lines = text.split('\n')
+    rest.push(lines[0])
+    if (lines.length > 1) {
+      lines[0] = rest.join('')
+      rest = [lines.pop()!]
+      const events = lines.filter(Boolean).map((l) => JSON.parse(l) as StreamEvent)
+      if (events.length) onEvents(events)
+    }
+    if (chunk.done) break
+  }
+}
+
+/** StreamEvent: see internal/server/stream.go. */
+export interface StreamEvent {
+  i: number
+  statement?: string
+  columns?: string[]
+  types?: string[]
+  rows?: Cell[][]
+  end?: QueryResult
+  done?: boolean
+  schema?: string
+  error?: ApiErrorBody
 }
 
 const q = (o: Record<string, string>) => new URLSearchParams(o).toString()
@@ -107,7 +155,19 @@ export interface TypeInfo {
 }
 export interface NewDatabase { name: string; kind: 'database' | 'schema'; charset: string }
 
-export interface ChangeReq { kind: 'update' | 'insert' | 'delete'; key?: Record<string, string | null>; values?: Record<string, string | null> }
+export interface ChangeReq {
+  kind: 'update' | 'insert' | 'delete'; key?: Record<string, string | null>; values?: Record<string, string | null>
+  /** doc edits a whole document: its new JSON, and the one that was read. */
+  doc?: { id: string; json: string; original: string }
+}
+
+/** UserOp is a change to an account (see internal/db/users.go). */
+export interface UserOp {
+  kind: 'create' | 'attributes' | 'password' | 'drop' | 'lock' | 'unlock' | 'grant' | 'revoke' | 'grant_role' | 'revoke_role'
+  name: string; host?: string; password?: string; attributes?: Record<string, boolean>; role?: string
+  level?: string; database?: string; schema?: string; object?: string; pattern?: boolean; privileges?: string[]
+  grantOption?: boolean; future?: boolean; reassign?: boolean
+}
 
 export const api = {
   connections: () => call<{ connections: Connection[]; groups: Group[] }>('GET', '/api/connections'),
@@ -142,6 +202,14 @@ export const api = {
   definition: (sid: string, t: TableRef, kind: string) => call<{ ddl: string }>('GET', `/api/sessions/${sid}/definition?${q({ schema: t.schema, table: t.name, kind })}`),
   rows: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal, count = false) =>
     call<RowsResult>('POST', `/api/sessions/${sid}/rows`, { table, page, columns, count }, signal),
+  documents: (sid: string, table: TableRef, page: PageReq, columns: string[], signal?: AbortSignal, count = false) =>
+    call<{ documents: Doc[]; total: number; more: boolean; ms: number }>('POST', `/api/sessions/${sid}/documents`, { table, page, columns, count }, signal),
+  diagram: (sid: string, schema: string) => call<{ tables: DiagramTable[] }>('GET', `/api/sessions/${sid}/diagram?${q({ schema })}`),
+  processes: (sid: string) => call<{ processes: Process[]; canStop: boolean; canKill: boolean }>('GET', `/api/sessions/${sid}/processes`),
+  stopProcess: (sid: string, id: string, kill: boolean) => call('POST', `/api/sessions/${sid}/processes/stop`, { id, kill }),
+  users: (sid: string) => call<{ users: Account[]; admin: UserAdmin }>('GET', `/api/sessions/${sid}/users`),
+  userGrants: (sid: string, name: string, host: string) => call<{ grants: Grant[] }>('GET', `/api/sessions/${sid}/users/grants?${q({ name, host })}`),
+  changeUsers: (sid: string, ops: UserOp[], dryRun: boolean) => call<{ statements: string[] }>('POST', `/api/sessions/${sid}/users`, { ops, dryRun }),
   estimate: (sid: string, sql: string, schema: string, signal?: AbortSignal) =>
     call<{ bytes: number }>('POST', `/api/sessions/${sid}/estimate`, { sql, schema }, signal),
   changes: (sid: string, table: TableRef, changes: ChangeReq[], hasPK: boolean, dryRun: boolean) =>
@@ -168,6 +236,44 @@ export const api = {
     call<{ statements: string[]; ok?: boolean }>('POST', `/api/sessions/${sid}/drop`, { objects, cascade, dryRun }),
   execute: (sid: string, sql: string, rowCap: number, queryId: string, schema?: string) =>
     call<{ results: QueryResult[]; schema: string }>('POST', `/api/sessions/${sid}/execute`, { sql, rowCap, queryId, schema }),
+  /**
+   * executeStream runs a script and reports its results as they are read:
+   * onResults gets all of them so far, each time more has come (at most every
+   * 60 ms). Rows are added to the same array; everything else is replaced.
+   */
+  executeStream: async (sid: string, sql: string, rowCap: number, queryId: string, schema: string | undefined, onResults: (results: QueryResult[]) => void): Promise<{ results: QueryResult[]; schema: string }> => {
+    const live: QueryResult[] = []
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let last = 0
+    const report = () => { timer = undefined; last = performance.now(); onResults(live.slice()) }
+    let done: StreamEvent | undefined
+    try {
+      await stream(`/api/sessions/${sid}/execute`, { sql, rowCap, queryId, schema, stream: true }, (events) => {
+        for (const e of events) {
+          if (e.done) done = e
+          else if (e.end) {
+            const at = live[e.i]
+            live[e.i] = { ...e.end, hasRows: !!at, columns: at?.columns, types: at?.types, rows: at?.rows }
+          } else if (e.rows) {
+            const at = live[e.i]
+            for (const r of e.rows) at.rows!.push(r)
+            live[e.i] = { ...at }
+          } else {
+            live[e.i] = { statement: e.statement ?? '', columns: e.columns ?? [], types: e.types ?? [], rows: [], hasRows: true, rowsAffected: 0, ms: 0, truncated: false, loading: true }
+          }
+        }
+        timer ??= setTimeout(report, Math.max(0, 60 - (performance.now() - last)))
+      })
+    } finally {
+      clearTimeout(timer)
+      // Whatever ended it, nothing arrives any more.
+      live.forEach((r, i) => { if (r.loading) live[i] = { ...r, loading: false } })
+      if (live.length) onResults(live.slice())
+    }
+    if (done?.error) throw new ApiError(done.error, 400)
+    if (!done) throw gone('the answer ended early')
+    return { results: live, schema: done.schema ?? '' }
+  },
   cancel: (sid: string, queryId: string) => call('POST', `/api/sessions/${sid}/cancel`, { queryId }),
   completions: (sid: string, schema: string) => call<{ tables: Record<string, string[]> }>('GET', `/api/sessions/${sid}/completions?${q({ schema })}`),
 

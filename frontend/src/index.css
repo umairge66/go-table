@@ -138,6 +138,9 @@ body {
 input, textarea, [contenteditable] { user-select: text; }
 ::selection { background: var(--selected); }
 
+/* Esc clears a search; no second, unstyled button for it. */
+input[type=search]::-webkit-search-cancel-button { display: none; }
+
 /* Thin, unobtrusive scrollbars. WebKit and Chromium draw them with the
    ::-webkit-scrollbar styles; WebKitGTK's own overlay scrollbars would
    otherwise show through context menus and popovers. The standard
@@ -185,3 +188,19 @@ input, textarea, [contenteditable] { user-select: text; }
 .cm-gutterElement.cm-statement-gutter { color: var(--accent) !important; font-weight: 600; }
 
 @keyframes indeterminate { 0% { left: -35% } 100% { left: 100% } }
+
+/* The ER diagram. Plain rules for what there may be thousands of; no shadows
+   or transitions, which are slow to repaint in WebKitGTK. */
+.er-dots { position: absolute; left: -64px; top: -64px; pointer-events: none; will-change: transform; background: var(--bg); color: color-mix(in srgb, var(--faint) 85%, var(--bg)); }
+.er-box { position: absolute; left: 0; top: 0; contain: layout style; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); user-select: none; cursor: default; }
+.er-box.er-on { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 18%, transparent); }
+.er-box.er-dim { opacity: .35; }
+.er-head { display: flex; align-items: center; gap: 6px; height: 33px; padding: 0 6px 0 11px; border-radius: 9px; background: var(--panel-2); font-size: 13px; font-weight: 600; cursor: move; }
+.er-cols > .er-head { border-bottom: 1px solid var(--line); border-radius: 9px 9px 0 0; margin-bottom: 5px; }
+.er-row { position: relative; display: flex; align-items: center; height: 24px; padding: 0 10px; font-size: 12px; color: var(--fg-2); }
+.er-row:hover { background: var(--hover); }
+.er-row[data-over] { background: var(--accent-soft); }
+.er-row > i { width: 22px; flex-shrink: 0; font: 600 9px/1 var(--font-sans); letter-spacing: .02em; }
+.er-pk { color: var(--warn); }
+.er-fk { color: var(--accent); }
+.er-key:hover::after { content: ""; position: absolute; right: -6px; top: 6px; width: 11px; height: 11px; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 50%; background: var(--panel); cursor: crosshair; }

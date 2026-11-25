@@ -5,7 +5,7 @@
 
 import { nativeDialogs } from './native'
 
-export type FileKind = 'sql' | 'js' | 'redis' | 'cql' | 'partiql' | 'es' | 'csv' | 'json' | 'zip' | 'sqlite'
+export type FileKind = 'sql' | 'js' | 'redis' | 'cql' | 'partiql' | 'es' | 'csv' | 'json' | 'zip' | 'sqlite' | 'svg'
 
 const TYPES: Record<FileKind, { description: string; accept: Record<string, string[]> }> = {
   sql: { description: 'SQL file', accept: { 'application/sql': ['.sql'] } },
@@ -17,6 +17,7 @@ const TYPES: Record<FileKind, { description: string; accept: Record<string, stri
   csv: { description: 'CSV file', accept: { 'text/csv': ['.csv'] } },
   json: { description: 'JSON file', accept: { 'application/json': ['.json'] } },
   zip: { description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } },
+  svg: { description: 'SVG image', accept: { 'image/svg+xml': ['.svg'] } },
   sqlite: { description: 'SQLite database', accept: { 'application/vnd.sqlite3': ['.sqlite', '.db'] } },
 }
 

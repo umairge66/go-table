@@ -16,7 +16,8 @@ import { redisCompletions, redisLanguage, redisStatementAt, redisStatementRange 
 import { useSettings } from '../lib/settings'
 import { codemirrorKey, combosFor, label } from '../lib/shortcuts'
 
-const highlight = HighlightStyle.define([
+/** highlight: the editors' colours. */
+export const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operatorKeyword, t.modifier], color: 'var(--accent)', fontWeight: '600' },
   { tag: [t.string, t.special(t.string)], color: 'var(--ok)' },
   { tag: [t.number, t.bool, t.null], color: 'var(--warn)' },
@@ -151,6 +152,8 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
   driver: Driver
   tables?: Record<string, string[]>
   readOnly?: boolean
+  /** wrap breaks long lines (commands that are only read). */
+  wrap?: boolean
   onRunCurrent?: () => void
   onRunAll?: () => void
   onFormat?: () => void
@@ -178,6 +181,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, {
           p.readOnly ? [] : statementHighlight(() => cb.current.driver),
           syntaxHighlighting(highlight),
           lang.current.of(language(p.driver, p.tables)),
+          p.wrap ? EditorView.lineWrapping : [],
           EditorState.readOnly.of(!!p.readOnly),
           EditorView.editable.of(!p.readOnly),
           keys.current.of(editorKeys(shortcuts, p.driver, cb)),

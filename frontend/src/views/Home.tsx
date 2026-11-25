@@ -1,25 +1,15 @@
 import clsx from 'clsx'
-import { ChevronDown, ChevronRight, Copy, Database, FolderPlus, Moon, Pencil, Plus, Search, Settings, Sun, Trash2, Zap } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight, ClipboardPaste, Copy, Database, FolderPlus, Lock, Moon, Pencil, Plus, Search, Settings, Sun, Trash2, Zap } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { WindowControls, dragWindow, useOwnTitleBar } from '../components/WindowChrome'
 import { api } from '../api'
-import { Button, DriverBadge, EmptyState, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
+import { Button, DriverBadge, IconButton, Input, Kbd, Modal, Spinner, TagPill, errorParts, useMenu, useToast } from '../components/ui'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
 import { keys } from '../lib/platform'
-import { features, isBigQuery, isD1, isSnowflake, isDynamo, tagInfo, type Connection, type Group } from '../types'
+import { subtitle } from '../lib/connections'
+import { DRIVERS, ENGINES, driverInfo, type Connection, type Driver, type Group } from '../types'
 import { ConnectionForm, UrlDialog, newConnection } from './ConnectionForm'
-
-export function subtitle(c: Connection) {
-  if (features(c.driver).file) return c.path ?? ''
-  if (isD1(c.driver)) return `Cloudflare · ${c.database ?? ''}`
-  if (isBigQuery(c.driver)) return `Google Cloud · ${c.database || 'the credentials’ project'}`
-  if (isSnowflake(c.driver)) return `${c.user ? c.user + '@' : ''}${c.host ?? ''}${c.database ? '/' + c.database : ''}`
-  if (isDynamo(c.driver) && !c.host) return `AWS ${c.database ?? ''}`.trim()
-  let s = `${c.host || '127.0.0.1'}${c.port ? ':' + c.port : ''}`
-  if (c.user) s = `${c.user}@${s}`
-  if (c.database) s += `/${c.database}`
-  return s
-}
+import { useUnsupported } from './DriverPicker'
 
 export function Home({ connections, groups, reload, onConnect, connecting, theme, toggleTheme, onOpenSettings }: {
   connections: Connection[]
@@ -34,6 +24,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
   const toast = useToast()
   const menu = useMenu()
   const newKeys = useShortcutLabel('home.new')
+  const newLabel = keys(newKeys ? `New connection (${newKeys.replace(/ /g, '+')})` : 'New connection')
   const ownTitleBar = useOwnTitleBar()
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string | null>(connections[0]?.id ?? null)
@@ -55,7 +46,7 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
   const flat = sections.flatMap((s) => (s.group && !s.group.expanded && !search ? [] : s.items))
 
   const current = draft ?? connections.find((c) => c.id === selected) ?? null
-  const startNew = () => { setDraft(newConnection()); setDraftPassword(''); setSelected(null) }
+  const startNew = (driver?: Driver) => { setDraft(newConnection(driver)); setDraftPassword(''); setSelected(null) }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (hit(e, 'home.new')) { e.preventDefault(); startNew() }
@@ -113,32 +104,32 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
 
   return (
     <div className="flex h-full">
-      <aside className="flex w-[300px] shrink-0 flex-col border-r border-line bg-sidebar">
-        <div className="flex select-none items-center gap-2 px-3 pt-3 pb-2" onMouseDown={ownTitleBar ? dragWindow : undefined}>
+      <aside className="flex w-[280px] shrink-0 flex-col border-r border-line bg-sidebar max-[1080px]:w-[232px]">
+        <div className="flex select-none items-center gap-2 px-3 pb-3 pt-4" onMouseDown={ownTitleBar ? dragWindow : undefined}>
           <div className="flex size-7 items-center justify-center rounded-lg bg-accent text-accent-fg"><Database className="size-4" /></div>
-          <div className="text-[14px] font-semibold">GoTable</div>
+          <div className="text-[14px] font-semibold tracking-tight">GoTable</div>
           <div className="flex-1" />
           <IconButton label={theme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggleTheme}>{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}</IconButton>
-          <IconButton label="New group" onClick={() => setGroupDialog({ name: '' })}><FolderPlus className="size-4" /></IconButton>
-          <IconButton label={newKeys ? `New connection (${keys(newKeys.replace(/ /g, '+'))})` : 'New connection'} onClick={startNew}><Plus className="size-4" /></IconButton>
           <IconButton label="Settings" onClick={onOpenSettings}><Settings className="size-4" /></IconButton>
         </div>
-        <div className="px-3 pb-2">
-          <Input icon={<Search />} value={search} placeholder="Search connections" onChange={(e) => setSearch(e.target.value)} aria-label="Search connections"
+        <div className="flex items-center gap-2 px-3 pb-2">
+          <Input className="min-w-0 flex-1" icon={<Search />} value={search} placeholder="Search connections" onChange={(e) => setSearch(e.target.value)} aria-label="Search connections"
             onKeyDown={(e) => { if (e.key === 'Enter' && flat[0]) onConnect(flat[0]) }} />
+          <Button variant="primary" className="w-8 shrink-0 !px-0" icon={<Plus className="size-4" />} onClick={() => startNew()}
+            aria-label={newLabel} title={newLabel} />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 outline-none" tabIndex={0} onKeyDown={onListKey} role="listbox" aria-label="Connections">
           {sections.map(({ group, items }) => (
             <div key={group?.id ?? 'root'}>
               {group && (
-                <div className="group/g mt-2 flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
+                <div className="group/g mt-2 flex h-7 items-center gap-1 rounded-md px-1.5 text-[11.5px] font-medium text-muted hover:bg-hover"
                   onContextMenu={(e) => menu.open(e, [
                     { label: 'Rename group', icon: <Pencil />, onSelect: () => setGroupDialog({ id: group.id, name: group.name }) },
                     { label: 'Delete group', icon: <Trash2 />, danger: true, onSelect: async () => { await api.deleteGroup(group.id); reload() } },
                   ])}>
-                  <button className="flex flex-1 items-center gap-1" onClick={() => toggleGroup(group)}>
+                  <button className="flex min-w-0 flex-1 items-center gap-1" onClick={() => toggleGroup(group)}>
                     {group.expanded || search ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                    {group.name}
+                    <span className="truncate">{group.name}</span>
                     <span className="font-normal text-faint">{items.length}</span>
                   </button>
                 </div>
@@ -157,12 +148,11 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
                     className={clsx('group relative mt-0.5 flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 transition-colors',
                       active ? 'bg-panel shadow-[0_1px_2px_rgb(0_0_0/0.06)] ring-1 ring-line' : 'hover:bg-hover')}
                   >
-                    {c.tag && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r" style={{ background: tagInfo(c.tag).color }} />}
-                    <DriverBadge driver={c.driver} size={30} />
+                    <DriverBadge driver={c.driver} size={32} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{c.name}</span>
-                        <TagPill tag={c.tag} className="!h-4 !px-1.5 !text-[9.5px]" />
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{c.name}</span>
+                        <TagPill tag={c.tag} className="!h-4 !px-1.5 !text-[10px] !normal-case !tracking-normal" />
                       </div>
                       <div className="truncate text-[11.5px] text-muted">{connecting === c.id ? (c.use_ssh_tunnel ? 'Connecting through SSH…' : 'Connecting…') : subtitle(c)}</div>
                     </div>
@@ -172,45 +162,43 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
               })}
             </div>
           ))}
+          {connections.length === 0 && <div className="px-3 py-6 text-center text-[12px] text-muted">Connections you save appear here.</div>}
           {connections.length > 0 && flat.length === 0 && search && (
             <div className="px-3 py-6 text-center text-[12px] text-muted">No connection matches “{search}”.</div>
           )}
         </div>
-        <div className="border-t border-line px-3 py-2 text-[11px] text-faint">
-          <Kbd>↑</Kbd> <Kbd>↓</Kbd> select · <Kbd>↵</Kbd> connect · double-click opens
+        <div className="flex h-[57px] shrink-0 items-center gap-2 border-t border-line px-2 text-[11px] text-muted">
+          <Button variant="ghost" size="sm" icon={<FolderPlus className="size-3.5" />} onClick={() => setGroupDialog({ name: '' })}>New group</Button>
+          {connections.length > 0 && <span className="ml-auto truncate pr-1" title="Double-click a connection, or press Enter, to connect"><Kbd>↵</Kbd> connect</span>}
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        {ownTitleBar && (
-          <div className="sticky top-0 z-20 flex h-10 select-none items-center justify-end bg-bg/80 px-2 backdrop-blur-sm" onMouseDown={dragWindow}>
-            <WindowControls />
-          </div>
-        )}
+      <main className="min-w-0 flex-1">
         {current ? (
-          <div className="px-8 pt-10">
-            <ConnectionForm
-              key={current.id}
-              initial={current}
-              groups={groups}
-              isNew={!!draft}
-              initialPassword={draft ? draftPassword : undefined}
-              onCancel={draft ? () => setDraft(null) : undefined}
-              onSaved={async (c) => { await reload(); setDraft(null); setSelected(c.id) }}
-              onConnect={onConnect}
-              connecting={connecting === current.id}
-            />
-          </div>
+          <ConnectionForm
+            key={current.id}
+            initial={current}
+            groups={groups}
+            isNew={!!draft}
+            initialPassword={draft ? draftPassword : undefined}
+            onCancel={draft ? () => setDraft(null) : undefined}
+            onDuplicate={draft ? undefined : () => duplicate(current)}
+            onDelete={draft ? undefined : () => setConfirmDelete(current)}
+            onSaved={async (c) => { await reload(); setDraft(null); setSelected(c.id) }}
+            onConnect={onConnect}
+            connecting={connecting === current.id}
+          />
         ) : (
-          <EmptyState icon={<Database />} title={connections.length ? 'Pick a connection' : 'Welcome to GoTable'}
-            actions={<>
-              <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={startNew} kbd={newKeys}>New connection</Button>
-              <Button onClick={() => setUrlOpen(true)}>Paste a URL</Button>
-            </>}>
-            {connections.length
-              ? 'Select a connection on the left to edit it, or double-click it to connect.'
-              : 'Connect to PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle, DuckDB, ClickHouse, MongoDB and the servers compatible with them. Passwords are kept in your system keyring, never in plain files.'}
-          </EmptyState>
+          <div className="flex h-full flex-col">
+            {ownTitleBar && (
+              <div className="flex h-12 shrink-0 select-none items-center justify-end px-3" onMouseDown={dragWindow}><WindowControls /></div>
+            )}
+            <Start title={connections.length ? 'Pick a connection' : 'Welcome to GoTable'} newKeys={newKeys} onNew={startNew} onPaste={() => setUrlOpen(true)}>
+              {connections.length
+                ? 'Select one on the left to edit it, double-click it to connect, or start a new one.'
+                : 'One app for your SQL and NoSQL databases. Choose yours to set up the first connection.'}
+            </Start>
+          </div>
         )}
       </main>
 
@@ -234,6 +222,45 @@ export function Home({ connections, groups, reload, onConnect, connecting, theme
         </Modal>
       )}
       {menu.node}
+    </div>
+  )
+}
+
+/** Start offers a new connection: by database, from a URL, or the whole list. */
+function Start({ title, newKeys, onNew, onPaste, children }: {
+  title: string
+  newKeys: string
+  onNew: (d?: Driver) => void
+  onPaste: () => void
+  children: ReactNode
+}) {
+  const unsupported = useUnsupported()
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto animate-fade">
+      <div className="mx-auto flex min-h-full max-w-[760px] flex-col justify-center px-8 py-8">
+        <h1 className="text-[26px] font-semibold leading-tight tracking-tight">{title}</h1>
+        <p className="mt-2 max-w-[640px] text-[14px] leading-relaxed text-muted">{children}</p>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Button variant="primary" icon={<Plus className="size-3.5" />} onClick={() => onNew()} kbd={newKeys}>New connection</Button>
+          <Button icon={<ClipboardPaste className="size-3.5" />} onClick={onPaste}>Paste a URL</Button>
+        </div>
+        <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(156px,1fr))] gap-2">
+          {ENGINES.map((d) => (
+            <button key={d} type="button" disabled={unsupported(d)} onClick={() => onNew(d)}
+              title={unsupported(d) ? `${driverInfo(d).label} isn't available in this build of GoTable` : undefined}
+              className="flex h-12 items-center gap-2.5 rounded-xl border border-line bg-panel px-2.5 text-left text-[13px] font-medium transition-colors enabled:hover:border-accent/50 enabled:hover:bg-accent-soft disabled:opacity-40">
+              <DriverBadge driver={d} size={28} decorative />
+              <span className="truncate">{driverInfo(d).label}</span>
+            </button>
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-[12.5px] text-muted">
+          <button type="button" className="rounded font-medium text-accent hover:underline" onClick={() => onNew()}>
+            And {DRIVERS.length - ENGINES.length} compatible servers and cloud services
+          </button>
+          <span className="inline-flex items-center gap-1.5"><Lock className="size-3.5" aria-hidden="true" />Passwords are kept in your system keyring, never in plain files.</span>
+        </div>
+      </div>
     </div>
   )
 }

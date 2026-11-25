@@ -17,6 +17,7 @@ test('Snowflake: sign in, browse, edit, count, structure, delete (needs GOTABLE_
 
   await page.goto(process.env.GOTABLE_URL!)
   const form = page.getByLabel('Connection form')
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   await form.getByRole('radio', { name: 'Snowflake', exact: true }).click()
   // No host, port, SSL or SSH.

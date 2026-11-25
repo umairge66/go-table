@@ -20,6 +20,7 @@ test('grid performance (needs GOTABLE_PERF)', async ({ browser }) => {
 
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   await page.goto(process.env.GOTABLE_URL!)
+  await page.getByLabel('Search connections').waitFor()
   await page.keyboard.press('Control+n')
   const form = page.getByLabel('Connection form')
   await form.getByRole('radio', { name: 'SQLite' }).click()

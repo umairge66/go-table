@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 import {
-  ArrowUpRight, ChevronLeft, ChevronRight, Copy, Download, Filter as FilterIcon, ListFilter, Minus, Plus, Rows3, Search, Trash2, Undo2, Upload,
+  ArrowUpRight, Braces, ChevronLeft, ChevronRight, Copy, Download, Filter as FilterIcon, ListFilter, ListTree, Minus, Plus, Rows3, Search, Table2, Trash2, Undo2, Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type PageReq } from '../api'
@@ -11,8 +11,10 @@ import { Button, IconButton, RefreshButton, Input, Modal, Select, Spinner, error
 import { CellPicker, useChoices, type PickerKind } from '../components/CellPicker'
 import { cellKind, type CellKind } from '../lib/cellKind'
 import { addRow, cellAt, emptyEdits, pendingCount, rowCount, setCell, toChanges, toggleDelete, type Edits } from '../lib/edits'
+import { addDoc, docChanges, docPending, emptyDocEdits, setDoc, shownDocs, toggleDoc, type DocEdits } from '../lib/docEdits'
+import { formatJSON, parseJSON } from '../lib/json'
 import { quote } from '../lib/quote'
-import { rowEdits, FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isElastic, isMongo, isRedis, noInserts, usesCommands } from '../types'
+import { family, hasDocuments, rowEdits, FILTER_OPS, opNeedsValue, type Cell, type Column, type DbObject, type Doc, type Filter, type ForeignRef, type FilterOp, type Index, type RowsResult, type SessionInfo, type Sort, type TableInfo, isCassandra, isDynamo, isElastic, isMongo, isRedis, noInserts, usesCommands } from '../types'
 import { escapeKey, isPattern, keyLabel, quoteArg, unescapeKey } from '../lib/redisShell'
 import { mongoColl } from '../lib/mongoShell'
 import { hit, useShortcutLabel } from '../lib/shortcuts'
@@ -20,6 +22,7 @@ import { ExportDialog } from './ExportDialog'
 import { FkLookup } from './FkLookup'
 import { ImportCSVDialog } from './ImportCSVDialog'
 import { ImportDocumentsDialog } from './ImportDocumentsDialog'
+import { DocumentsView } from './DocumentsView'
 import { SchemaView } from './SchemaView'
 import { PipelineView } from './PipelineView'
 import { HISTORY_EVENT, notify } from './SidebarPanels'
@@ -33,6 +36,11 @@ export const fmt = (n: number) => n.toLocaleString('en-US')
 const PAGE_SIZES = [100, 300, 500, 1000, 5000]
 const PAGE_SIZE_KEY = 'gotable:pageSize'
 const savedPageSize = () => { try { return Number(localStorage.getItem(PAGE_SIZE_KEY)) || 0 } catch { return 0 } }
+
+const DOC_VIEW_KEY = 'gotable:docView'
+const savedDocView = (fam: string): 'table' | 'json' | 'tree' => {
+  try { const v = JSON.parse(localStorage.getItem(DOC_VIEW_KEY) ?? '{}')[fam]; return v === 'json' || v === 'tree' ? v : 'table' } catch { return 'table' }
+}
 
 export function DataView({ session, object, active, tabId, inspector, onDirty, openQuery, onOpenReference, onOpenObject, focusFilter, onRenamed, onStructureChanged, initialMode }: {
   session: SessionInfo
@@ -70,12 +78,20 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   const applyKeys = useShortcutLabel('table.applyFilter')
   const commitKeys = useShortcutLabel('table.commit')
   const [mode, setMode] = useState<'data' | 'structure' | 'schema' | 'pipeline' | 'ddl'>(initialMode ?? 'data')
+  useEffect(() => { if (initialMode) setMode(initialMode) }, [initialMode])
   const [columns, setColumns] = useState<Column[] | null>(null)
   const [indexes, setIndexes] = useState<Index[]>([])
   const [foreignKeys, setForeignKeys] = useState<ForeignRef[]>([])
   const [tableInfo, setTableInfo] = useState<TableInfo | null>(null)
   const [data, setData] = useState<RowsResult | null>(null)
   const [edits, setEdits] = useState<Edits>(emptyEdits)
+  // Documents can be shown whole, as JSON or as trees, instead of as rows.
+  const documents = hasDocuments(session.connection.driver)
+  const [docView, setDocView] = useState<'table' | 'json' | 'tree'>(() => (documents ? savedDocView(family(session.connection.driver)) : 'table'))
+  const [docs, setDocs] = useState<Doc[]>([])
+  const [docEdits, setDocEdits] = useState<DocEdits>(emptyDocEdits)
+  const [docEditing, setDocEditing] = useState<string | null>(null)
+  const asDocs = docView !== 'table'
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<[string, string] | null>(null)
   const [sort, setSort] = useState<Sort[]>([])
@@ -104,7 +120,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   // Redis: the object is a key pattern (a key list) or one key (its contents).
   const redis = isRedis(session.connection.driver)
   const keyList = redis && isPattern(object.name)
-  const pending = pendingCount(edits)
+  const pending = asDocs ? docPending(docEdits) : pendingCount(edits)
   const onDirtyRef = useRef(onDirty)
   onDirtyRef.current = onDirty
   useEffect(() => {
@@ -134,6 +150,17 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         setForeignKeys(st.foreignKeys ?? [])
         setTableInfo(st.table ?? null)
       }
+      if (asDocs) {
+        const res = await api.documents(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal, count)
+        setDocs(res.documents)
+        setDocEdits(emptyDocEdits())
+        setDocEditing(null)
+        setData({ columns: [], types: [], rows: [], total: res.total, more: res.more, ms: res.ms })
+        setEdits(emptyEdits())
+        setSel(null)
+        setOffset(o)
+        return
+      }
       const res = await api.rows(session.id, table, pageReq(o), cols.map((c) => c.name), ac.signal, count)
       // A collection's columns come from a sample of it: a page can hold more.
       if (mongo && res.columns.length > cols.length) {
@@ -151,10 +178,10 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     } finally {
       if (abort.current === ac) setLoading(false)
     }
-  }, [columns, offset, pageReq, session.id, table])
+  }, [columns, offset, pageReq, session.id, table, asDocs])
 
-  // Reload when sorting or filters change.
-  useEffect(() => { load(0) }, [sort, applied, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Reload when sorting, filters or the kind of view change.
+  useEffect(() => { load(0) }, [sort, applied, pageSize, asDocs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // guard asks before an action that would throw away uncommitted edits,
   // offering to commit them instead — like a desktop app's "unsaved changes".
@@ -176,20 +203,57 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
   })
 
   const rows = data?.rows ?? []
-  const total = rowCount(rows, edits)
+  const shown = useMemo(() => shownDocs(docs, docEdits), [docs, docEdits])
+  const total = asDocs ? shown.length : rowCount(rows, edits)
+  const changeDocView = (v: 'table' | 'json' | 'tree') => {
+    if (v === docView) return
+    // JSON and tree show the same documents: their edits stay.
+    const same = asDocs && v !== 'table'
+    const ask = same ? (fn: () => void) => fn() : guard
+    ask(() => {
+      try { localStorage.setItem(DOC_VIEW_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(DOC_VIEW_KEY) ?? '{}'), [family(session.connection.driver)]: v })) } catch { /* not remembered */ }
+      if (!same) { setEdits(emptyEdits()); setData(null); setDocs([]); setDocEdits(emptyDocEdits()) }
+      setDocEditing(null)
+      setDocView(v)
+    })
+  }
+  // newDocument opens the editor on a new document (or a copy of one).
+  const newDocument = (json?: string) => {
+    const next = addDoc(docEdits, json ?? newDocText())
+    setDocEdits(next)
+    setDocEditing(`new-${next.inserted[next.inserted.length - 1].key}`)
+    if (docView !== 'json') setDocView('json')
+  }
+  const newDocText = () => {
+    if (redis) return '{\n  "key": "",\n  "type": "hash",\n  "ttl": null,\n  "value": {\n    "field": ""\n  }\n}'
+    if (isDynamo(session.connection.driver)) return `{\n${(columns ?? []).filter((c) => c.primaryKey).map((c) => `  ${JSON.stringify(c.name)}: ${c.type === 'N' ? '0' : '""'}`).join(',\n')}\n}`
+    return '{\n  \n}'
+  }
+  // A copy has no _id (MongoDB gives it one); other keys are to be changed.
+  const duplicateDoc = (i: number) => {
+    try {
+      const n = parseJSON(shown[i].json)
+      if (redis) {
+        newDocument(`{\n  "key": ${JSON.stringify(shown[i].label + ':copy')},\n  "type": ${JSON.stringify(redisType(shown[i].meta))},\n  "ttl": null,\n  "value": ${formatJSON(n, '  ')}\n}`)
+        return
+      }
+      newDocument(formatJSON(n.t === 'object' && mongo ? { t: 'object', e: n.e.filter(([k]) => k !== '_id') } : n))
+    } catch { newDocument(shown[i].json) }
+  }
   const cell = useCallback((r: number, c: number) => cellAt(rows, edits, r, c), [rows, edits])
 
+  const changes = () => (asDocs ? docChanges(docs, docEdits) : toChanges(rows, edits, names, pk))
   const startReview = async () => {
     if (!pending) return
     try {
-      const r = await api.changes(session.id, table, toChanges(rows, edits, names, pk), pk.length > 0, true)
+      const r = await api.changes(session.id, table, changes(), pk.length > 0, true)
       setReview(r.statements)
     } catch (e) { toast('error', ...errorParts(e)) }
   }
   const commit = async () => {
     setCommitting(true)
     try {
-      const r = await api.changes(session.id, table, toChanges(rows, edits, names, pk), pk.length > 0, false)
+      const r = await api.changes(session.id, table, changes(), pk.length > 0, false)
       setReview(null)
       toast('ok', `Saved ${r.statements.length} change${r.statements.length === 1 ? '' : 's'}`, object.name)
       notify(HISTORY_EVENT)
@@ -346,10 +410,22 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
             {applied.quick && <button className="text-[12px] text-accent hover:underline" onClick={() => { setQuick(''); guard(() => setApplied({ ...applied, quick: '' })) }}>clear</button>}
             <div className="flex-1" />
             {loading && <Spinner />}
-            {!readOnly && <>
+            {documents && (
+              <div className="mr-1 flex rounded-lg border border-line bg-panel p-0.5" role="group" aria-label="Show documents as">
+                {([['table', 'Table', Table2], ['json', 'JSON', Braces], ['tree', 'Tree', ListTree]] as const).map(([v, text, Icon]) => (
+                  <button key={v} aria-pressed={docView === v} onClick={() => changeDocView(v)}
+                    className={clsx('flex h-6 items-center gap-1 rounded-md px-2 text-[12px] font-medium', docView === v ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg')}>
+                    <Icon className="size-3.5" />{text}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!readOnly && (asDocs
+              ? (!redis || keyList) && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => newDocument()}>{redis ? 'Key' : 'Document'}</Button>
+              : <>
               <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Row</Button>
               <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} disabled={!sel} onClick={() => sel && deleteRows(sel.rows)}>Delete</Button>
-            </>}
+            </>)}
             <RefreshButton label="Refresh (Ctrl+R)" busy={loading} onRefresh={() => guard(() => load())} />
             {!isView && <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} onClick={() => guard(() => setImportOpen(true))}>Import</Button>}
             <Button size="sm" variant="ghost" icon={<Download className="size-3.5" />} onClick={() => setExportOpen(true)}>Export</Button>
@@ -396,7 +472,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
               <span className="size-2 rounded-full bg-warn" />
               <span><b>{pending}</b> unsaved change{pending === 1 ? '' : 's'} — nothing is written until you commit.</span>
               <div className="flex-1" />
-              <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => setEdits(emptyEdits())}>Discard</Button>
+              <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => { setEdits(emptyEdits()); setDocEdits(emptyDocEdits()); setDocEditing(null) }}>Discard</Button>
               <Button size="sm" variant="primary" onClick={startReview} kbd={commitKeys}>Review & commit</Button>
             </div>
           )}
@@ -417,10 +493,16 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                     <div className="flex gap-2">
                       {(activeFilterCount > 0 || applied.quick) && <Button size="sm" onClick={clearFilters}>Clear filter</Button>}
                       {/* Without documents there are no fields to fill in, so a command writes the first one. */}
-                      {!readOnly && mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => openQuery(`${mongoColl(object.name)}.insertOne({\n  name: "",\n})`)}>Add a document</Button>}
-                      {!readOnly && !mongo && !(redis && !keyList) && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
+                      {!readOnly && asDocs && (!redis || keyList) && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => newDocument()}>{redis ? 'Add a key' : 'Add a document'}</Button>}
+                      {!readOnly && !asDocs && mongo && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => openQuery(`${mongoColl(object.name)}.insertOne({\n  name: "",\n})`)}>Add a document</Button>}
+                      {!readOnly && !asDocs && !mongo && !(redis && !keyList) && <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => insertRow()}>Add a row</Button>}
                     </div>
                   </div>
+                ) : asDocs ? (
+                  <DocumentsView view={docView} docs={shown} driver={session.connection.driver} readOnly={readOnly || loading} offset={offset} editing={docEditing} setEditing={setDocEditing}
+                    onChange={(i, json) => setDocEdits((e) => setDoc(docs, e, i, json))} onDelete={(i) => setDocEdits((e) => toggleDoc(docs, e, i))}
+                    onUndo={(i) => setDocEdits((e) => setDoc(docs, e, i, docs[i].json))} onDuplicate={redis && !keyList ? undefined : duplicateDoc}
+                    onOpen={keyList ? (d) => onOpenObject?.({ schema: object.schema, name: escapeKey(d.label), kind: 'table' }) : undefined} />
                 ) : (<>
                   <Grid columns={gridColumns} rowCount={total} cell={cell} rowOffset={offset} sort={sort} onSort={toggleSort}
                     readOnly={readOnly || loading} onEdit={edit} onDeleteRows={deleteRows} onContextMenu={cellMenu} dataKey={dataKey} onFollow={follow} onLookup={keyList ? undefined : (r, c, rect) => setLookup({ r, c, rect })}
@@ -437,7 +519,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
                 <div className="flex h-full items-center justify-center"><Spinner className="size-5" /></div>
               )}
             </div>
-            {inspector && columns && (
+            {inspector && columns && !asDocs && (
               <Inspector columns={columns} kinds={gridColumns.map((g) => g.edit)} row={sel?.r ?? null} cell={cell} readOnly={readOnly || loading} onEdit={edit}
                 onLookup={(r, c, rect) => setLookup({ r, c, rect })} />
             )}
@@ -466,7 +548,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
       )}
 
       {/* Bottom bar */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-t border-line bg-panel-2 px-2">
+      <div data-bottom-bar className="flex h-9 shrink-0 items-center gap-2 border-t border-line bg-panel-2 px-2">
         <div className="flex rounded-lg border border-line bg-panel p-0.5" role="tablist" aria-label="View">
           {(mongo ? ['data', 'structure', 'schema', 'pipeline', 'ddl'] as const : redis ? ['data', 'ddl'] as const : ['data', 'structure', 'ddl'] as const).map((m) => (
             <button key={m} role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
@@ -478,7 +560,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
         {mode === 'data' && data && (
           <>
             <span className="text-[12px] text-muted">
-              {data.total === 0 ? 'No rows' : `${fmt(offset + 1)}–${fmt(offset + data.rows.length)} of ${data.more ? 'more than ' : ''}${fmt(data.total)} rows`}
+              {data.total === 0 ? 'No rows' : `${fmt(offset + 1)}–${fmt(offset + (asDocs ? docs.length : data.rows.length))} of ${data.more ? 'more than ' : ''}${fmt(data.total)} ${asDocs ? (redis ? 'keys' : 'documents') : 'rows'}`}
               {data.more && <button type="button" className="ml-1.5 text-accent hover:underline" title="Counting reads the rows, which is billed" onClick={() => guard(() => load(offset, false, true))}>Count</button>}
               {activeFilterCount + (applied.quick ? 1 : 0) > 0 && <span className="ml-1.5 rounded bg-accent-soft px-1.5 py-0.5 text-[11px] font-medium text-accent">filtered</span>}
             </span>
@@ -510,7 +592,7 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
             <Button variant={session.connection.tag === 'production' ? 'danger' : 'primary'} loading={committing} onClick={commit} autoFocus>Commit</Button>
           </>}>
           <div className="h-[280px] overflow-hidden rounded-lg border border-line">
-            <SqlEditor value={review.join('\n')} driver={session.connection.driver} readOnly />
+            <SqlEditor value={review.join('\n')} driver={session.connection.driver} readOnly wrap />
           </div>
         </Modal>
       )}
@@ -525,6 +607,9 @@ export function DataView({ session, object, active, tabId, inspector, onDirty, o
     </div>
   )
 }
+
+/** redisType: the type a new key is given, from what a key list says of one. */
+const redisType = (meta = '') => { const t = meta.split(' · ')[0].toLowerCase(); return t === 'sorted set' ? 'zset' : t.startsWith('json') ? 'json' : t }
 
 function Inspector({ columns, kinds, row, cell, readOnly, onEdit, onLookup }: {
   columns: Column[]

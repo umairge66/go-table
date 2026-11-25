@@ -14,6 +14,7 @@ async function newPage(browser: import('@playwright/test').Browser) {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto(process.env.GOTABLE_URL!)
+  await page.getByLabel('Search connections').waitFor()
   return { page, errors }
 }
 
