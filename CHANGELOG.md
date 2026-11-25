@@ -3,7 +3,7 @@
 What changed in each release of GoTable. Releases are tagged `vX.Y.Z`; the
 release pages on GitHub also carry the full commit messages.
 
-## Unreleased
+## v0.14.0 — 2026-11-26
 
 ### Added
 
